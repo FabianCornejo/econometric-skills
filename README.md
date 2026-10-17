@@ -1,49 +1,51 @@
 # econometric-skills
 
-Skills para o Claude voltadas a econometria aplicada.
+Agent skills for Claude focused on applied econometrics.
 
-## `econometria`
+## `econometrics`
 
-Fluxo rigoroso de econometria aplicada em Python (statsmodels, linearmodels, arch): regressão com diagnóstico completo, endogeneidade e variáveis instrumentais, dados em painel, logit/probit/tobit, séries temporais (raiz unitária, quebras, ARIMA, VAR/SVAR, cointegração/VECM), volatilidade (GARCH), previsão com avaliação fora da amostra e estimação de demanda e elasticidades, com dados do BCB, IBGE e Ipeadata.
+A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, arch): regression with full diagnostics, endogeneity and instrumental variables, panel data, logit/probit/tobit, time series (unit roots, structural breaks, ARIMA, VAR/SVAR, cointegration/VECM), volatility (GARCH), forecasting with out-of-sample evaluation, and demand and price-elasticity estimation, with data from FRED, the World Bank, IMF, OECD and Brazil's BCB, IBGE and Ipeadata.
+
+The skill's instructions are in English; Claude answers in the user's language.
 
 ```
-econometria/
-├── SKILL.md                         fluxo de trabalho em 7 etapas
-├── scripts/diagnosticos.py          baterias de testes com conclusões em português
+econometrics/
+├── SKILL.md                       7-step workflow
+├── scripts/diagnostics.py         test batteries with plain-language conclusions
 └── references/
-    ├── regressao-mqo.md
-    ├── series-temporais.md
-    ├── painel-iv.md
-    ├── dependente-limitada.md
-    ├── demanda-elasticidades.md
-    ├── volatilidade.md
-    ├── fontes-de-dados.md
-    ├── equivalencias-software.md    Stata/EViews → Python
-    └── bibliografia.md
+    ├── ols-regression.md
+    ├── time-series.md
+    ├── panel-iv.md
+    ├── limited-dependent.md
+    ├── demand-elasticities.md
+    ├── volatility.md
+    ├── data-sources.md
+    ├── software-equivalents.md    Stata/EViews → Python
+    └── bibliography.md
 ```
 
-### Instalação
+### Installation
 
-- **Claude.ai / app:** compacte a pasta `econometria` em `.zip` (ou use o arquivo `.skill`) e envie em Configurações → Capacidades → Skills.
-- **Claude Code:** copie a pasta `econometria` para `~/.claude/skills/`.
+- **Claude.ai / desktop app:** zip the `econometrics` folder (or use a release `.skill` file) and upload it under Settings → Capabilities → Skills.
+- **Claude Code:** copy the `econometrics` folder into `~/.claude/skills/`.
 
-Dependências Python: `pip install statsmodels linearmodels arch`.
+Python dependencies: `pip install statsmodels linearmodels arch`.
 
-### Teste rápido do script
+### Quick test of the script
 
 ```bash
-python3 econometria/scripts/diagnosticos.py mqo seus_dados.csv --y log_vendas --x log_preco,log_renda
-python3 econometria/scripts/diagnosticos.py estacionariedade seus_dados.csv --cols selic,ipca
+python3 econometrics/scripts/diagnostics.py ols your_data.csv --y log_sales --x log_price,log_income
+python3 econometrics/scripts/diagnostics.py stationarity your_data.csv --cols policy_rate,cpi
 ```
 
-## Feedback e contribuições
+## Feedback and contributions
 
-A skill está aberta para uso, testes e sugestões:
+The skill is open for use, testing and suggestions:
 
-- **Encontrou um erro ou um resultado estranho?** Abra uma [issue](../../issues) descrevendo a pergunta feita, os dados (ou um exemplo simulado) e a resposta obtida.
-- **Sugestão de método, teste ou fonte de dados?** Também via issue.
-- **Quer corrigir ou ampliar?** Faça um fork e envie um pull request.
+- **Found a bug or a strange result?** Open an [issue](../../issues) describing the question asked, the data (or a simulated example) and the answer you got.
+- **Suggestion for a method, test or data source?** Also via an issue.
+- **Want to fix or extend something?** Fork the repository and open a pull request.
 
-## Licença
+## License
 
-[MIT](LICENSE) — uso livre, inclusive comercial, mantendo o aviso de copyright.
+[MIT](LICENSE) — free to use, including commercially, keeping the copyright notice.
