@@ -1,0 +1,13 @@
+{
+  "name": "econometrics",
+  "version": "1.0.0",
+  "description": "Rigorous applied-econometrics workflow in Python: OLS with full diagnostics, IV, panel data, limited dependent variables, time series (unit roots, VAR/SVAR, cointegration), GARCH, forecasting and price elasticities.",
+  "author": {
+    "name": "Fabian Cornejo",
+    "url": "https://github.com/fabiancornejo"
+  },
+  "homepage": "https://github.com/fabiancornejo/econometric-skills",
+  "repository": "https://github.com/fabiancornejo/econometric-skills",
+  "license": "MIT",
+  "keywords": ["econometrics", "statistics", "regression", "time-series", "panel-data", "forecasting", "elasticity", "statsmodels"]
+}

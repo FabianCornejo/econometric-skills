@@ -1,0 +1,17 @@
+{
+  "name": "econometric-skills",
+  "description": "Agent skills for applied econometrics in Python.",
+  "owner": {
+    "name": "Fabian Cornejo",
+    "url": "https://github.com/fabiancornejo"
+  },
+  "plugins": [
+    {
+      "name": "econometrics",
+      "source": "./",
+      "description": "Rigorous applied-econometrics workflow in Python: regression diagnostics, IV, panel, time series, GARCH, forecasting and price elasticities.",
+      "category": "data",
+      "homepage": "https://github.com/fabiancornejo/econometric-skills"
+    }
+  ]
+}

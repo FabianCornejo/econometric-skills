@@ -9,7 +9,10 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 The skill's instructions are in English; Claude answers in the user's language.
 
 ```
-econometrics/
+.claude-plugin/
+├── plugin.json                    plugin manifest
+└── marketplace.json               lets the repo act as its own marketplace
+skills/econometrics/
 ├── SKILL.md                       7-step workflow
 ├── scripts/diagnostics.py         test batteries with plain-language conclusions
 └── references/
@@ -26,16 +29,23 @@ econometrics/
 
 ### Installation
 
-- **Claude.ai / desktop app:** zip the `econometrics` folder (or use a release `.skill` file) and upload it under Settings → Capabilities → Skills.
-- **Claude Code:** copy the `econometrics` folder into `~/.claude/skills/`.
+- **Claude Code (plugin):**
+
+  ```
+  /plugin install econometrics --marketplace fabiancornejo/econometric-skills
+  ```
+
+  On older Claude Code versions, add the marketplace first: `/plugin marketplace add fabiancornejo/econometric-skills`, then `/plugin install econometrics@econometric-skills`.
+- **Claude Code (manual):** copy the `skills/econometrics` folder into `~/.claude/skills/`.
+- **Claude.ai / desktop app:** zip the `skills/econometrics` folder (or use a release `.skill` file) and upload it under Settings → Capabilities → Skills.
 
 Python dependencies: `pip install statsmodels linearmodels arch`.
 
 ### Quick test of the script
 
 ```bash
-python3 econometrics/scripts/diagnostics.py ols your_data.csv --y log_sales --x log_price,log_income
-python3 econometrics/scripts/diagnostics.py stationarity your_data.csv --cols policy_rate,cpi
+python3 skills/econometrics/scripts/diagnostics.py ols your_data.csv --y log_sales --x log_price,log_income
+python3 skills/econometrics/scripts/diagnostics.py stationarity your_data.csv --cols policy_rate,cpi
 ```
 
 ## Feedback and contributions
