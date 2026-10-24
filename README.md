@@ -62,7 +62,7 @@ tests/                               78 known-truth checks on simulated data
 
 ### Installation
 
-- **Claude.ai / desktop app:** download `econometrics.skill` from the [latest release](../../releases/latest) and upload it under Settings → Capabilities → Skills (or zip the `econometrics` folder yourself).
+- **Claude.ai / desktop app:** download [`econometrics.skill`](https://github.com/FabianCornejo/econometric-skills/raw/main/dist/econometrics.skill) (also in the [latest release](../../releases/latest)) and upload it under Settings → Capabilities → Skills (or zip the `econometrics` folder yourself).
 - **Claude Code:** copy the `econometrics` folder into `~/.claude/skills/`.
 
 Python dependencies: `pip install statsmodels linearmodels arch scikit-learn` (optional: `rdrobust`, `hmmlearn`, `yfinance`, `pymupdf`, `sentence-transformers`).
