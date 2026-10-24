@@ -114,3 +114,21 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | `depmixS4`, MATLAB `hmmtrain` | `regimes.hmm_regimes` (hmmlearn) |
 | `PerformanceAnalytics::table.AnnualizedReturns`, `quantstats` | `backtest.performance` |
 | `forecast::auto.arima`, `forecast::dm.test` | `forecasting.auto_arima`, `diagnostics.diebold_mariano` |
+
+## Causal designs, survival, text and tables (Stata → Python)
+
+| Stata | Python |
+|---|---|
+| `teffects ipw`, `teffects aipw` | `causal.ipw`, `causal.aipw` |
+| `teffects psmatch`, `psmatch2` | `causal.nn_match` (+ `causal.balance_table`, like `pstest`) |
+| `ddml`, `pystacked` | `causal.dml_plr` |
+| `rdrobust`, `rdbwselect`, `rddensity` | `rdrobust` (Python package), `causal.rdd`, `causal.select_bandwidth`, `causal.density_test` |
+| `eventdd`, `reghdfe` with leads/lags | `causal.event_study` |
+| `csdid` | `causal.att_gt` |
+| `synth` | `causal.synth` |
+| `stset` + `sts graph`, `sts test` | `survival.kaplan_meier`, `survival.logrank` |
+| `stcox, vce(cluster c)`, `estat phtest` | `survival.cox(..., cluster=)`, `survival.ph_test` |
+| `outreg2`, `esttab` | `reporting.regression_table` + `reporting.export_table` |
+| `import delimited, delimiter(";") encoding(latin1)` | `data_prep.read_any` |
+| `merge m:1 key, assert(match)` | `data_prep.safe_merge(..., validate="m:1")` |
+| `regexm`, `regexs` | `text_data.regex_flags`, `text_data.regex_extract` |

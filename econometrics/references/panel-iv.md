@@ -137,6 +137,8 @@ did = PanelOLS.from_formula("y ~ treated_post + EntityEffects + TimeEffects", df
 - **Staggered adoption** (units treated at different dates) with heterogeneous effects: simple TWFE can be seriously biased (Goodman-Bacon). Use Callaway-Sant'Anna, Sun-Abraham or de Chaisemartin-D'Haultfœuille, or at least state the limitation.
 - Few treated groups → few-clusters problem (section 8).
 
+For staggered adoption, event studies with clean comparisons (Callaway-Sant'Anna), synthetic control and RD, see `causal-inference.md` and `scripts/causal.py` (`event_study`, `att_gt`, `synth`).
+
 ## 11. Dynamic panels
 
 - A lagged y with fixed effects creates **Nickell bias** (order 1/T), relevant when T < ~20.

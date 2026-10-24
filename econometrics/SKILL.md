@@ -1,6 +1,6 @@
 ---
 name: econometrics
-description: Rigorous applied econometrics in Python (statsmodels, linearmodels, arch) — regression with full diagnostics, IV, panel data, logit/probit/tobit, time series (unit roots, breaks, auto-ARIMA/ARIMAX, VAR/SVAR, cointegration), GARCH/EWMA volatility, VaR/ES with backtests, copulas and tail dependence, mutual information, Kalman time-varying regressions and pairs, Markov-switching/HMM regimes, walk-forward forecasting and look-ahead-free strategy backtests, demand elasticities, with FRED/World Bank/IMF/OECD/BCB/IBGE/Ipeadata and market data. Use for any regression, elasticity, effect of X on Y, impact of rates/inflation/FX on sales, forecast, stationarity or cointegration test, panel model, default probability, VaR or tail risk, copula, hedge ratio, market regimes, trading-signal backtest, or "does X explain/cause/predict Y?" question, even without the word econometrics.
+description: Rigorous applied econometrics in Python (statsmodels, linearmodels, arch) — regression with full diagnostics, IV, panel data, logit/probit/tobit, causal designs (matching/IPW/AIPW, double ML, regression discontinuity, staggered DiD/event studies, synthetic control), survival/Cox models, text as data (regex, TF-IDF, topics, classifiers, validation), time series (auto-ARIMA/ARIMAX, VAR, cointegration), GARCH, VaR/ES backtests, copulas, Kalman, regime switching, look-ahead-free backtests, demand elasticities, data collection and cleaning (BCB/IBGE/TSE/CNJ, scraping, PDFs), publication tables. Use for any regression, effect of X on Y, policy or law evaluation, elasticity, forecast, duration or time-to-event question, coding of documents into variables, VaR or tail risk, hedge ratio, regimes, strategy backtest, or "does X explain/cause/predict Y?" question, even without the word econometrics.
 ---
 
 # Applied econometrics
@@ -22,6 +22,11 @@ Answer in the user's language; the skill's instructions are in English but the a
 | `scripts/dependence.py` | Rank correlations, tail dependence, copulas (Gaussian, t, Clayton, Gumbel, Frank, rotations) by MLE, copula simulation, mutual information, distance correlation |
 | `scripts/state_space.py` | Kalman filter with time-varying coefficients (MLE of noise variances), half-life, Hurst, cointegration pretest, pairs positions and returns |
 | `scripts/regimes.py` | Markov-switching models, Gaussian HMM with filtered probabilities, K-means on features, regime summaries |
+| `scripts/causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD (bandwidth, robustness, density test, fuzzy), TWFE event study, Callaway-Sant'Anna, synthetic control with placebo inference |
+| `scripts/survival.py` | Kaplan-Meier, log-rank, Cox with hazard ratios and clustered SE, proportional-hazards test, person-period expansion |
+| `scripts/text_data.py` | Regex coding with audit snippets, TF-IDF, LDA, text clustering, TF-IDF + logit classifier, validation against hand coding, misclassification correction, similarity to a reference group |
+| `scripts/data_prep.py` | Reading awkward files (encodings, `;` CSVs, XML/HTML ".xls", JSON, large CSVs), audit, safe merges, Brazilian numbers, mojibake, PDF text/OCR, polite scraping |
+| `scripts/reporting.py` | Publication-style regression tables (outreg2/esttab style) with FE rows, odds/hazard ratios, export to Markdown/Excel/LaTeX |
 | `references/ols-regression.md` | Every regression: functional forms, dummies, diagnostic order, HC/HAC/GLS, multicollinearity, influence, measurement error |
 | `references/time-series.md` | Data with a time dimension: unit roots, breaks, ARIMA/ETS/ARFIMA, ADL, cointegration/VECM, VAR/SVAR/BVAR, forecast evaluation and combination |
 | `references/panel-iv.md` | Endogeneity, instruments, simultaneous equations, panel data (FE/RE), difference-in-differences, dynamic panels |
@@ -32,6 +37,10 @@ Answer in the user's language; the skill's instructions are in English but the a
 | `references/forecasting-backtesting.md` | Any out-of-sample forecast or model-based strategy: auto-ARIMA, ARIMAX, VAR forecasts, walk-forward, benchmarks, backtest conventions, momentum, multiple testing |
 | `references/dependence-copulas.md` | Joint behavior beyond correlation: tail dependence, copulas, mutual information |
 | `references/state-space-regimes.md` | Time-varying coefficients (Kalman), pairs trading, Markov switching, HMM, clustering of regimes |
+| `references/causal-inference.md` | Any causal question without randomization: choosing a design, matching/weighting, double ML, RD, staggered DiD, synthetic control, law-and-economics designs (judge leniency, movers) |
+| `references/survival.md` | Time until an event, with censoring: Kaplan-Meier, Cox, PH checks, competing risks |
+| `references/text-as-data.md` | Turning documents into variables and validating them; using text-based measures in regressions |
+| `references/data-collection-wrangling.md` | Messy files, large files, merges, scraping, PDFs/OCR, Brazilian administrative and judicial data |
 | `references/data-sources.md` | Fetching data (FRED, World Bank, IMF, OECD, BCB/SGS, IBGE/SIDRA, Ipeadata) |
 | `references/software-equivalents.md` | Translating Stata/EViews procedures into Python |
 | `references/bibliography.md` | Going deeper on a topic in the reference literature |
@@ -51,7 +60,7 @@ Read only the references the case needs. The scripts are starting points: read t
 python3 -c "import statsmodels, linearmodels, arch" 2>/dev/null || \
   pip install --break-system-packages -q statsmodels linearmodels arch
 ```
-Optional depending on the case: `pandas-datareader`/`fredapi`, `wbgapi`, `python-bcb`, `sidrapy`, `yfinance` (data), `ruptures` (multiple breaks), `pydynpd` (dynamic panels), `scikit-learn` (ROC/AUC, cross-validation, K-means, mutual information), `hmmlearn` (hidden Markov models). `pmdarima` is not needed: `forecasting.auto_arima` covers it.
+For causal designs and text: `scikit-learn` (required by `causal.aipw/dml_plr` and `text_data`); `rdrobust` (recommended for RD inference). Optional depending on the case: `pandas-datareader`/`fredapi`, `wbgapi`, `python-bcb`, `sidrapy`, `yfinance` (data), `ruptures` (multiple breaks), `pydynpd` (dynamic panels), `scikit-learn` (ROC/AUC, cross-validation, K-means, mutual information), `hmmlearn` (hidden Markov models). `pmdarima` is not needed: `forecasting.auto_arima` covers it.
 
 ## Workflow
 
@@ -63,6 +72,7 @@ Before touching the data, write down: dependent variable, regressors, expected s
 
 Classify the goal, because it changes the right model:
 - **Estimate an effect** (elasticity, policy impact): the focus is an unbiased coefficient → identification, endogeneity, omitted variables.
+- **Estimate a causal effect without an experiment**: choose the design first (selection on observables, RD, DiD/event study, synthetic control, IV) and write its identifying assumption in words → `causal-inference.md`.
 - **Forecast**: the focus is out-of-sample error → time-based validation and comparison with naive benchmarks. A model can forecast well without its coefficients having a causal interpretation.
 
 ### 2. Identify the data structure
@@ -74,6 +84,10 @@ Classify the goal, because it changes the right model:
 | Panel | 80 stores × 48 months | `panel-iv.md` |
 | Binary, count or censored y | Default, number of orders, spending with zeros | `limited-dependent.md` |
 | Price and quantity | Elasticity, promotion | `demand-elasticities.md` |
+| Effect of a policy, law, decision or program (non-random) | Effect of a reform on case duration | `causal-inference.md` |
+| Time until an event, with censored spells | Time to decision, tenure, churn, default | `survival.md` |
+| Documents (decisions, contracts, tenders, news) | Outcome of health-litigation decisions | `text-as-data.md` |
+| Raw files, web pages, PDFs | TSE CSVs, court websites | `data-collection-wrangling.md` |
 | Returns, volatility | Daily stock index | `volatility.md` |
 | Market risk | VaR/ES of a position or portfolio | `risk-var.md` |
 | Joint extremes | Two assets crashing together, contagion | `dependence-copulas.md` |
@@ -171,6 +185,8 @@ Interpretation rules:
 - **Honest precision**: 2–3 significant digits; forecasts always with intervals; elasticities hold for small changes within the observed range.
 - **No look-ahead**: anything used to forecast, signal or risk-manage at t is computed with data up to t (lagged regressors, training-only scalers and fits, filtered not smoothed probabilities, positions applied to the next period's return).
 - **No invented numbers**: every coefficient, statistic or data point comes from a computation run in the session or a cited source. If data are missing, say so.
+
+Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows={"Year FE": ["YES", "YES"]})` produces the side-by-side table (coefficients, SEs in parentheses, stars, N, R², FE rows; `exponentiate=True` for odds/hazard ratios) and `export_table` writes Markdown, Excel or LaTeX. Rescale regressors whose coefficients print as 1e-05 (`reporting.rescale_hint`), and mark a fixed effect YES only where it is in that column's model.
 
 ## Deliverables
 

@@ -13,6 +13,12 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 - **State space and regimes:** Kalman-filter time-varying regression with ML-estimated noise, pairs-trading layer, Markov-switching models, HMMs with filtered (real-time) probabilities, K-means regimes.
 - **Backtesting:** one-bar-lag convention, transaction costs, performance table, walk-forward splits, time-series momentum, Sharpe confidence intervals.
 
+**Causal inference, survival, text and data (v1.2):**
+- **Causal designs:** balance tables, propensity scores, IPW, doubly robust AIPW, nearest-neighbour matching, double/debiased ML, regression discontinuity (rdrobust/IK bandwidths, fuzzy RD, robustness package, density test), TWFE event studies, Callaway-Sant'Anna staggered DiD, synthetic control with placebo inference.
+- **Survival:** Kaplan-Meier, log-rank, Cox with hazard ratios and clustered SEs, proportional-hazards test, discrete-time hazard data.
+- **Text as data:** regex coding with audit snippets, TF-IDF, LDA, clustering with representative documents, classifiers with proper validation, agreement with hand coding, misclassification correction, similarity to a reference group.
+- **Data and reporting:** robust readers for Brazilian files (`;`, latin-1, decimal comma, XML/HTML ".xls"), large CSVs, safe merges, PDF/OCR, polite scraping; outreg2/esttab-style regression tables.
+
 Every rolling estimate uses only data available at the time. Look-ahead traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, filtered Kalman residuals, signal/return misalignment) are avoided in code and documented in the references.
 
 The skill's instructions are in English; Claude answers in the user's language.
@@ -27,7 +33,12 @@ econometrics/
 │   ├── risk.py                      VaR/ES estimators and backtests
 │   ├── dependence.py                copulas, tail dependence, mutual information
 │   ├── state_space.py               Kalman filter, half-life, pairs trading
-│   └── regimes.py                   Markov switching, HMM, K-means regimes
+│   ├── regimes.py                   Markov switching, HMM, K-means regimes
+│   ├── causal.py                    matching/IPW/AIPW, double ML, RD, event study, CS-DiD, synthetic control
+│   ├── survival.py                  Kaplan-Meier, Cox, PH test
+│   ├── text_data.py                 regex, TF-IDF, topics, clustering, classifiers, validation
+│   ├── data_prep.py                 reading, auditing, merging, PDFs, scraping
+│   └── reporting.py                 publication-style regression tables
 └── references/
     ├── ols-regression.md
     ├── time-series.md
@@ -39,10 +50,14 @@ econometrics/
     ├── forecasting-backtesting.md
     ├── dependence-copulas.md
     ├── state-space-regimes.md
+    ├── causal-inference.md
+    ├── survival.md
+    ├── text-as-data.md
+    ├── data-collection-wrangling.md
     ├── data-sources.md
     ├── software-equivalents.md      Stata/EViews/R → Python
     └── bibliography.md
-tests/test_financial_modules.py      37 known-truth checks on simulated data
+tests/                               78 known-truth checks on simulated data
 ```
 
 ### Installation
@@ -50,7 +65,7 @@ tests/test_financial_modules.py      37 known-truth checks on simulated data
 - **Claude.ai / desktop app:** zip the `econometrics` folder (or use a release `.skill` file) and upload it under Settings → Capabilities → Skills.
 - **Claude Code:** copy the `econometrics` folder into `~/.claude/skills/`.
 
-Python dependencies: `pip install statsmodels linearmodels arch scikit-learn` (optional: `hmmlearn`, `yfinance`).
+Python dependencies: `pip install statsmodels linearmodels arch scikit-learn` (optional: `rdrobust`, `hmmlearn`, `yfinance`, `pymupdf`, `sentence-transformers`).
 
 ### Quick test of the script
 
@@ -59,6 +74,7 @@ python3 econometrics/scripts/diagnostics.py ols your_data.csv --y log_sales --x 
 python3 econometrics/scripts/diagnostics.py stationarity your_data.csv --cols policy_rate,cpi
 python3 econometrics/scripts/forecasting.py your_data.csv --col yield --season 12
 python3 tests/test_financial_modules.py
+python3 tests/test_causal_text_survival.py
 ```
 
 ## Feedback and contributions

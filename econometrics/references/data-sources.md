@@ -89,6 +89,12 @@ http://www.ipeadata.gov.br/api/odata4/Metadados('BM12_TJOVER12')
 
 Response in `json["value"]`, fields `VALDATA` and `VALVALOR`. Package: `ipeadatapy`.
 
+### Judicial, electoral and administrative records
+- **CNJ DataJud** — public API with case metadata (class, subject, court, movements) for all Brazilian courts; key from the CNJ portal.
+- **TSE open data** — candidates, results by electoral zone, campaign finance, party affiliation (CSV, `;`, latin-1).
+- **Court websites** (e-SAJ, PJe consultations) — decisions and case data; scrape politely (see `data-collection-wrangling.md`).
+- **CADE** — merger and conduct cases (SEI search, open data); **Querido Diário** — municipal official gazettes; **base dos dados** — cleaned public datasets on BigQuery.
+
 ### Other Brazilian sources
 - CVM (listed-company open data): https://dados.cvm.gov.br
 - National Treasury (government bonds, yield curve): Tesouro Transparente.

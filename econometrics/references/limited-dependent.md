@@ -90,7 +90,7 @@ y* = xβ + ε, ε ~ N(0, σ²); y = max(0, y*).
 | Fraction/share (0–1) | Papke-Wooldridge fractional response | `smf.glm(..., family=sm.families.Binomial()).fit(cov_type="HC1")` |
 | Ordered (rating 1–5) | Ordered probit/logit | `statsmodels.miscmodels.ordinal_model.OrderedModel` |
 | Unordered categories | Multinomial logit | `smf.mnlogit` (beware the independence of irrelevant alternatives assumption) |
-| Time to event | Survival (Cox, Weibull) | `lifelines` or `statsmodels.duration.hazard_regression.PHReg` |
+| Time to event | Survival (Kaplan-Meier, Cox, discrete-time hazard) | `scripts/survival.py`; see `survival.md` |
 
 ## 8. Pitfalls
 
