@@ -1,6 +1,6 @@
 ---
 name: econometrics
-description: Rigorous applied econometrics workflow in Python (statsmodels, linearmodels, arch) — regression with full diagnostics (RESET, heteroskedasticity, autocorrelation, influence), endogeneity and instrumental variables, panel data, logit/probit/tobit, time series (unit roots, structural breaks, ARIMA, VAR/SVAR, cointegration/VECM), volatility (GARCH), forecasting with out-of-sample evaluation, and demand and price-elasticity estimation, with data from central banks and statistical offices (FRED, World Bank, IMF, OECD, Brazil's BCB/IBGE/Ipeadata). Use whenever the user asks for a regression, a price elasticity, the effect of one variable on another, the impact of interest rates, inflation or exchange rates on sales, a time-series forecast, a stationarity or cointegration test, a panel model, a default probability, a promotion's effect, or any "does X explain/cause Y?" question, even without the word "econometrics".
+description: Rigorous applied econometrics in Python (statsmodels, linearmodels, arch) — regression with full diagnostics, IV, panel data, logit/probit/tobit, time series (unit roots, breaks, auto-ARIMA/ARIMAX, VAR/SVAR, cointegration), GARCH/EWMA volatility, VaR/ES with backtests, copulas and tail dependence, mutual information, Kalman time-varying regressions and pairs, Markov-switching/HMM regimes, walk-forward forecasting and look-ahead-free strategy backtests, demand elasticities, with FRED/World Bank/IMF/OECD/BCB/IBGE/Ipeadata and market data. Use for any regression, elasticity, effect of X on Y, impact of rates/inflation/FX on sales, forecast, stationarity or cointegration test, panel model, default probability, VaR or tail risk, copula, hedge ratio, market regimes, trading-signal backtest, or "does X explain/cause/predict Y?" question, even without the word econometrics.
 ---
 
 # Applied econometrics
@@ -16,17 +16,27 @@ Answer in the user's language; the skill's instructions are in English but the a
 | File | When to read |
 |---|---|
 | `scripts/diagnostics.py` | Whenever you estimate a model: test batteries with plain-language conclusions (OLS, influence, Chow, stationarity with ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Tobit, Diebold-Mariano) |
+| `scripts/forecasting.py` | Forecasts: auto-ARIMA (statsmodels only), ARIMAX with lagged regressors, VAR forecasts, walk-forward evaluation, naive/seasonal/historical-mean benchmarks, DM and Pesaran-Timmermann tests |
+| `scripts/backtest.py` | Turning a forecast or signal into positions: one-bar-lag backtest with costs, performance table, walk-forward splits, time-series momentum, Sharpe bootstrap CI |
+| `scripts/risk.py` | VaR/ES (historical, normal/t, EWMA, filtered historical simulation, GARCH) and Kupiec/Christoffersen/Basel backtests |
+| `scripts/dependence.py` | Rank correlations, tail dependence, copulas (Gaussian, t, Clayton, Gumbel, Frank, rotations) by MLE, copula simulation, mutual information, distance correlation |
+| `scripts/state_space.py` | Kalman filter with time-varying coefficients (MLE of noise variances), half-life, Hurst, cointegration pretest, pairs positions and returns |
+| `scripts/regimes.py` | Markov-switching models, Gaussian HMM with filtered probabilities, K-means on features, regime summaries |
 | `references/ols-regression.md` | Every regression: functional forms, dummies, diagnostic order, HC/HAC/GLS, multicollinearity, influence, measurement error |
 | `references/time-series.md` | Data with a time dimension: unit roots, breaks, ARIMA/ETS/ARFIMA, ADL, cointegration/VECM, VAR/SVAR/BVAR, forecast evaluation and combination |
 | `references/panel-iv.md` | Endogeneity, instruments, simultaneous equations, panel data (FE/RE), difference-in-differences, dynamic panels |
 | `references/limited-dependent.md` | Binary, count, censored, fractional or ordered y (LPM, logit, probit, tobit, Heckman, PPML) |
 | `references/demand-elasticities.md` | Prices, promotions, cannibalization, cost pass-through, elasticities |
-| `references/volatility.md` | Financial returns, exchange rates, VaR |
+| `references/volatility.md` | Financial returns, exchange rates: stylized facts and GARCH family |
+| `references/risk-var.md` | VaR and Expected Shortfall: estimators, backtests, model choice |
+| `references/forecasting-backtesting.md` | Any out-of-sample forecast or model-based strategy: auto-ARIMA, ARIMAX, VAR forecasts, walk-forward, benchmarks, backtest conventions, momentum, multiple testing |
+| `references/dependence-copulas.md` | Joint behavior beyond correlation: tail dependence, copulas, mutual information |
+| `references/state-space-regimes.md` | Time-varying coefficients (Kalman), pairs trading, Markov switching, HMM, clustering of regimes |
 | `references/data-sources.md` | Fetching data (FRED, World Bank, IMF, OECD, BCB/SGS, IBGE/SIDRA, Ipeadata) |
 | `references/software-equivalents.md` | Translating Stata/EViews procedures into Python |
 | `references/bibliography.md` | Going deeper on a topic in the reference literature |
 
-Read only the references the case needs. The script is a starting point: read the code and adapt it when needed.
+Read only the references the case needs. The scripts are starting points: read the code and adapt it when needed. Import them with `sys.path.insert(0, '<skill>/scripts')`; `forecasting.evaluate` imports `diagnostics`.
 
 ## Combining with other skills
 
@@ -41,7 +51,7 @@ Read only the references the case needs. The script is a starting point: read th
 python3 -c "import statsmodels, linearmodels, arch" 2>/dev/null || \
   pip install --break-system-packages -q statsmodels linearmodels arch
 ```
-Optional depending on the case: `pandas-datareader`/`fredapi`, `wbgapi`, `python-bcb`, `sidrapy` (data), `ruptures` (multiple breaks), `pydynpd` (dynamic panels), `scikit-learn` (ROC/AUC, cross-validation).
+Optional depending on the case: `pandas-datareader`/`fredapi`, `wbgapi`, `python-bcb`, `sidrapy`, `yfinance` (data), `ruptures` (multiple breaks), `pydynpd` (dynamic panels), `scikit-learn` (ROC/AUC, cross-validation, K-means, mutual information), `hmmlearn` (hidden Markov models). `pmdarima` is not needed: `forecasting.auto_arima` covers it.
 
 ## Workflow
 
@@ -64,7 +74,11 @@ Classify the goal, because it changes the right model:
 | Panel | 80 stores × 48 months | `panel-iv.md` |
 | Binary, count or censored y | Default, number of orders, spending with zeros | `limited-dependent.md` |
 | Price and quantity | Elasticity, promotion | `demand-elasticities.md` |
-| Returns | Daily stock index | `volatility.md` |
+| Returns, volatility | Daily stock index | `volatility.md` |
+| Market risk | VaR/ES of a position or portfolio | `risk-var.md` |
+| Joint extremes | Two assets crashing together, contagion | `dependence-copulas.md` |
+| Changing relationships or regimes | Time-varying hedge ratio, calm vs. crisis | `state-space-regimes.md` |
+| Forecast or trading signal | Yield forecast, VAR signal, momentum | `forecasting-backtesting.md` |
 
 ### 3. Obtain and audit the data
 
@@ -97,7 +111,17 @@ python3 scripts/diagnostics.py influence data.csv --y log_sales --x log_price,lo
 python3 scripts/diagnostics.py stationarity data.csv --cols policy_rate,cpi,log_sales
 python3 scripts/diagnostics.py cointegration data.csv --cols log_p,log_fx --lags 2
 ```
-or `from diagnostics import ...` in Python.
+or `from diagnostics import ...` in Python. For forecasting and strategies:
+```bash
+python3 scripts/forecasting.py data.csv --col yield --season 12      # auto-ARIMA + walk-forward vs naive
+```
+```python
+from risk import var_garch, var_ewma, backtest_var            # VaR models + Kupiec/Christoffersen
+from dependence import fit_copulas                            # tail dependence beyond correlation
+from state_space import fit_kalman_regression                 # time-varying beta / hedge ratio
+from regimes import markov_switching                          # regimes with filtered probabilities
+from backtest import run_backtest, performance                # one-bar lag, costs, Sharpe, drawdown
+```
 
 Order (heteroskedasticity and autocorrelation are often symptoms of a wrong specification, so functional form comes first):
 
@@ -122,7 +146,8 @@ A conclusion is reliable only if it survives reasonable variations. Do at least 
 - subsample (without the pandemic; separate periods);
 - another estimator (OLS vs. IV; FE vs. RE; 2SLS vs. LIML; alternative Cholesky ordering);
 - another variable definition or aggregation level;
-- for forecasting: rolling-origin evaluation against naive, seasonal naive and ETS, with a Diebold-Mariano test.
+- for forecasting: rolling-origin evaluation against naive, seasonal naive and ETS, with a Diebold-Mariano test;
+- for strategies and risk models: out-of-sample period, realistic costs, number of variants tried, VaR backtests (see `forecasting-backtesting.md` §9 and `risk-var.md` §3).
 
 Present them side by side (`comparison_table` in the script, paper style).
 
@@ -144,6 +169,7 @@ Interpretation rules:
 - **Association ≠ causation**: causal language only with an identification strategy (IV, DiD, experiment, discontinuity). Granger causality is predictive precedence. Otherwise, "is associated with".
 - **Direction of bias**: when identification is imperfect, say which way the bias probably goes.
 - **Honest precision**: 2–3 significant digits; forecasts always with intervals; elasticities hold for small changes within the observed range.
+- **No look-ahead**: anything used to forecast, signal or risk-manage at t is computed with data up to t (lagged regressors, training-only scalers and fits, filtered not smoothed probabilities, positions applied to the next period's return).
 - **No invented numbers**: every coefficient, statistic or data point comes from a computation run in the session or a cited source. If data are missing, say so.
 
 ## Deliverables

@@ -97,3 +97,20 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | Cointegration test (Johansen) | `coint_johansen`, `select_coint_rank` |
 | Engle-Granger | `statsmodels.tsa.stattools.coint` |
 | VEC | `statsmodels.tsa.vector_ar.vecm.VECM` |
+| ARIMA automatic selection | `forecasting.auto_arima` (statsmodels-only replacement for `pmdarima.auto_arima`) |
+| Recursive / rolling forecasts | `forecasting.rolling_origin`, `forecasting.rolling_var` |
+| Markov switching regression | `regimes.markov_switching` (`sm.tsa.MarkovRegression`) |
+| State space / Kalman filter (Sspace object) | `state_space.kalman_regression`; general models: `statsmodels.tsa.statespace` |
+
+## Risk, dependence and finance (R / MATLAB → Python)
+
+| R / MATLAB | Python |
+|---|---|
+| `rugarch::ugarchroll` | `risk.var_garch` (rolling refit) |
+| `rugarch::VaRTest` (Kupiec, Christoffersen) | `risk.kupiec_pof`, `risk.christoffersen`, `risk.backtest_var` |
+| `copula::fitCopula`, `VineCopula::BiCopSelect` | `dependence.fit_copula`, `dependence.fit_copulas` |
+| `copula::rCopula` | `dependence.simulate_copula` |
+| `MSwM::msmFit`, MATLAB `msVAR` | `regimes.markov_switching` |
+| `depmixS4`, MATLAB `hmmtrain` | `regimes.hmm_regimes` (hmmlearn) |
+| `PerformanceAnalytics::table.AnnualizedReturns`, `quantstats` | `backtest.performance` |
+| `forecast::auto.arima`, `forecast::dm.test` | `forecasting.auto_arima`, `diagnostics.diebold_mariano` |

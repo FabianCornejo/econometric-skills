@@ -95,6 +95,17 @@ Response in `json["value"]`, fields `VALDATA` and `VALVALOR`. Package: `ipeadata
 - B3 (prices, indices): no broad public API; prefer files the user provides.
 - Federal Revenue (tax collection): open data.
 
+## Market data (prices, indices, FX, futures)
+
+| Source | How to access | Notes |
+|---|---|---|
+| Yahoo Finance | `yfinance.download(tickers, start, auto_adjust=True)` | Free, unofficial; recent versions return MultiIndex columns (`df.columns = df.columns.get_level_values(0)` for one ticker). Brazilian tickers end in `.SA` (`PETR4.SA`, `^BVSP`); FX as `BRL=X`; futures as `CL=F`, `GC=F` |
+| Stooq | `pandas_datareader.data.DataReader("^SPX", "stooq")` | Free daily history, no key |
+| FRED | yields, spreads, VIX (`VIXCLS`), exchange rates | Official, stable codes |
+| B3 / CVM | files provided by the user | Official Brazilian market data |
+
+Care with free market data: prices are adjusted retroactively for dividends and splits (a backtest run today and a year ago can differ), constituents of today's index suffer from survivorship bias, and there are gaps and stale prices on holidays. Use adjusted prices for returns and unadjusted prices for anything quoted in currency (levels, stop prices).
+
 ## If network access fails
 
 Some environments block external domains. If a call fails:

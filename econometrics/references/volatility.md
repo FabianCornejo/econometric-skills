@@ -55,6 +55,10 @@ var_99 = -(res.params["mu"] + vol[0] * q01)     # 1-day 99% VaR, in %
 
 VaR backtesting: share of violations ≈ 1% (Kupiec) and violations not clustered (Christoffersen). Evaluate volatility forecasts against realized volatility (QLIKE loss).
 
+For rolling out-of-sample VaR/ES (GARCH refit every k days, EWMA, filtered historical simulation) and the backtests themselves, use `scripts/risk.py` and `risk-var.md`.
+
+**EWMA (RiskMetrics)** is the restricted IGARCH(1,1) σ²_t = λσ²_{t−1} + (1−λ)r²_{t−1} with ω = 0 and λ fixed (0.94 daily): no mean reversion of volatility, so long-horizon forecasts stay flat at today's level. `risk.ewma_volatility` seeds it with an initial window only, never with the full-sample variance.
+
 ## 5. Limitations
 - ARCH models are **backward looking**: they react after the shock has happened. In professional risk management, implied volatility from derivatives (forward looking), Monte Carlo simulation and historical bootstrap have replaced much of the GARCH use.
 - Very sensitive to the assumed error distribution.

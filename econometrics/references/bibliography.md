@@ -41,6 +41,23 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Engle (1982); Bollerslev (1986); Glosten, Jagannathan and Runkle (1993); Nelson (1991).
 - Andersen, Bollerslev, Christoffersen and Diebold, "Volatility and Correlation Forecasting", *Handbook of Economic Forecasting*.
 
+## Financial econometrics, risk and backtesting
+- Tsay, *Analysis of Financial Time Series* (3rd ed., 2010) — returns, GARCH, VaR, state-space models, Markov switching.
+- Christoffersen, *Elements of Financial Risk Management* (2nd ed., 2012) — VaR/ES, filtered historical simulation, backtesting, copulas.
+- McNeil, Frey and Embrechts, *Quantitative Risk Management* (2015) — ES, extreme values, copulas, tail dependence.
+- J.P. Morgan/Reuters (1996), *RiskMetrics — Technical Document* — EWMA, λ = 0.94.
+- Kupiec (1995) and Christoffersen (1998), on VaR backtests; Basel Committee (1996) traffic-light framework.
+- Patton (2006), "Modelling asymmetric exchange rate dependence", *International Economic Review* — copula-GARCH.
+- Joe, *Dependence Modeling with Copulas* (2014); Nelsen, *An Introduction to Copulas* (2006).
+- Kraskov, Stögbauer and Grassberger (2004) — kNN mutual information; Székely, Rizzo and Bakirov (2007) — distance correlation.
+- Durbin and Koopman, *Time Series Analysis by State Space Methods* (2nd ed., 2012); Harvey, *Forecasting, Structural Time Series Models and the Kalman Filter* (1989).
+- Chan, *Algorithmic Trading* (2013) — Kalman-filter hedge ratios and pairs trading.
+- Hamilton (1989), "A new approach to the economic analysis of nonstationary time series and the business cycle", *Econometrica* — Markov switching.
+- Moskowitz, Ooi and Pedersen (2012), "Time series momentum", *Journal of Financial Economics*.
+- Pesaran and Timmermann (1992) — directional accuracy test; Clark and West (2007) — nested forecast comparison; Campbell and Thompson (2008) — out-of-sample R² for returns.
+- Bailey and López de Prado (2014), "The deflated Sharpe ratio"; Harvey, Liu and Zhu (2016), "... and the cross-section of expected returns" — multiple testing in backtests.
+- Hyndman and Khandakar (2008), "Automatic time series forecasting: the forecast package for R", *Journal of Statistical Software* — the auto-ARIMA algorithm.
+
 ## Official data
 - FRED, World Bank, IMF, OECD, BIS — international macro data.
 - Banco Central do Brasil (SGS, Focus survey via the Olinda API, Inflation Reports with applied VAR boxes); IBGE (SIDRA); Ipeadata — Brazilian data.
