@@ -15,6 +15,7 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 
 **Causal inference, survival, text and data (v1.2):**
 - **Causal designs:** balance tables, propensity scores, IPW, doubly robust AIPW, nearest-neighbour matching, double/debiased ML, regression discontinuity (rdrobust/IK bandwidths, fuzzy RD, robustness package, density test), TWFE event studies, Callaway-Sant'Anna staggered DiD, synthetic control with placebo inference.
+- **DiD timing robustness (v1.3):** anticipation in Callaway-Sant'Anna, automatic warnings when the outcome moves before the recorded date, a date-shift sensitivity table with a date-robust ATT, and estimation when each unit's adoption date is only known within a window (laws phased in court by court).
 - **Survival:** Kaplan-Meier, log-rank, Cox with hazard ratios and clustered SEs, proportional-hazards test, discrete-time hazard data.
 - **Text as data:** regex coding with audit snippets, TF-IDF, LDA, clustering with representative documents, classifiers with proper validation, agreement with hand coding, misclassification correction, similarity to a reference group.
 - **Data and reporting:** robust readers for Brazilian files (`;`, latin-1, decimal comma, XML/HTML ".xls"), large CSVs, safe merges, PDF/OCR, polite scraping; outreg2/esttab-style regression tables.
@@ -34,7 +35,7 @@ econometrics/
 │   ├── dependence.py                copulas, tail dependence, mutual information
 │   ├── state_space.py               Kalman filter, half-life, pairs trading
 │   ├── regimes.py                   Markov switching, HMM, K-means regimes
-│   ├── causal.py                    matching/IPW/AIPW, double ML, RD, event study, CS-DiD, synthetic control
+│   ├── causal.py                    matching/IPW/AIPW, double ML, RD, event study, CS-DiD + timing checks, synthetic control
 │   ├── survival.py                  Kaplan-Meier, Cox, PH test
 │   ├── text_data.py                 regex, TF-IDF, topics, clustering, classifiers, validation
 │   ├── data_prep.py                 reading, auditing, merging, PDFs, scraping
@@ -57,7 +58,7 @@ econometrics/
     ├── data-sources.md
     ├── software-equivalents.md      Stata/EViews/R → Python
     └── bibliography.md
-tests/                               78 known-truth checks on simulated data
+tests/                               91 known-truth checks on simulated data
 ```
 
 ### Installation

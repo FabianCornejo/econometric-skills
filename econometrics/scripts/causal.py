@@ -18,7 +18,10 @@ Regression discontinuity
 
 Panel designs
     event_study(df, unit, time, y, event_time)    TWFE leads/lags with clustered SE and joint pre-trend test
-    att_gt(df, unit, time, y, gvar)               Callaway-Sant'Anna (2021) group-time ATTs, robust to staggered timing
+    att_gt(df, unit, time, y, gvar)               Callaway-Sant'Anna (2021) group-time ATTs, robust to staggered timing;
+                                                  anticipation=δ; warns when the effect starts before the recorded date
+    did_timing_sensitivity(df, ..., gvar)         ATT with dates shifted ±k + date-robust estimate (true date within ±k)
+    did_uncertain_dates(df, ..., g_low, g_high)   adoption known only within a window per unit (phased rollouts)
     synth(df, unit, time, y, treated, t0)         synthetic control (Abadie et al., 2010) + placebo-in-space inference
 
 Notes: for production RD use `rdrobust` (robust bias-corrected CIs) if installed;
@@ -408,20 +411,52 @@ def event_study(df: pd.DataFrame, unit: str, time: str, y: str, event_time: str,
     wt = res.wald_test(formula=" = ".join(pre) + " = 0") if len(pre) > 1 else (
         res.wald_test(formula=f"{pre[0]} = 0") if pre else None)
     pval = float(wt.pval) if wt is not None else np.nan
+    # Timing diagnostics. (i) A jump between the reference period and the lead next to it
+    # means the outcome moves before the recorded date (anticipation or misdating).
+    # (ii) Post coefficients that keep rising suggest a gradual effect or a phased-in rollout.
+    # The two leads nearest the reference, each tested at ALPHA/2 (Bonferroni): a date that is
+    # one or two periods too late shows up as a jump in one of them.
+    near_ks = sorted((k for k in range(-leads, 0) if k != ref), reverse=True)[:2] if ref < 0 else []
+    zc = stats.norm.ppf(1 - ALPHA / 4)
+    sig = lambda k: bool(np.isfinite(tab.loc[k, "se"]) and tab.loc[k, "se"] > 0
+                         and abs(tab.loc[k, "coef"] / tab.loc[k, "se"]) > zc)
+    hits = [k for k in near_ks if sig(k)]
+    early = bool(hits)
+    near = hits[0] if hits else None
+    posts = [k for k in range(0, lags + 1) if k != ref and np.isfinite(tab.loc[k, "coef"])]
+    ramp = False
+    if len(posts) >= 3:
+        a, z = tab.loc[posts[0]], tab.loc[posts[-1]]
+        ramp = bool(z["coef"] - a["coef"] > 2 * np.sqrt(a["se"] ** 2 + z["se"] ** 2))
+    flags = {"effect_before_date": early, "gradual_effect": ramp}
     if show:
         print(f"\nEvent study (TWFE, ref k = {ref}, clustered by {unit})")
         print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
         print(f"Joint test of pre-period coefficients = 0: p = {pval:.3f} → "
               + ("pre-trends detected: parallel trends doubtful" if pval < ALPHA else "no evidence of pre-trends (low power is possible)"))
-    return {"coefs": tab, "pretrend_p": pval, "result": res}
+        if early:
+            print(f"  WARNING: the coefficient at k = {near} differs from the reference k = {ref}: the outcome jumps"
+                  " right before the recorded date. Typical causes: anticipation (announcement before entry"
+                  " into force) or a misdated/phased-in treatment. Confirm the date; use att_gt(anticipation=...)"
+                  " and did_timing_sensitivity.")
+        if ramp:
+            print("  NOTE: post-treatment coefficients keep rising. Either the effect builds with exposure, or"
+                  " adoption was gradual within units (a single date understates early exposure). If the"
+                  " rollout was phased, record the phase-in window and use did_uncertain_dates.")
+    return {"coefs": tab, "pretrend_p": pval, "flags": flags, "result": res}
 
 
 def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str = "never",
-           n_boot: int = 199, seed: int = 0, show: bool = True) -> dict:
+           n_boot: int = 199, seed: int = 0, anticipation: int = 0, show: bool = True) -> dict:
     """Callaway & Sant'Anna (2021) ATT(g,t) without covariates on a balanced panel.
     gvar = first treated period (0 or NaN = never treated). control = 'never' or 'notyet'.
-    Pre-period cells use the short (t-1) base; post cells use base g-1.
-    Inference: unit-level bootstrap (resampling units with replacement)."""
+    anticipation = δ periods in which units may react before g (law announced before it
+    takes effect): post cells (t >= g-δ) use base g-δ-1, not-yet controls must be untreated
+    until t+δ. Pre-period cells use the short (t-1) base.
+    Inference: unit-level bootstrap (resampling units with replacement); n_boot=0 skips it.
+    Warns when either of the two pre-period cells right before the (anticipation-adjusted)
+    date is significant (Bonferroni, ALPHA/2 each): the effect starts before the recorded date (anticipation or a misdated
+    treatment) → check the date and run did_timing_sensitivity."""
     d = df[[unit, time, y, gvar]].copy()
     d[gvar] = d[gvar].fillna(0)
     Y = d.pivot(index=unit, columns=time, values=y)
@@ -430,7 +465,9 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
     G = d.groupby(unit)[gvar].first().reindex(Y.index).to_numpy()
     T = np.array(Y.columns)
     Ym = Y.to_numpy()
-    cohorts = sorted(g for g in np.unique(G) if g > 0 and g > T.min())
+    dlt = int(anticipation)
+    cohorts = sorted(g for g in np.unique(G) if g > 0 and (g - dlt - 1) in T)
+    dropped = sorted(g for g in np.unique(G) if g > 0 and g not in cohorts)
 
     def compute(idx):
         Yb, Gb = Ym[idx], G[idx]
@@ -440,14 +477,14 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
             if tg.sum() == 0:
                 continue
             for j, t in enumerate(T):
-                base = (g - 1) if t >= g else T[j - 1] if j > 0 else None
+                base = (g - dlt - 1) if t >= g - dlt else T[j - 1] if j > 0 else None
                 if base is None or base not in T:
                     continue
                 b = np.where(T == base)[0][0]
                 if control == "never":
                     cg = Gb == 0
                 else:
-                    cg = (Gb == 0) | (Gb > max(t, base))
+                    cg = (Gb == 0) | (Gb > max(t, base) + dlt)
                     cg &= Gb != g
                 if cg.sum() == 0:
                     continue
@@ -455,29 +492,158 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
                 cells.append((g, t, t - g, att, tg.sum()))
         return pd.DataFrame(cells, columns=["g", "t", "e", "att", "n_g"])
 
+    if not cohorts:
+        raise ValueError("att_gt: no cohort has the base period g-anticipation-1 inside the panel")
     base = compute(np.arange(len(Ym)))
     post = base[base["e"] >= 0]
-    simple = np.average(post["att"], weights=post["n_g"])
+    simple = np.average(post["att"], weights=post["n_g"]) if len(post) else np.nan
     dyn = base.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False)
-    rng = np.random.default_rng(seed)
-    bs_simple, bs_dyn, bs_cells = [], [], []
-    for _ in range(n_boot):
-        b = compute(rng.integers(0, len(Ym), len(Ym)))
-        p = b[b["e"] >= 0]
-        bs_simple.append(np.average(p["att"], weights=p["n_g"]) if len(p) else np.nan)
-        bs_dyn.append(b.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False))
-        bs_cells.append(b.set_index(["g", "t"])["att"])
-    se_simple = np.nanstd(bs_simple, ddof=1)
-    dyn_tab = pd.DataFrame({"att": dyn, "se": pd.concat(bs_dyn, axis=1).std(axis=1, ddof=1)})
+    if n_boot and n_boot > 1:
+        rng = np.random.default_rng(seed)
+        bs_simple, bs_dyn, bs_cells = [], [], []
+        for _ in range(n_boot):
+            b = compute(rng.integers(0, len(Ym), len(Ym)))
+            p = b[b["e"] >= 0]
+            bs_simple.append(np.average(p["att"], weights=p["n_g"]) if len(p) else np.nan)
+            bs_dyn.append(b.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False))
+            bs_cells.append(b.set_index(["g", "t"])["att"])
+        se_simple = np.nanstd(bs_simple, ddof=1)
+        dyn_se = pd.concat(bs_dyn, axis=1).std(axis=1, ddof=1)
+        cell_se = pd.concat(bs_cells, axis=1).std(axis=1, ddof=1)
+    else:
+        se_simple, dyn_se = np.nan, pd.Series(np.nan, index=dyn.index)
+        cell_se = pd.Series(np.nan, index=base.set_index(["g", "t"]).index)
+    dyn_tab = pd.DataFrame({"att": dyn, "se": dyn_se})
     dyn_tab["ci_low"], dyn_tab["ci_high"] = _ci(dyn_tab["att"], dyn_tab["se"])
-    cell_se = pd.concat(bs_cells, axis=1).std(axis=1, ddof=1)
     gt = base.set_index(["g", "t"]).join(cell_se.rename("se"))
-    out = {"overall": _out("ATT (CS, simple)", simple, se_simple, len(Ym)), "dynamic": dyn_tab, "gt": gt}
+    # Jump right before the (anticipation-adjusted) date: with the short t-1 base, the cell
+    # e = -δ-1 measures the change from g-δ-2 to g-δ-1, which is ~0 if the date is right.
+    # Check the two cells right before it (a date one or two periods too late), each at ALPHA/2.
+    zc = stats.norm.ppf(1 - ALPHA / 4)
+    hits = [k for k in (-dlt - 1, -dlt - 2) if k in dyn_tab.index and np.isfinite(dyn_tab.loc[k, "se"])
+            and dyn_tab.loc[k, "se"] > 0 and abs(dyn_tab.loc[k, "att"] / dyn_tab.loc[k, "se"]) > zc]
+    flag = bool(hits)
+    k_chk = hits[0] if hits else -dlt - 1
+    out = {"overall": _out("ATT (CS, simple)", simple, se_simple, len(Ym), anticipation=dlt),
+           "dynamic": dyn_tab, "gt": gt, "flags": {"effect_before_date": flag},
+           "cohorts_dropped": dropped}
     if show:
         o = out["overall"]
-        print(f"\nCallaway-Sant'Anna ({control} controls, {len(cohorts)} cohorts, {n_boot} bootstrap reps)")
+        print(f"\nCallaway-Sant'Anna ({control} controls, {len(cohorts)} cohorts, {n_boot} bootstrap reps"
+              + (f", anticipation = {dlt}" if dlt else "") + ")")
         print(f"Overall ATT: {o['estimate']:.4f} (SE {o['se']:.4f}, 95% CI {o['ci_low']:.4f} to {o['ci_high']:.4f})")
         print("Dynamic (event-time) ATT:\n" + dyn_tab.to_string(float_format=lambda v: f"{v:.4f}"))
+        if dropped:
+            print(f"  Cohorts dropped (base period g-{dlt}-1 outside the panel): {dropped}")
+        if flag:
+            print(f"  WARNING: the outcome already moves at e = {k_chk} (|z| > {zc:.2f}). The effect starts before"
+                  " the recorded date: anticipation (announcement before entry into force) or a misdated"
+                  " treatment. Confirm the date; re-run with anticipation=" + str(-k_chk)
+                  + " and did_timing_sensitivity before reporting the ATT.")
+    return out
+
+
+def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, max_shift: int = 2,
+                           control: str = "never", n_boot: int = 199, seed: int = 0, show: bool = True) -> dict:
+    """How much does the Callaway-Sant'Anna result depend on the exact treatment date?
+
+    1. Shift table: re-estimates the overall ATT with every treated unit's date moved by
+       k = -max_shift … +max_shift periods. Large swings mean the date itself drives the result.
+    2. Date-robust estimate: assumes each true date lies within ±max_shift of the recorded
+       one. Uses the latest plausible date (g+max_shift) as the event date and
+       anticipation = 2·max_shift, so the base period (g-max_shift-1) is untreated under
+       every date in the window and the post periods are treated under every date in it.
+       It estimates the effect from g+max_shift onward (a later-exposure ATT when effects
+       are dynamic), at the cost of fewer usable cohorts and wider CIs.
+    Verdict: 'survives' if the date-robust CI excludes 0 with the same sign as the
+    baseline; otherwise the conclusion depends on the exact date."""
+    d = df.copy()
+    g0 = d[gvar].fillna(0)
+    rows = []
+    for k in range(-max_shift, max_shift + 1):
+        d["_g"] = np.where(g0 > 0, g0 + k, 0)
+        try:
+            r = att_gt(d, unit, time, y, "_g", control=control, n_boot=n_boot, seed=seed, show=False)
+            o = r["overall"]
+            rows.append({"shift": k, "att": o["estimate"], "se": o["se"], "ci_low": o["ci_low"],
+                         "ci_high": o["ci_high"], "p": o["p"]})
+        except ValueError:
+            rows.append({"shift": k, "att": np.nan, "se": np.nan, "ci_low": np.nan, "ci_high": np.nan, "p": np.nan})
+    tab = pd.DataFrame(rows).set_index("shift")
+    d["_g"] = np.where(g0 > 0, g0 + max_shift, 0)
+    rob = att_gt(d, unit, time, y, "_g", control=control, n_boot=n_boot, seed=seed,
+                 anticipation=2 * max_shift, show=False)
+    ro = rob["overall"]
+    b = tab.loc[0]
+    same_sign = np.sign(ro["estimate"]) == np.sign(b["att"])
+    survives = bool(same_sign and np.isfinite(ro["se"]) and (ro["ci_low"] > 0 or ro["ci_high"] < 0))
+    swing = float((tab["att"] - b["att"]).abs().max() / abs(b["att"])) if b["att"] else np.nan
+    out = {"shifts": tab, "date_robust": ro, "date_robust_dynamic": rob["dynamic"], "survives": survives,
+           "max_relative_swing": swing, "cohorts_dropped_robust": rob["cohorts_dropped"]}
+    if show:
+        print(f"\nTiming sensitivity (Callaway-Sant'Anna, dates shifted by -{max_shift}…+{max_shift} periods)")
+        print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
+        print(f"Largest swing vs recorded dates: {swing:.0%} of the baseline ATT (mechanical: a wrong date puts"
+              " treated periods in the base or untreated ones in the post period, so swings are expected;"
+              " the date-robust line below is the verdict)")
+        print(f"Date-robust ATT (true date anywhere within ±{max_shift}): {ro['estimate']:.4f} "
+              f"(SE {ro['se']:.4f}, 95% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})"
+              + (f"; cohorts dropped: {rob['cohorts_dropped']}" if rob["cohorts_dropped"] else ""))
+        print("  → " + (f"the conclusion survives date errors of up to ±{max_shift} periods." if survives else
+                        f"the conclusion DEPENDS on the exact date: with an error of up to ±{max_shift} periods the "
+                        "effect is not distinguishable from zero (or flips sign). Pin the date down with sources "
+                        "before reporting a causal effect."))
+    return out
+
+
+def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: str, g_high: str,
+                        control: str = "never", n_draws: int = 200, n_boot: int = 199, seed: int = 0,
+                        show: bool = True) -> dict:
+    """Staggered DiD when each unit's adoption date is only known to lie in a window
+    [g_low, g_high] (e.g. a law phased in court by court with imprecise records).
+    Never-treated units: g_low = g_high = 0 or NaN.
+
+    1. Bounds-style estimate: event date = g_high, anticipation = max window width, so
+       every base period precedes any plausible adoption (Callaway-Sant'Anna, bootstrap CI).
+    2. Date draws: n_draws estimates with each unit's date drawn uniformly from its
+       window; the spread shows how much date uncertainty alone moves the ATT."""
+    d = df.copy()
+    lo = d.groupby(unit)[g_low].first().fillna(0)
+    hi = d.groupby(unit)[g_high].first().fillna(0)
+    if ((hi > 0) & (lo > hi)).any():
+        raise ValueError("g_low must be <= g_high for every treated unit")
+    lo = lo.where(lo > 0, hi)
+    width = int((hi - lo)[hi > 0].max()) if (hi > 0).any() else 0
+    d["_g"] = d[unit].map(hi)
+    rob = att_gt(d, unit, time, y, "_g", control=control, n_boot=n_boot, seed=seed,
+                 anticipation=width, show=False)
+    rng = np.random.default_rng(seed)
+    draws = []
+    for _ in range(n_draws):
+        gd = pd.Series(np.where(hi > 0, rng.integers(lo.astype(int), hi.astype(int) + 1), 0), index=hi.index)
+        d["_g"] = d[unit].map(gd)
+        try:
+            draws.append(att_gt(d, unit, time, y, "_g", control=control, n_boot=0, show=False)["overall"]["estimate"])
+        except ValueError:
+            pass
+    draws = np.array(draws)
+    ro = rob["overall"]
+    q05, q50, q95 = np.nanquantile(draws, [0.05, 0.5, 0.95])
+    share_same = float(np.mean(np.sign(draws) == np.sign(q50)))
+    survives = bool(np.isfinite(ro["se"]) and (ro["ci_low"] > 0 or ro["ci_high"] < 0)
+                    and np.sign(ro["estimate"]) == np.sign(q50))
+    out = {"window_robust": ro, "window_robust_dynamic": rob["dynamic"], "max_window": width,
+           "draws": draws, "draws_q05": q05, "draws_median": q50, "draws_q95": q95,
+           "share_same_sign": share_same, "survives": survives, "cohorts_dropped": rob["cohorts_dropped"]}
+    if show:
+        print(f"\nDiD with uncertain adoption dates (windows up to {width} periods wide, {control} controls)")
+        print(f"Window-robust ATT (base before any plausible date): {ro['estimate']:.4f} "
+              f"(SE {ro['se']:.4f}, 95% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})")
+        print(f"ATT across {len(draws)} random dates inside the windows: median {q50:.4f}, "
+              f"5–95% {q05:.4f} to {q95:.4f}, same sign in {share_same:.0%} of draws")
+        print("  → " + ("the effect survives the date uncertainty." if survives else
+                        "the effect does NOT survive the date uncertainty: narrow the windows with better "
+                        "records or report the result as inconclusive."))
     return out
 
 
