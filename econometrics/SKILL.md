@@ -22,7 +22,7 @@ Answer in the user's language; the skill's instructions are in English but the a
 | `scripts/dependence.py` | Rank correlations, tail dependence, copulas (Gaussian, t, Clayton, Gumbel, Frank, rotations) by MLE, copula simulation, mutual information, distance correlation |
 | `scripts/state_space.py` | Kalman filter with time-varying coefficients (MLE of noise variances), half-life, Hurst, cointegration pretest, pairs positions and returns |
 | `scripts/regimes.py` | Markov-switching models, Gaussian HMM with filtered probabilities, K-means on features, regime summaries |
-| `scripts/causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD (bandwidth, robustness, density test, fuzzy), TWFE event study, Callaway-Sant'Anna, synthetic control with placebo inference |
+| `scripts/causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD (bandwidth, robustness, density test, fuzzy), TWFE event study, Callaway-Sant'Anna (with anticipation), DiD timing sensitivity and uncertain adoption dates, synthetic control with placebo inference |
 | `scripts/survival.py` | Kaplan-Meier, log-rank, Cox with hazard ratios and clustered SE, proportional-hazards test, person-period expansion |
 | `scripts/text_data.py` | Regex coding with audit snippets, TF-IDF, LDA, text clustering, TF-IDF + logit classifier, validation against hand coding, misclassification correction, similarity to a reference group |
 | `scripts/data_prep.py` | Reading awkward files (encodings, `;` CSVs, XML/HTML ".xls", JSON, large CSVs), audit, safe merges, Brazilian numbers, mojibake, PDF text/OCR, polite scraping |
@@ -73,6 +73,7 @@ Before touching the data, write down: dependent variable, regressors, expected s
 Classify the goal, because it changes the right model:
 - **Estimate an effect** (elasticity, policy impact): the focus is an unbiased coefficient → identification, endogeneity, omitted variables.
 - **Estimate a causal effect without an experiment**: choose the design first (selection on observables, RD, DiD/event study, synthetic control, IV) and write its identifying assumption in words → `causal-inference.md`.
+  - **DiD/event study: settle the treatment date before estimating.** Ask the user whether the adoption date is exact (and its source), whether it was announced or anticipated, and whether adoption was gradual within units. Never assume the date is right because it is in the data. Then run `causal.did_timing_sensitivity` (or `did_uncertain_dates` when only a window is known) next to `att_gt`, and report the date-robust result with the main one (`causal-inference.md` §6.1). If `att_gt` or `event_study` prints a timing WARNING, tell the user in plain words before reporting any effect.
 - **Forecast**: the focus is out-of-sample error → time-based validation and comparison with naive benchmarks. A model can forecast well without its coefficients having a causal interpretation.
 
 ### 2. Identify the data structure

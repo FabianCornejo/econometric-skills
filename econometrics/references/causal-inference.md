@@ -84,7 +84,21 @@ The 2×2 DiD is in `panel-iv.md` §10. With **units treated at different dates a
 - `event_study(df, unit, time, y, event_time, leads=4, lags=4)`: TWFE leads and lags, reference period −1, endpoints binned, errors clustered by unit, joint test that pre-period coefficients are zero. Fine with a single adoption date or homogeneous effects; a visual check otherwise.
 - `att_gt(df, unit, time, y, gvar, control="never" | "notyet")`: Callaway & Sant'Anna (2021) group-time ATTs using only clean comparisons, aggregated to an overall ATT and to event time, with unit bootstrap SEs. Use this as the main estimate under staggered adoption; report the TWFE event study next to it.
 - **Pre-trends**: a non-significant pre-trend test is weak evidence (low power; Roth, 2022). Plot the leads with CIs; consider HonestDiD-style sensitivity (Rambachan & Roth, 2023): how large a violation of parallel trends would overturn the result?
-- **Anticipation**: if behaviour changes before the formal date (law announced before it takes effect), shift the event date to the announcement.
+- **Anticipation**: if behaviour changes before the formal date (law announced before it takes effect), either shift the event date to the announcement or use `att_gt(..., anticipation=δ)`, which takes the base period δ+1 periods before the date. Both `att_gt` and `event_study` print a WARNING when the outcome already moves in one of the two periods right before the recorded date (`flags["effect_before_date"]`).
+
+### 6.1 When the treatment date itself is uncertain
+
+A law phased in court by court, a policy with imprecise records, an announcement weeks before entry into force: the estimate can be driven by the date rather than the policy. A date that is too late puts treated periods in the base and attenuates the ATT; a date that is too early puts untreated periods in the post period. **Before running any DiD, ask the user:** (1) is the adoption date exact, and from what source? (2) was it announced, or did behaviour start, before that date? (3) did adoption happen at once or gradually within each unit? Then:
+
+| Situation | Function | What it reports |
+|---|---|---|
+| Date recorded, but could be off by up to k periods | `did_timing_sensitivity(df, unit, time, y, gvar, max_shift=k)` | ATT with all dates shifted −k…+k, and a **date-robust ATT** (event date g+k, anticipation 2k: the base precedes and the post follows every date in the window). Verdict: survives or depends on the exact date |
+| Each unit's date known only within a window | `did_uncertain_dates(df, unit, time, y, g_low, g_high)` | **Window-robust ATT** (event date g_high, anticipation = widest window) and the spread of the ATT across random dates inside the windows |
+| Known announcement lag of δ periods | `att_gt(..., anticipation=δ)` | ATT using base g−δ−1 |
+
+Read the shift table as mechanical, not as a test: shifting a correct date also moves the ATT, because treated periods enter the base. The verdict is the date-robust or window-robust estimate. It estimates the effect from the latest plausible date onward (a later-exposure ATT when effects grow over time) and drops cohorts whose earlier base falls outside the panel, so the CI is wider. If it does not exclude zero, report the result as dependent on the date and say what records would settle it.
+
+Not covered: treatment intensity that varies continuously within a unit (dose; de Chaisemartin & D'Haultfœuille, 2024; Callaway, Goodman-Bacon & Sant'Anna, 2024) and formal HonestDiD bounds (Rambachan & Roth, 2023); use R's `did`, `DIDmultiplegtDYN` and `HonestDiD` for those.
 - **Clustering**: at the level of treatment assignment (state, court, municipality); with fewer than ~30 clusters, use wild cluster bootstrap.
 
 ## 7. Synthetic control

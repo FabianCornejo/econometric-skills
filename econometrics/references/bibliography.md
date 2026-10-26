@@ -25,6 +25,7 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Cattaneo, Idrobo and Titiunik, *A Practical Introduction to Regression Discontinuity Designs* (2020/2024); Calonico, Cattaneo and Titiunik (2014); Imbens and Kalyanaraman (2012); McCrary (2008); Gelman and Imbens (2019).
 - Abadie, Diamond and Hainmueller (2010); Abadie (2021), "Using synthetic controls", *Journal of Economic Literature*.
 - Roth, Sant'Anna, Bilinski and Poe (2023), "What's trending in difference-in-differences?", *Journal of Econometrics*; Rambachan and Roth (2023) — sensitivity to parallel-trends violations.
+- Callaway and Sant'Anna (2021) — group-time ATTs, including the anticipation adjustment; de Chaisemartin and D'Haultfœuille (2024, *Review of Economics and Statistics*) and Callaway, Goodman-Bacon and Sant'Anna (2024) — non-binary and continuous treatments.
 - Chernozhukov et al. (2018), "Double/debiased machine learning", *Econometrics Journal*.
 - Crump, Hotz, Imbens and Mitnik (2009) — trimming for overlap; Austin (2011) — calipers; Oster (2019); Cinelli and Hazlett (2020) — sensitivity to unobserved confounding.
 - Kling (2006); Dobbie, Goldin and Yang (2018) — judge/examiner leniency designs.

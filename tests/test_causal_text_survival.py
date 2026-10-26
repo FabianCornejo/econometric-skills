@@ -196,5 +196,71 @@ th = rp.regression_table({"cox": res}, exponentiate=True)
 check("table with hazard ratios", th.loc["x"].iloc[0].startswith("1.6"))
 rp.export_table(tab, os.path.join(tmp, "t.md"))
 
+# ---------- DiD timing robustness (v1.3): anticipation, misdated and uncertain dates ----------
+# Own generator so the checks above keep their random streams.
+rg = np.random.default_rng(23)
+
+
+def sim_did(units=300, periods=12, eff=2.0, antic=0.0):
+    """Cohorts 5/7/9 + never treated; constant effect `eff`, plus `antic` one period early."""
+    g = rg.choice([0, 5, 7, 9], units, p=[0.3, 0.25, 0.25, 0.2])
+    ui, tf = rg.normal(size=units), rg.normal(size=periods) * 0.5
+    rows = []
+    for i in range(units):
+        for t in range(1, periods + 1):
+            e = t - g[i] if g[i] > 0 else -99
+            ef = eff if (g[i] > 0 and e >= 0) else (antic if (g[i] > 0 and e == -1) else 0.0)
+            rows.append({"id": i, "t": t, "g": g[i], "y": ui[i] + tf[t - 1] + ef + rg.normal(0, 0.5)})
+    return pd.DataFrame(rows)
+
+
+# clean dates: no false alarm, date-robust estimate recovers 2
+C = sim_did()
+rc = ca.att_gt(C, "id", "t", "y", "g", n_boot=99, show=False)
+ec = ca.event_study(C.assign(g=C.g.replace(0, np.nan)), "id", "t", "y", "g", leads=3, lags=4, show=False)
+check("timing: no early-effect flag with correct dates (CS and event study)",
+      not rc["flags"]["effect_before_date"] and not ec["flags"]["effect_before_date"])
+check("timing: no 'gradual' note when the effect is constant", not ec["flags"]["gradual_effect"])
+check("timing: event study flags the gradual effect in the growing-effect panel", es["flags"]["gradual_effect"])
+
+# anticipation: outcome reacts 1 period early (effect 1), full effect 2 from g
+A = sim_did(antic=1.0)
+ra0 = ca.att_gt(A, "id", "t", "y", "g", n_boot=99, show=False)
+ra1 = ca.att_gt(A, "id", "t", "y", "g", n_boot=99, anticipation=1, show=False)
+ea = ca.event_study(A.assign(g=A.g.replace(0, np.nan)), "id", "t", "y", "g", leads=3, lags=4, show=False)
+check("anticipation: CS flags the effect before the date", ra0["flags"]["effect_before_date"])
+check("anticipation: event study flags the jump before the date", ea["flags"]["effect_before_date"])
+check("anticipation: ignoring it biases the ATT (≈1 instead of 2)", abs(ra0["overall"]["estimate"] - 2) > 0.6,
+      f"{ra0['overall']['estimate']:.2f}")
+check("anticipation=1 recovers ATT≈2", abs(ra1["overall"]["estimate"] - 2) < 0.2,
+      f"{ra1['overall']['estimate']:.2f}")
+
+# misdating: 40% of treated units recorded 2 periods late
+tr_ids = C.groupby("id").g.first()
+late = tr_ids[tr_ids > 0].sample(frac=0.4, random_state=1).index
+M = C.assign(grec=np.where(C.id.isin(late), C.g + 2, C.g))
+rm = ca.att_gt(M, "id", "t", "y", "grec", n_boot=99, show=False)
+check("misdated: CS flags the effect before the recorded date", rm["flags"]["effect_before_date"])
+check("misdated: naive ATT is attenuated", rm["overall"]["estimate"] < 1.7, f"{rm['overall']['estimate']:.2f}")
+sm_ = ca.did_timing_sensitivity(M, "id", "t", "y", "grec", max_shift=2, n_boot=99, show=False)
+check("misdated: date-robust ATT (±2) recovers ≈2 and survives",
+      sm_["survives"] and abs(sm_["date_robust"]["estimate"] - 2) < 0.25, f"{sm_['date_robust']['estimate']:.2f}")
+
+# uncertain windows [g-1, g+2] (phased rollout, imprecise records)
+M["lo"], M["hi"] = np.where(M.g > 0, M.g - 1, 0), np.where(M.g > 0, M.g + 2, 0)
+uw = ca.did_uncertain_dates(M, "id", "t", "y", "lo", "hi", n_draws=60, n_boot=99, show=False)
+check("uncertain dates: window-robust ATT ≈2 and survives",
+      abs(uw["window_robust"]["estimate"] - 2) < 0.25 and uw["survives"],
+      f"{uw['window_robust']['estimate']:.2f}")
+check("uncertain dates: random dates inside the windows attenuate the ATT", uw["draws_median"] < 1.7,
+      f"{uw['draws_median']:.2f}")
+
+# no effect: the verdict must not claim one
+N = sim_did(eff=0.0)
+sn = ca.did_timing_sensitivity(N, "id", "t", "y", "g", max_shift=2, n_boot=99, show=False)
+un = ca.did_uncertain_dates(N.assign(lo=np.where(N.g > 0, N.g - 1, 0), hi=np.where(N.g > 0, N.g + 2, 0)),
+                            "id", "t", "y", "lo", "hi", n_draws=30, n_boot=99, show=False)
+check("null effect: neither timing check reports a surviving effect", not sn["survives"] and not un["survives"])
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
