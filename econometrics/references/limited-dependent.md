@@ -11,6 +11,7 @@ Use when y is binary (bought/did not, default/no default), a count (number of or
 6. Sample selection (Heckman) and two-part models
 7. Count, fractional, ordered and multinomial outcomes
 8. Pitfalls
+9. Heterogeneous segments: the logit leaf model
 
 ## 1. Linear probability model
 
@@ -104,3 +105,23 @@ y* = xβ + ε, ε ~ N(0, σ²); y = max(0, y*). With a ceiling (top-coded income
 - Using OLS R² or accuracy at a 0.5 cutoff as the main metric on an imbalanced sample (1% defaulters → 99% accuracy by always predicting "no").
 - Forgetting that in nonlinear models interaction effects are not the interaction coefficient; compute the double difference in probabilities.
 - Endogeneity in a binary model: 2SLS on the LPM is the simplest and most transparent fix; probit with a control function (include the first-stage residual) is the nonlinear alternative.
+
+## 9. Heterogeneous segments: the logit leaf model
+
+When the effect of x on P(y=1) changes across groups that nobody wrote down in advance (churn drivers differ between new and old customers, default drivers between secured and unsecured loans), a pooled logit averages opposite effects away and a decision tree approximates each linear effect with many steps. The **logit leaf model** (De Caigny, Coussement & De Bock, 2018) combines them: a shallow tree defines a few segments, then a separate logit is estimated in each leaf.
+
+```python
+from segments import logit_leaf_model, predict_leaf_model
+res = logit_leaf_model(df, "churn", ["tenure", "usage", "complaints", "price_increase"],
+                       max_depth=2, min_leaf=100, select="forward_aic", honest=True)
+res["leaves"]        # rule, n, positive rate per segment
+res["ame"]           # average marginal effects by segment
+res["performance"]   # holdout AUC and top-decile lift vs pooled logit and tree
+p = predict_leaf_model(res["model"], new_customers)
+```
+
+- **When it earns its place**: prediction or targeting with readable output (a few rules plus one coefficient table per segment). The original study found it beats its building blocks and matches random forests on churn data, judged by AUC and top-decile lift. If it does not beat the pooled logit on the holdout, report the pooled logit.
+- **Settings**: depth 2–3 and at least ~100 observations per leaf (the R package default) so each leaf supports a logit; forward selection by AIC keeps each leaf model short. sklearn's CART replaces the C4.5 tree of the original; use `ccp_alpha` to prune.
+- **Inference**: the segments are chosen by the data. With `honest=True` the tree and the leaf logits use different halves of the training sample, so the leaf standard errors are valid *given* the segments (Athey & Imbens, 2016). With `honest=False`, the leaf p-values are too optimistic; use them only descriptively. In both cases, a segment is a hypothesis about heterogeneity: refit with other seeds and samples and report only segments that reappear.
+- **Not causal**: segment-specific coefficients are associations, like any logit. For heterogeneous *treatment* effects use causal designs with interactions specified in advance or causal forests (`causal-inference.md`).
+- **Alternatives**: interactions written from theory (always preferable when theory exists); model-based recursive partitioning (`partykit::glmtree` in R; Zeileis, Hothorn & Hornik, 2008), which chooses splits by testing parameter instability in the logit itself rather than by node purity, and is the more principled choice when the goal is to find where coefficients change.

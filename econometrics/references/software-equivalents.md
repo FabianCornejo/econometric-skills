@@ -82,6 +82,8 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | `heckman` | — | manual two-step (see `limited-dependent.md`) |
 | `poisson`, `nbreg` | Count | `smf.poisson`, `smf.negativebinomial` |
 | `oprobit`, `mlogit` | Ordered / multinomial | `OrderedModel`, `smf.mnlogit` |
+| R `LLM::llm`, `predict.llm` (logit leaf model) | — | `segments.logit_leaf_model`, `segments.predict_leaf_model` |
+| R `partykit::glmtree` (model-based partitioning) | — | no direct equivalent; `segments.logit_leaf_model` splits by purity, not parameter instability |
 
 ## Time series
 
@@ -140,3 +142,5 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | `import delimited, delimiter(";") encoding(latin1)` | `data_prep.read_any` |
 | `merge m:1 key, assert(match)` | `data_prep.safe_merge(..., validate="m:1")` |
 | `regexm`, `regexs` | `text_data.regex_flags`, `text_data.regex_extract` |
+| R `dsl::dsl` (design-based supervised learning) | `text_data.dsl_regression` (+ `dsl_sampling_probs`, `draw_validation_sample`) |
+| Hugging Face `LogitsProcessor` restricting the next token to labels | `text_data.llm_classify` (+ `hf_backend`, `label_probs_from_logits`) |

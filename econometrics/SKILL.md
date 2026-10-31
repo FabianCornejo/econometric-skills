@@ -1,6 +1,6 @@
 ---
 name: econometrics
-description: Rigorous applied econometrics in Python (statsmodels, linearmodels, arch) — regression with full diagnostics, IV, panel data, logit/probit/tobit, causal designs (matching/IPW/AIPW, double ML, regression discontinuity, staggered DiD/event studies, synthetic control), survival/Cox models, text as data (regex, TF-IDF, topics, classifiers, validation), time series (auto-ARIMA/ARIMAX, VAR, cointegration), GARCH, VaR/ES backtests, copulas, Kalman, regime switching, look-ahead-free backtests, demand elasticities, data collection and cleaning (BCB/IBGE/TSE/CNJ, scraping, PDFs), publication tables. Use for any regression, effect of X on Y, policy or law evaluation, elasticity, forecast, duration or time-to-event question, coding of documents into variables, VaR or tail risk, hedge ratio, regimes, strategy backtest, or "does X explain/cause/predict Y?" question, even without the word econometrics.
+description: Rigorous applied econometrics in Python (statsmodels, linearmodels, arch) — regression with full diagnostics, IV, panel data, logit/probit/tobit, causal designs (matching/IPW/AIPW, double ML, regression discontinuity, staggered DiD/event studies, synthetic control), survival/Cox models, text as data (regex, TF-IDF, topics, classifiers, LLM coding with valid downstream inference), logit leaf model, time series (auto-ARIMA/ARIMAX, VAR, cointegration), GARCH, VaR/ES backtests, copulas, Kalman, regime switching, look-ahead-free backtests, demand elasticities, data collection and cleaning (BCB/IBGE/TSE/CNJ, scraping, PDFs), publication tables. Use for any regression, effect of X on Y, policy or law evaluation, elasticity, forecast, duration or time-to-event question, coding of documents into variables (including with an LLM), customer or churn segments, VaR or tail risk, hedge ratio, regimes, strategy backtest, or "does X explain/cause/predict Y?" question, even without the word econometrics.
 ---
 
 # Applied econometrics
@@ -25,13 +25,14 @@ Answer in the user's language; the skill's instructions are in English but the a
 | `scripts/regimes.py` | Markov-switching models, Gaussian HMM with filtered probabilities, K-means on features, regime summaries |
 | `scripts/causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD (bandwidth, robustness, density test, fuzzy), TWFE event study, Callaway-Sant'Anna (with anticipation), DiD timing sensitivity and uncertain adoption dates, synthetic control with placebo inference |
 | `scripts/survival.py` | Kaplan-Meier, log-rank, Cox with hazard ratios and clustered SE, proportional-hazards test, person-period expansion |
-| `scripts/text_data.py` | Regex coding with audit snippets, TF-IDF, LDA, text clustering, TF-IDF + logit classifier, validation against hand coding, misclassification correction, similarity to a reference group |
+| `scripts/text_data.py` | Regex coding with audit snippets, TF-IDF, LDA, text clustering, TF-IDF + logit classifier, validation against hand coding, misclassification correction, similarity to a reference group; LLM coding constrained to a label set with probabilities and uncertainty (LogTokU), sampling of the hand-coded subsample, and `dsl_regression` for valid OLS/logit on LLM-coded variables |
+| `scripts/segments.py` | Logit leaf model: tree segments + one logit per segment, honest splitting, AMEs by segment, holdout AUC and top-decile lift vs pooled logit and tree |
 | `scripts/data_prep.py` | Reading awkward files (encodings, `;` CSVs, XML/HTML ".xls", JSON, large CSVs), audit, missing-data report (patterns, complete-case N, MCAR check), safe merges, Brazilian numbers, mojibake, PDF text/OCR, polite scraping |
 | `scripts/reporting.py` | Publication-style regression tables (outreg2/esttab style) with FE rows, odds/hazard ratios, export to Markdown/Excel/LaTeX |
 | `references/ols-regression.md` | Every regression: functional forms, dummies, diagnostic order, HC/HAC/GLS, multicollinearity, influence, measurement error |
 | `references/time-series.md` | Data with a time dimension: unit roots, breaks, ARIMA/ETS/ARFIMA, ADL, cointegration/VECM, VAR/SVAR/BVAR, forecast evaluation and combination |
 | `references/panel-iv.md` | Endogeneity, instruments, simultaneous equations, panel data (FE/RE), difference-in-differences, dynamic panels |
-| `references/limited-dependent.md` | Binary, count, censored, fractional or ordered y (LPM, logit, probit, tobit, Heckman, PPML) |
+| `references/limited-dependent.md` | Binary, count, censored, fractional or ordered y (LPM, logit, probit, tobit, Heckman, PPML); segment-specific logits (§9) |
 | `references/demand-elasticities.md` | Prices, promotions, cannibalization, cost pass-through, elasticities |
 | `references/volatility.md` | Financial returns, exchange rates: stylized facts and GARCH family |
 | `references/risk-var.md` | VaR and Expected Shortfall: estimators, backtests, model choice |
@@ -40,7 +41,7 @@ Answer in the user's language; the skill's instructions are in English but the a
 | `references/state-space-regimes.md` | Time-varying coefficients (Kalman), pairs trading, Markov switching, HMM, clustering of regimes |
 | `references/causal-inference.md` | Any causal question without randomization: choosing a design, matching/weighting, double ML, RD, staggered DiD, synthetic control, law-and-economics designs (judge leniency, movers) |
 | `references/survival.md` | Time until an event, with censoring: Kaplan-Meier, Cox, PH checks, competing risks |
-| `references/text-as-data.md` | Turning documents into variables and validating them; using text-based measures in regressions |
+| `references/text-as-data.md` | Turning documents into variables and validating them; LLM coding, design of the hand-coded sample, and valid regressions on LLM-coded variables (§6–7) |
 | `references/data-collection-wrangling.md` | Messy files, large files, merges, scraping, PDFs/OCR, Brazilian administrative and judicial data |
 | `references/data-sources.md` | Fetching data (FRED, World Bank, IMF, OECD, BCB/SGS, IBGE/SIDRA, Ipeadata) |
 | `references/software-equivalents.md` | Translating Stata/EViews procedures into Python |
@@ -61,7 +62,7 @@ Read only the references the case needs. The scripts are starting points: read t
 python3 -c "import statsmodels, linearmodels, arch" 2>/dev/null || \
   pip install --break-system-packages -q statsmodels linearmodels arch
 ```
-For causal designs and text: `scikit-learn` (required by `causal.aipw/dml_plr` and `text_data`); `rdrobust` (recommended for RD inference). Optional depending on the case: `pandas-datareader`/`fredapi`, `wbgapi`, `python-bcb`, `sidrapy`, `yfinance` (data), `ruptures` (multiple breaks), `pydynpd` (dynamic panels), `scikit-learn` (ROC/AUC, cross-validation, K-means, mutual information), `hmmlearn` (hidden Markov models). `pmdarima` is not needed: `forecasting.auto_arima` covers it.
+For causal designs and text: `scikit-learn` (required by `causal.aipw/dml_plr` and `text_data`); `rdrobust` (recommended for RD inference). Optional depending on the case: `pandas-datareader`/`fredapi`, `wbgapi`, `python-bcb`, `sidrapy`, `yfinance` (data), `ruptures` (multiple breaks), `pydynpd` (dynamic panels), `scikit-learn` (ROC/AUC, cross-validation, K-means, mutual information), `hmmlearn` (hidden Markov models), `transformers` + `torch` (local LLM coding with token probabilities). `pmdarima` is not needed: `forecasting.auto_arima` covers it.
 
 ## Workflow
 
@@ -89,6 +90,7 @@ Classify the goal, because it changes the right model:
 | Effect of a policy, law, decision or program (non-random) | Effect of a reform on case duration | `causal-inference.md` |
 | Time until an event, with censored spells | Time to decision, tenure, churn, default | `survival.md` |
 | Documents (decisions, contracts, tenders, news) | Outcome of health-litigation decisions | `text-as-data.md` |
+| Binary y with segments that behave differently | Churn drivers by customer type | `limited-dependent.md` §9 |
 | Raw files, web pages, PDFs | TSE CSVs, court websites | `data-collection-wrangling.md` |
 | Returns, volatility | Daily stock index | `volatility.md` |
 | Market risk | VaR/ES of a position or portfolio | `risk-var.md` |
@@ -196,6 +198,7 @@ Interpretation rules:
 - **Which interval**: a forecast for one unit uses the prediction interval, an average uses the CI of the mean (`specification.prediction_intervals`); from a log-y model, report the smearing-corrected mean in levels, not exp(ŷ).
 - **Lags**: report the long-run effect (Σβ, or Σβ/(1−Σφ) with lags of y) with its delta-method SE (`specification.long_run_effect`), not the individual lag coefficients.
 - **No look-ahead**: anything used to forecast, signal or risk-manage at t is computed with data up to t (lagged regressors, training-only scalers and fits, filtered not smoothed probabilities, positions applied to the next period's return).
+- **LLM-coded variables are measurements with error**: never put them in a regression as if they were the truth. Hand-code a random sample drawn with known probabilities and estimate with `text_data.dsl_regression`; report the naive and corrected estimates side by side (`text-as-data.md` §6–7).
 - **No invented numbers**: every coefficient, statistic or data point comes from a computation run in the session or a cited source. If data are missing, say so.
 
 Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows={"Year FE": ["YES", "YES"]})` produces the side-by-side table (coefficients, SEs in parentheses, stars, N, R², FE rows; `exponentiate=True` for odds/hazard ratios) and `export_table` writes Markdown, Excel or LaTeX. Rescale regressors whose coefficients print as 1e-05 (`reporting.rescale_hint`), and mark a fixed effect YES only where it is in that column's model.
