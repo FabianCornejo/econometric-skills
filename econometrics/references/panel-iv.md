@@ -38,6 +38,9 @@ iv.wu_hausman(); iv.durbin()  # endogeneity (H0: regressor exogenous)
 iv.sargan; iv.basmann        # overidentification (homoskedasticity)
 gmm = IVGMM.from_formula(f, data=df).fit(); gmm.j_stat           # Hansen J (robust)
 liml = IVLIML.from_formula(f, data=df).fit(cov_type="robust")    # preferable with weak instruments
+# debiased=True: n−k small-sample correction and t/F instead of z/χ² (= Stata's `small` option and
+# the textbook formulas). The default divides by n (= Stata's default). Use it when replicating a
+# published table; with large N the difference is negligible.
 ```
 
 Costs of IV: less efficient than OLS (larger variance); biased in finite samples toward OLS; its small-sample distribution can differ a lot from the asymptotic one.

@@ -65,14 +65,17 @@ logit.get_margeff(at="overall", dummy=True)
 
 Use when y is continuous and positive but piles up at zero (or at a ceiling): hours worked, spending on an item, volume purchased.
 
-y* = xβ + ε, ε ~ N(0, σ²); y = max(0, y*).
+y* = xβ + ε, ε ~ N(0, σ²); y = max(0, y*). With a ceiling (top-coded income, capacity limits, scores capped at 100) or both: y = min(max(a, y*), b).
 
 - OLS on y > 0 only, or on all data, is biased and inconsistent.
-- statsmodels has no built-in Tobit: `scripts/diagnostics.py` has `tobit(y, X, lower_limit=0)` (ML with the censored likelihood).
-- Three marginal effects; pick by the question:
-  - on the latent variable: β_j;
-  - on E(y\|x) (unconditional): Φ(xβ/σ)·β_j — the most used in business;
-  - on E(y\|y>0, x): β_j·[1 − λ(c)(c + λ(c))], with c = xβ/σ and λ(c) = φ(c)/Φ(c) (inverse Mills ratio).
+- statsmodels has no built-in Tobit: `scripts/diagnostics.py` has `tobit(y, X, lower_limit=0, upper_limit=None)` (ML with the censored likelihood). `lower_limit=None, upper_limit=c` handles top-coding; give both for two limits. It reproduces Wooldridge Example 17.2 exactly (`tests/test_textbook_replication.py`).
+- Effects — pick by the question; `res["marginal_effects"]` has the three averages with delta-method SEs:
+  - on the latent variable: β_j (only meaningful if y* itself is of interest, e.g. desired hours);
+  - on E(y\|x) (unconditional, column `E[y|x]`): Φ(xβ/σ)·β_j — the total effect on observed y, the most used in business;
+  - on E(y\|y>0, x) (intensive margin, `E[y|uncensored,x]`): β_j·[1 − λ(c)(c + λ(c))], with c = xβ/σ and λ(c) = φ(c)/Φ(c) (inverse Mills ratio) — "how much more, among those who already buy";
+  - on P(y>0\|x) (extensive margin, `P(uncensored|x)`): φ(c)·β_j/σ — "how much more likely to buy at all".
+  - McDonald-Moffitt: for each observation, the unconditional effect = P(y>0\|x)·(intensive effect) + E(y\|y>0,x)·(extensive effect). It holds observation by observation, so decompose before averaging (the product of the averages does not add up). Reporting both margins shows *where* the effect comes from.
+  - Effects are averaged over the sample (AME); for a dummy regressor they approximate the discrete change.
 - Tobit assumes **the same process** decides whether to buy and how much. If they are distinct decisions (very common), use a two-part model (section 6). It is also sensitive to heteroskedasticity and non-normality.
 
 ## 6. Sample selection (Heckman) and two-part models

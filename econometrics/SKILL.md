@@ -15,7 +15,7 @@ Answer in the user's language; the skill's instructions are in English but the a
 
 | File | When to read |
 |---|---|
-| `scripts/diagnostics.py` | Whenever you estimate a model: test batteries with plain-language conclusions (OLS, influence, Chow, stationarity with ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Tobit, Diebold-Mariano) |
+| `scripts/diagnostics.py` | Whenever you estimate a model: test batteries with plain-language conclusions (OLS, influence, Chow, stationarity with ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Tobit with lower/upper limits and three marginal effects, Diebold-Mariano) |
 | `scripts/forecasting.py` | Forecasts: auto-ARIMA (statsmodels only), ARIMAX with lagged regressors, VAR forecasts, walk-forward evaluation, naive/seasonal/historical-mean benchmarks, DM and Pesaran-Timmermann tests |
 | `scripts/backtest.py` | Turning a forecast or signal into positions: one-bar-lag backtest with costs, performance table, walk-forward splits, time-series momentum, Sharpe bootstrap CI |
 | `scripts/risk.py` | VaR/ES (historical, normal/t, EWMA, filtered historical simulation, GARCH) and Kupiec/Christoffersen/Basel backtests |
@@ -121,7 +121,7 @@ Robust errors by default: heteroskedasticity and autocorrelation do not bias coe
 ### 5. Diagnose
 
 ```bash
-python3 scripts/diagnostics.py ols data.csv --y log_sales --x log_price,log_income [--hac 6]
+python3 scripts/diagnostics.py ols data.csv --y log_sales --x log_price,log_income [--hac 6 | --ts]
 python3 scripts/diagnostics.py influence data.csv --y log_sales --x log_price,log_income
 python3 scripts/diagnostics.py stationarity data.csv --cols policy_rate,cpi,log_sales
 python3 scripts/diagnostics.py cointegration data.csv --cols log_p,log_fx --lags 2
@@ -144,7 +144,8 @@ Order (heteroskedasticity and autocorrelation are often symptoms of a wrong spec
 |---|---|---|
 | Functional form | Ramsey RESET | Logs, quadratics, interactions; re-estimate before moving on |
 | Homoskedasticity | Breusch-Pagan, White (full or with ŷ and ŷ²) | HC3; WLS/FGLS if the form is known |
-| No autocorrelation | Breusch-Godfrey, Durbin-Watson | HAC; model the dynamics (lags) |
+| No autocorrelation (time series only; row order is arbitrary in a cross-section) | Breusch-Godfrey, Durbin-Watson (`time_series=True`) | HAC; model the dynamics (lags) |
+| No ARCH (time series) | Engle ARCH-LM on residuals | HC/HAC still valid; GARCH if intervals or risk matter (`volatility.md`) |
 | Normality | Jarque-Bera | Only matters in small samples |
 | Multicollinearity | VIF, condition number | Combine/drop variables, or accept it if it only affects controls |
 | Influence | Leverage, DFBETA, max\|h·ẽ\| | Check for data errors; report with and without |
@@ -179,7 +180,8 @@ Structure:
 
 Interpretation rules:
 - **By functional form** (table in `ols-regression.md`): log-log → elasticity; log-lin → 100·β% (exact: 100·(e^β − 1)); lin-log → β/100 per 1%; quadratic → effect β₁ + 2β₂x.
-- **In nonlinear models** (logit, probit, tobit), report average marginal effects, not raw coefficients.
+- **In nonlinear models** (logit, probit, tobit), report average marginal effects, not raw coefficients. For Tobit, say which margin answers the question: total E(y|x), intensive E(y|y>0,x) or extensive P(y>0|x).
+- **Replicating published or Stata results**: in `linearmodels` IV, `debiased=True` gives the n−k correction of textbooks and Stata's `small` option.
 - **Statistical ≠ economic significance**: report magnitude and interval, not only the p-value.
 - **Association ≠ causation**: causal language only with an identification strategy (IV, DiD, experiment, discontinuity). Granger causality is predictive precedence. Otherwise, "is associated with".
 - **Direction of bias**: when identification is imperfect, say which way the bias probably goes.
