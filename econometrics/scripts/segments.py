@@ -21,6 +21,10 @@ leaf_model_stability(df, y, x)     refit over several seeds: which variables def
                                    often the leaf model beats the pooled logit
 predict_leaf_model(model, df)      predicted probabilities for new rows
 top_decile_lift(y, p)              share of positives in the top 10% of scores / overall share
+calibration(y, p)                  Brier score, calibration slope and mean bias, and a table by decile
+
+Holdout: random and stratified by default; with time_col the holdout is the most recent period,
+which is the honest test when the outcome process drifts (churn, default, fraud).
 
 The tree splits on node purity (CART), not on where the logit coefficients change. If the
 heterogeneity is a change in slopes with little change in the churn rate, the tree can miss it:
@@ -31,6 +35,7 @@ instability and is the principled alternative.
 """
 from __future__ import annotations
 
+import re
 import warnings
 
 import numpy as np
@@ -44,6 +49,65 @@ def top_decile_lift(y, p, frac: float = 0.10) -> float:
     top = np.argsort(-p, kind="stable")[:k]
     base = y.mean()
     return float(y[top].mean() / base) if base > 0 else np.nan
+
+
+def calibration(y, p, bins: int = 10) -> dict:
+    """Calibration of predicted probabilities on a holdout.
+
+    brier       mean squared error of the probabilities (lower is better; the base-rate model scores
+                ybar(1 - ybar))
+    slope       coefficient of a logit of y on logit(p): 1 = well calibrated, < 1 = predictions too
+                extreme (overfitting), > 1 = too timid
+    mean_bias   mean(p) - mean(y): calibration-in-the-large; drifts away from 0 when the base rate
+                changes between training and holdout periods
+    table       by quantile bin of p: n, mean predicted probability, observed rate
+    """
+    import statsmodels.api as sm
+    y = np.asarray(y, float); p = np.clip(np.asarray(p, float), 1e-6, 1 - 1e-6)
+    lp = np.log(p / (1 - p))
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            slope = float(sm.Logit(y, sm.add_constant(lp)).fit(disp=False, maxiter=200).params[1])
+    except Exception:
+        slope = np.nan
+    q = pd.qcut(pd.Series(p).rank(method="first"), min(bins, len(p)), labels=False)
+    table = pd.DataFrame({"bin": q, "p": p, "y": y}).groupby("bin").agg(
+        n=("y", "size"), mean_predicted=("p", "mean"), observed_rate=("y", "mean"))
+    return {"brier": float(np.mean((p - y) ** 2)), "slope": slope, "mean_bias": float(p.mean() - y.mean()),
+            "table": table}
+
+
+def _safe(name) -> str:
+    return re.sub(r"\W+", "_", str(name)).strip("_") or "level"
+
+
+def _expand_categorical(df, x, segment_by):
+    """Turn non-numeric segment_by columns into 0/1 dummies (first level = base) and put them in x.
+    Returns the working frame, the new regressor list and {variable: (levels, dummy names)}."""
+    work, xs, dummies = df, list(x), {}
+    for v in segment_by or []:
+        if v not in df.columns:
+            raise ValueError(f"segment_by variable '{v}' is not a column of df.")
+        col = df[v]
+        if pd.api.types.is_numeric_dtype(col) and not isinstance(col.dtype, pd.CategoricalDtype):
+            if v not in xs:
+                raise ValueError(f"segment_by variable '{v}' is numeric but not among the regressors x.")
+            continue
+        levels = sorted(col.dropna().unique(), key=str)
+        if len(levels) < 2:
+            raise ValueError(f"segment_by variable '{v}' has fewer than two categories.")
+        names = [f"{v}_{_safe(lv)}" for lv in levels[1:]]
+        if len(set(names)) < len(names) or set(names) & set(df.columns):
+            raise ValueError(f"Dummy names for '{v}' clash with each other or with existing columns: {names}.")
+        work = work.assign(**{n: (col == lv).astype(float).where(col.notna()) for lv, n in zip(levels[1:], names)})
+        xs = ([c for c in xs if c != v] + names) if v in xs else xs + names
+        dummies[v] = (levels, names)
+    bad = [c for c in xs if not pd.api.types.is_numeric_dtype(work[c])]
+    if bad:
+        raise ValueError(f"Regressors {bad} are not numeric: encode them beforehand, or pass them in segment_by "
+                         "to have them turned into dummies.")
+    return work, xs, dummies
 
 
 def _rules(tree, names):
@@ -127,7 +191,8 @@ def _leaf_predict(fit, Xl):
 def logit_leaf_model(df: pd.DataFrame, y: str, x: list[str], max_depth: int = 3, min_leaf: int = 100,
                      ccp_alpha: float = 0.0, select: str = "forward_aic", honest: bool = True,
                      test_size: float = 0.3, seed: int = 0, benchmarks: dict[str, str] | None = None,
-                     segment_by: list[str] | None = None, show: bool = True) -> dict:
+                     segment_by: list[str] | None = None, time_col: str | None = None,
+                     show: bool = True) -> dict:
     """Fit a logit leaf model and compare it with a pooled logit and the tree alone on a holdout.
 
     df, y, x     data, binary outcome (0/1) and numeric regressors (encode categories beforehand)
@@ -141,23 +206,43 @@ def logit_leaf_model(df: pd.DataFrame, y: str, x: list[str], max_depth: int = 3,
                  same holdout, e.g. {"interactions": "churn ~ tenure + usage*b2b + price*b2b"}. Formulas
                  may use any column of df; rows where they cannot be evaluated raise an error.
     segment_by   variables the user expects to define the segments (customer type, region...). A
-                 warning is printed and stored if no split of the tree uses any of them.
+                 warning is printed and stored if no split of the tree uses any of them. Non-numeric
+                 columns are turned into dummies (first level = base) and added to x; a split on any
+                 dummy counts as a split on the variable.
+    time_col     if given, the holdout is the most recent test_size share of rows by this column (cut at
+                 a distinct value, so no period is split between training and holdout). Use it when
+                 the model will score future periods. The honest split inside training stays random.
 
     Returns dict: leaves (rule, n, positive rate, kind), coefs (per-leaf coefficients with SEs),
-    ame (per-leaf average marginal effects), performance (holdout AUC and lift), best (name of the
+    ame (per-leaf average marginal effects), performance (holdout AUC, top-decile lift, Brier score,
+    calibration slope, mean bias), calibration (table by decile of each model), best (name of the
     model with the highest holdout AUC), split_variables, warnings, model (for predict_leaf_model),
-    and the test indices.
+    holdout ("random" or "time"), and the test indices.
     """
     from sklearn.metrics import roc_auc_score
     from sklearn.model_selection import train_test_split
     from sklearn.tree import DecisionTreeClassifier
     import statsmodels.api as sm
 
-    d = df[[y] + list(x)].dropna()
+    x_user = list(x)
+    work, x, dummies = _expand_categorical(df, x_user, segment_by)
+    cols = [y] + list(x) + ([time_col] if time_col and time_col not in x else [])
+    d = work[cols].dropna()
     yy = d[y].astype(int).values
     if set(np.unique(yy)) - {0, 1}:
         raise ValueError("y must be binary 0/1.")
-    tr_idx, te_idx = train_test_split(np.arange(len(d)), test_size=test_size, random_state=seed, stratify=yy)
+    if time_col:
+        t = d[time_col].values
+        cut = np.sort(t)[int(np.floor((1 - test_size) * len(t)))]
+        te_mask = t >= cut
+        if te_mask.all() or not te_mask.any():
+            raise ValueError(f"'{time_col}' has too few distinct values to hold out the last {test_size:.0%}.")
+        tr_idx, te_idx = np.where(~te_mask)[0], np.where(te_mask)[0]
+        for name, idx in [("training", tr_idx), ("holdout", te_idx)]:
+            if len(np.unique(yy[idx])) < 2:
+                raise ValueError(f"The {name} period has a single outcome; move the cut with test_size.")
+    else:
+        tr_idx, te_idx = train_test_split(np.arange(len(d)), test_size=test_size, random_state=seed, stratify=yy)
     if honest:
         seg_idx, est_idx = train_test_split(tr_idx, test_size=0.5, random_state=seed + 1, stratify=yy[tr_idx])
     else:
@@ -192,7 +277,7 @@ def logit_leaf_model(df: pd.DataFrame, y: str, x: list[str], max_depth: int = 3,
                 me.index = f["vars"]
                 ames.append(me[["dy/dx", "Std. Err."]].rename(columns={"dy/dx": "ame", "Std. Err.": "se"}).assign(leaf=leaf))
 
-    model = {"tree": tree, "fits": fits, "x": list(x), "rules": rules}
+    model = {"tree": tree, "fits": fits, "x": list(x), "rules": rules, "dummies": dummies}
     p_leaf = predict_leaf_model(model, X.iloc[te_idx])
 
     Xtr = sm.add_constant(X.iloc[tr_idx], has_constant="add")
@@ -208,6 +293,7 @@ def logit_leaf_model(df: pd.DataFrame, y: str, x: list[str], max_depth: int = 3,
     if benchmarks:
         import statsmodels.formula.api as smf
         full = df.loc[d.index]
+        bench_notes = []
         for name, formula in benchmarks.items():
             if name in {m for m, _ in scores}:
                 raise ValueError(f"Benchmark name '{name}' clashes with a built-in model name.")
@@ -219,16 +305,25 @@ def logit_leaf_model(df: pd.DataFrame, y: str, x: list[str], max_depth: int = 3,
                 raise ValueError(f"Benchmark '{name}' cannot be evaluated on every holdout row; "
                                  "drop rows with missing values in its variables first.")
             scores.append((name, pb))
-    perf = pd.DataFrame({m: {"AUC": roc_auc_score(yte, p), "top_decile_lift": top_decile_lift(yte, p)}
-                         for m, p in scores}).T
+            exog = bm.model.exog_names
+            ref = x_user + [v for v in (segment_by or []) if v not in x_user]
+            omitted = [v for v in ref if not any(v in e for e in exog)]
+            if omitted:
+                bench_notes.append(f"Benchmark '{name}' omits {omitted}, which the leaf model uses: the comparison "
+                                   "is not like for like. Add them to the formula.")
+    perf, calib = {}, []
+    for m, p in scores:
+        c = calibration(yte, p)
+        perf[m] = {"AUC": roc_auc_score(yte, p), "top_decile_lift": top_decile_lift(yte, p),
+                   "brier": c["brier"], "calib_slope": c["slope"], "mean_bias": c["mean_bias"]}
+        calib.append(c["table"].assign(model=m))
+    perf = pd.DataFrame(perf).T
     best = perf["AUC"].idxmax()
     split_vars = _split_variables(tree, list(x))
-    notes = []
+    notes = list(bench_notes) if benchmarks else []
     if segment_by:
-        missing = [v for v in segment_by if v not in x]
-        if missing:
-            raise ValueError(f"segment_by variables {missing} are not among the regressors x.")
-        if not set(segment_by) & set(split_vars):
+        group = [n for v in segment_by for n in (dummies[v][1] if v in dummies else [v])]
+        if not set(group) & set(split_vars):
             notes.append(f"No split uses {segment_by}; the tree split on {split_vars or 'nothing'}. The tree "
                          "looks for differences in the outcome rate, not in slopes: if you expect the effects "
                          "to differ by these variables, compare with interactions in `benchmarks`.")
@@ -240,16 +335,19 @@ def logit_leaf_model(df: pd.DataFrame, y: str, x: list[str], max_depth: int = 3,
            "coefs": pd.concat(coefs) if coefs else pd.DataFrame(),
            "ame": pd.concat(ames) if ames else pd.DataFrame(),
            "performance": perf, "best": best, "split_variables": split_vars, "warnings": notes,
-           "model": model, "test_index": d.index[te_idx], "honest": honest}
+           "calibration": pd.concat(calib).reset_index().set_index(["model", "bin"]),
+           "model": model, "test_index": d.index[te_idx], "holdout": "time" if time_col else "random",
+           "honest": honest}
     if show:
         print(f"\nLogit leaf model: {len(rules)} segments, {len(tr_idx)} training rows "
               f"({'honest: tree and logits on separate halves' if honest else 'tree and logits on the same rows'}), "
-              f"{len(te_idx)} holdout rows.")
+              f"{len(te_idx)} holdout rows"
+              f"{f' (most recent: {time_col} >= {d[time_col].values[te_idx].min()})' if time_col else ' (random)'}.")
         print(out["leaves"].to_string())
         if len(out["ame"]):
             print("\nAverage marginal effects by segment (change in probability per unit of x):")
             print(out["ame"].round(4).to_string())
-        print("\nHoldout performance:")
+        print("\nHoldout performance (calib_slope: 1 = calibrated, < 1 = too extreme; mean_bias = mean p - mean y):")
         print(perf.round(3).to_string())
         if not honest:
             print("  Leaf SEs ignore that the segments were chosen on the same data: do not use them for inference.")
@@ -265,7 +363,9 @@ def leaf_model_stability(df: pd.DataFrame, y: str, x: list[str], seeds=range(5),
     """Refit the logit leaf model with several seeds (new train/holdout and honest splits each time).
 
     A segment is worth reporting only if it reappears; a holdout gain is worth claiming only if it
-    is consistent. kwargs go to logit_leaf_model (max_depth, min_leaf, benchmarks, segment_by...).
+    is consistent. kwargs go to logit_leaf_model (max_depth, min_leaf, benchmarks, segment_by,
+    time_col...). With time_col the holdout is the same in every seed; only the honest split and the
+    tree change, so the comparison measures the stability of the segments, not of the holdout.
 
     Returns dict: by_seed (rules, split variables, AUC and lift of each model per seed),
     split_frequency (share of seeds in which each variable defines a split), and summary (mean AUC
@@ -279,14 +379,17 @@ def leaf_model_stability(df: pd.DataFrame, y: str, x: list[str], seeds=range(5),
         for m in r["performance"].index:
             row[f"AUC_{m}"] = r["performance"].loc[m, "AUC"]
             row[f"lift_{m}"] = r["performance"].loc[m, "top_decile_lift"]
+            row[f"brier_{m}"] = r["performance"].loc[m, "brier"]
         rows.append(row)
     by_seed = pd.DataFrame(rows).set_index("seed")
     used = by_seed["split_variables"].str.split(", ")
-    freq = pd.Series({v: float(np.mean([v in u for u in used])) for v in x}, name="share_of_seeds").sort_values(
+    names = list(dict.fromkeys(list(r["model"]["x"]) + [v for u in used for v in u if v]))
+    freq = pd.Series({v: float(np.mean([v in u for u in used])) for v in names}, name="share_of_seeds").sort_values(
         ascending=False)
     models = [c[4:] for c in by_seed.columns if c.startswith("AUC_")]
     summary = pd.DataFrame({m: {"mean_AUC": by_seed[f"AUC_{m}"].mean(),
                                 "mean_top_decile_lift": by_seed[f"lift_{m}"].mean(),
+                                "mean_brier": by_seed[f"brier_{m}"].mean(),
                                 "share_best_AUC": float((by_seed["best"] == m).mean())} for m in models}).T
     if show:
         print(f"\nLogit leaf model over {len(by_seed)} seeds.")
@@ -300,7 +403,19 @@ def leaf_model_stability(df: pd.DataFrame, y: str, x: list[str], seeds=range(5),
 
 
 def predict_leaf_model(model: dict, X: pd.DataFrame) -> np.ndarray:
-    """Probabilities from a fitted logit leaf model for new rows (same columns as in fitting)."""
+    """Probabilities from a fitted logit leaf model for new rows (same columns as in fitting; categorical
+    segment_by columns are turned into the same dummies, and an unseen category is scored as the base)."""
+    dummies = model.get("dummies", {})
+    if dummies:
+        X = X.copy()
+        for v, (levels, names) in dummies.items():
+            if v in X.columns:
+                unseen = set(X[v].dropna().unique()) - set(levels)
+                if unseen:
+                    warnings.warn(f"Categories {sorted(map(str, unseen))} of '{v}' were not seen in fitting; "
+                                  f"they are scored as the base category '{levels[0]}'.")
+                for lv, n in zip(levels[1:], names):
+                    X[n] = (X[v] == lv).astype(float)
     X = X[model["x"]]
     leaf = model["tree"].apply(X)
     p = np.empty(len(X))

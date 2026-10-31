@@ -1,0 +1,47 @@
+{
+  "version": "1.9",
+  "how_to_run": "See evals/README.md. Paste each prompt, alone, in a fresh conversation with the current econometrics skill installed. Grade the answer against every criterion; a case passes only if all 'must' criteria hold and no 'must_not' criterion is triggered.",
+  "cases": [
+    {
+      "id": "llm-coded-outcome-judge-sex",
+      "language": "pt-BR",
+      "prompt": "Tenho 2.000 decisões judiciais classificadas por um LLM como procedente ou improcedente. Quero estimar se o sexo do juiz afeta o resultado. Como faço para que o erro do LLM não vicie a estimativa?",
+      "must": [
+        "Treats the LLM label as a measurement with error and explains why it biases the estimate even with high accuracy (errors that depend on the judge's sex).",
+        "Proposes hand-coding a sample drawn at random with known inclusion probabilities, fixed before coding and stored with the data (dsl_sampling_probs / draw_validation_sample), with a uniform share so no probability is zero.",
+        "Uses text_data.dsl_regression with the LLM label probability as surrogate.",
+        "Shows or instructs reporting the naive and the corrected estimates side by side, and reads design_effect.",
+        "Validates LLM errors separately by judge sex (sensitivity and specificity by group).",
+        "Separates measurement from identification: correcting the label does not make the effect causal; discusses random assignment of cases, court x period fixed effects or balance checks.",
+        "Clusters standard errors by judge, in the text AND in the code, and mentions that the number of judges is the effective sample size."
+      ],
+      "must_not": [
+        "Recommends clustering by judge in the text but writes cluster= by court/chamber (vara) in the code, or vice versa.",
+        "Selects the documents to hand-code by hand or deterministically (e.g. the 300 least certain with probability 1).",
+        "Uses the LLM labels as the dependent variable without correction as the final answer.",
+        "Reuses a seed that also generated or shuffled the data for the validation draw."
+      ]
+    },
+    {
+      "id": "churn-drivers-by-customer-type",
+      "language": "pt-BR",
+      "prompt": "Quero prever churn e entender se os fatores mudam entre tipos de cliente.",
+      "must": [
+        "Distinguishes the prediction goal (out-of-sample performance) from the heterogeneity goal (do effects differ by type).",
+        "Offers the logit leaf model (segments.logit_leaf_model) and compares it with the pooled logit by holdout AUC and top-decile lift.",
+        "Includes a theory-based logit with customer-type interactions as a benchmark on the same holdout, containing every regressor the leaf model uses.",
+        "Passes the customer type in segment_by (a categorical column is accepted) or explains that it must be encoded.",
+        "Uses a time-based holdout (time_col) when the model will score future customers, and the code actually does it.",
+        "Reports calibration (Brier score, calibration slope or mean bias), not only ranking metrics.",
+        "Checks the stability of the segments across seeds (leaf_model_stability) and reports the model with the best holdout performance.",
+        "Reports average marginal effects by customer type rather than raw logit interaction coefficients, and frames them as associations."
+      ],
+      "must_not": [
+        "Recommends a temporal split or a calibration check without code that performs it.",
+        "Uses a benchmark formula that drops a regressor used by the leaf model.",
+        "Claims the leaf segments are findings without a stability check.",
+        "Interprets segment-specific coefficients as causal effects."
+      ]
+    }
+  ]
+}

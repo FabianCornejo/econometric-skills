@@ -2,8 +2,8 @@
 
 text_data.py:  label_probs_from_logits, logtoku_uncertainty, llm_classify (with a fake backend),
                dsl_sampling_probs, draw_validation_sample, dsl_regression
-segments.py:   logit_leaf_model (benchmarks, segment_by), leaf_model_stability, predict_leaf_model,
-               top_decile_lift
+segments.py:   logit_leaf_model (benchmarks, segment_by, time_col), leaf_model_stability, predict_leaf_model,
+               top_decile_lift, calibration
 
 Benchmarks: the closed-form LogTokU formulas (Ma et al., 2025, Eqs. 3-5, 9); equivalence of a
 restricted softmax with a -inf logits mask; exact identities of the design-based estimator
@@ -12,6 +12,8 @@ bias and 95% coverage with differential (x-dependent) coding error, where treati
 truth is biased; a known two-segment data-generating process for the logit leaf model.
 v1.8: identification checks of dsl_regression (incl. the shared-seed trap) and a process whose
 slopes differ by a variable the purity-based tree never splits on, where a theory benchmark wins.
+v1.9: time-based holdout under drift, calibration slope and bias, categorical segment_by, and
+benchmarks that omit a regressor.
 No language model is downloaded: llm_classify runs on a deterministic fake backend.
 
 Run from the repository root:  python3 tests/test_llm_annotation_segments.py
@@ -329,6 +331,62 @@ check("stability: the leaf model is best in every seed for a true two-segment pr
 stab2 = sg.leaf_model_stability(ch, "churn", xs, seeds=range(3), max_depth=2, min_leaf=150, benchmarks=bm, show=False)
 check("stability: the slope-heterogeneity variable is never chosen by the purity-based tree",
       stab2["split_frequency"]["b2b"] == 0.0 and stab2["summary"].loc["interactions", "share_best_AUC"] == 1.0)
+
+# ---------------------------------------------------------------------------------------------
+# v1.9: time-based holdout, calibration, categorical segment_by, like-for-like benchmarks
+# ---------------------------------------------------------------------------------------------
+r = np.random.default_rng(3); n = 8000
+month = r.integers(0, 24, n); tipo = r.choice(["PF", "PJ_pequena", "PJ_grande"], n, p=[0.6, 0.25, 0.15])
+use = r.normal(size=n); comp = r.poisson(1, n); price = r.binomial(1, 0.3, n); ten = r.exponential(24, n)
+slope = np.select([tipo == "PF", tipo == "PJ_pequena"], [-0.9, 0.2], 0.7)
+eta = -1.6 - 0.02 * np.minimum(ten, 60) + slope * use + 0.35 * comp + 1.0 * price + 0.04 * month   # churn drifts up
+cd = pd.DataFrame(dict(churn=r.binomial(1, 1 / (1 + np.exp(-eta))), month=month, tipo=tipo, usage=use,
+                       complaints=comp, price_increase=price, tenure=ten))
+xc = ["tenure", "usage", "complaints", "price_increase"]
+rt = sg.logit_leaf_model(cd, "churn", xc, max_depth=2, min_leaf=150, segment_by=["tipo"], time_col="month",
+                         benchmarks={"fair": "churn ~ tenure + usage*C(tipo) + complaints + price_increase",
+                                     "unfair": "churn ~ tenure + usage*C(tipo) + price_increase"}, show=False)
+te = rt["test_index"]; tr = cd.index.difference(te)
+check("time_col: every holdout row is later than every training row",
+      rt["holdout"] == "time" and cd.loc[te, "month"].min() > cd.loc[tr, "month"].max(),
+      f"train <= {cd.loc[tr, 'month'].max()}, holdout >= {cd.loc[te, 'month'].min()}")
+check("time_col: holdout share close to test_size", abs(len(te) / n - 0.3) < 0.06, f"{len(te) / n:.2f}")
+check("drift shows up as negative mean bias on the recent holdout",
+      (rt["performance"]["mean_bias"] < -0.03).all(), rt["performance"]["mean_bias"].round(3).tolist())
+check("performance reports Brier score and calibration slope",
+      {"brier", "calib_slope", "mean_bias"} <= set(rt["performance"].columns)
+      and rt["calibration"].index.get_level_values(0).nunique() == len(rt["performance"]))
+check("categorical segment_by becomes dummies (first level = base) in the regressors",
+      {"tipo_PJ_grande", "tipo_PJ_pequena"} <= set(rt["model"]["x"]) and "tipo" not in rt["model"]["x"])
+check("benchmark that omits a regressor of the leaf model is flagged; a fair one is not",
+      any("'unfair' omits ['complaints']" in w for w in rt["warnings"])
+      and not any("'fair' omits" in w for w in rt["warnings"]))
+with warnings.catch_warnings(record=True) as wl:
+    warnings.simplefilter("always")
+    pn = sg.predict_leaf_model(rt["model"], cd.head(3).assign(tipo=["PF", "PJ_grande", "Gov"]))
+check("predict_leaf_model rebuilds dummies and warns about an unseen category",
+      np.all((pn > 0) & (pn < 1)) and any("not seen in fitting" in str(w.message) for w in wl))
+check("non-numeric regressor outside segment_by gives a clear error",
+      raises(lambda: sg.logit_leaf_model(cd, "churn", xc + ["tipo"], show=False)))
+
+# a calibrated, correctly specified model has calibration slope near 1 and no bias (random holdout)
+r = np.random.default_rng(4); n = 20000
+zz = r.normal(size=(n, 2)); yy_ = r.binomial(1, 1 / (1 + np.exp(-(-0.5 + zz @ [1.0, -0.7]))))
+cal = sg.calibration(yy_, 1 / (1 + np.exp(-(-0.5 + zz @ [1.0, -0.7]))))
+check("calibration of the true probabilities: slope ~ 1, bias ~ 0",
+      abs(cal["slope"] - 1) < 0.08 and abs(cal["mean_bias"]) < 0.01, f"slope {cal['slope']:.3f}")
+cal2 = sg.calibration(yy_, 1 / (1 + np.exp(-2 * (-0.5 + zz @ [1.0, -0.7]))))
+check("overconfident probabilities (logit doubled): slope ~ 0.5", abs(cal2["slope"] - 0.5) < 0.06,
+      f"slope {cal2['slope']:.3f}")
+
+# categorical segment_by when the tree does split on it (rates differ by group)
+r = np.random.default_rng(5); n = 6000
+grp = r.choice(["a", "b"], n); u = r.normal(size=n)
+yg = r.binomial(1, 1 / (1 + np.exp(-(np.where(grp == "b", 1.5, -1.5) + 0.5 * u))))
+rg = sg.logit_leaf_model(pd.DataFrame(dict(y=yg, grp=grp, u=u)), "y", ["u"], max_depth=1, min_leaf=200,
+                         segment_by=["grp"], show=False)
+check("a split on the dummy counts as a split on the categorical variable",
+      rg["split_variables"] == ["grp_b"] and not any("No split uses" in w for w in rg["warnings"]))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

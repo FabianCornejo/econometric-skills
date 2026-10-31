@@ -50,6 +50,12 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 - **Logit leaf model:** `benchmarks` scores theory-based logits (e.g. interactions with customer type) on the same holdout, `res["best"]` names the model to report, `segment_by` warns when the tree never splits on the groups the user asked about (CART splits on outcome rates, not slopes), and `leaf_model_stability` reports split-variable frequency and model ranking across seeds.
 - **Validated** in `tests/test_llm_annotation_segments.py` (55 checks), including a churn process whose slopes differ by customer type: the tree never splits on it and the interaction benchmark wins in every seed.
 
+**Temporal holdout, calibration and categorical segments (v1.9):**
+- **Logit leaf model:** `time_col` makes the holdout the most recent period (cut at a distinct value, no period split), so drift shows up instead of being averaged away; `performance` adds the Brier score, calibration slope and mean bias, with a calibration table by decile per model (`segments.calibration` is also available on its own); `segment_by` accepts text or categorical columns (dummies created, rebuilt on prediction, unseen categories flagged); benchmarks that omit a regressor of the leaf model are flagged as not like for like.
+- **Instructions:** cluster at the level where the regressor of interest varies (the judge for a judge's characteristic) in both the text and the code; never recommend a step without code that performs it.
+- **Evals** (`evals/`): blind-test prompts with objective pass criteria, run in a fresh conversation before each release.
+- **Validated** in `tests/test_llm_annotation_segments.py` (66 checks): holdout strictly later than training, drift detected as negative mean bias, calibration slope 0.99 for true probabilities and 0.50 for doubled logits, dummy splits recognized.
+
 Every rolling estimate uses only data available at the time. Look-ahead traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, filtered Kalman residuals, signal/return misalignment) are avoided in code and documented in the references.
 
 The skill's instructions are in English; Claude answers in the user's language.
@@ -69,7 +75,7 @@ econometrics/
 │   ├── causal.py                    matching/IPW/AIPW, double ML, RD, event study, CS-DiD + timing checks, synthetic control
 │   ├── survival.py                  Kaplan-Meier, Cox, PH test
 │   ├── text_data.py                 regex, TF-IDF, topics, classifiers, validation, LLM coding, DSL regression
-│   ├── segments.py                  logit leaf model, theory benchmarks, stability across seeds
+│   ├── segments.py                  logit leaf model, theory benchmarks, temporal holdout, calibration, stability
 │   ├── data_prep.py                 reading, auditing, merging, PDFs, scraping
 │   └── reporting.py                 publication-style regression tables
 └── references/
