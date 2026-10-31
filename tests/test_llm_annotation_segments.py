@@ -2,13 +2,16 @@
 
 text_data.py:  label_probs_from_logits, logtoku_uncertainty, llm_classify (with a fake backend),
                dsl_sampling_probs, draw_validation_sample, dsl_regression
-segments.py:   logit_leaf_model, predict_leaf_model, top_decile_lift
+segments.py:   logit_leaf_model (benchmarks, segment_by), leaf_model_stability, predict_leaf_model,
+               top_decile_lift
 
 Benchmarks: the closed-form LogTokU formulas (Ma et al., 2025, Eqs. 3-5, 9); equivalence of a
 restricted softmax with a -inf logits mask; exact identities of the design-based estimator
 (all documents hand-coded -> OLS on the truth; perfect surrogate -> full-sample OLS); Monte Carlo
 bias and 95% coverage with differential (x-dependent) coding error, where treating LLM codes as
 truth is biased; a known two-segment data-generating process for the logit leaf model.
+v1.8: identification checks of dsl_regression (incl. the shared-seed trap) and a process whose
+slopes differ by a variable the purity-based tree never splits on, where a theory benchmark wins.
 No language model is downloaded: llm_classify runs on a deterministic fake backend.
 
 Run from the repository root:  python3 tests/test_llm_annotation_segments.py
@@ -239,6 +242,93 @@ const = sg.logit_leaf_model(pd.DataFrame(dict(y=yc, z1=z1, z2=z2)), "y", ["z1", 
                             honest=False, select="none", show=False)
 check("a leaf with a single outcome falls back to a constant probability",
       "constant" in const["leaves"]["kind"].values, const["leaves"]["kind"].tolist())
+
+# ---------------------------------------------------------------------------------------------
+# v1.8: identification checks in dsl_regression
+# ---------------------------------------------------------------------------------------------
+r = np.random.default_rng(11); n = 1500
+g = r.binomial(1, 0.4, n); z = r.normal(size=n)
+yd = r.binomial(1, 1 / (1 + np.exp(-(0.5 * g + 0.3 * z))))
+dd = pd.DataFrame(dict(g=g, z=z, p_hat=np.clip(yd * 0.8 + 0.1 + r.normal(0, 0.1, n), 0.01, 0.99)))
+dd["pi"] = 0.15
+lab = (r.random(n) < 0.15) & (g == 0)                      # a draw that never reaches g = 1
+dd["y_true"] = np.where(lab, yd, np.nan)
+msg = ""
+try:
+    td.dsl_regression(dd, "y", ["g", "z"], lab, "pi", coded={"y": ("y_true", "p_hat")}, model="logit", show=False)
+except ValueError as e:
+    msg = str(e)
+check("dsl_regression names the regressor that does not vary among hand-coded documents",
+      "'g'" in msg and "seed" in msg, msg[:70])
+
+# the trap that motivated the check: one seed used both to generate the data and to draw the sample
+rs = np.random.default_rng(2026); gs = rs.binomial(1, 0.4, n)
+lab_s = td.draw_validation_sample(np.full(n, 0.15), seed=2026)
+check("a draw sharing the data seed is caught (the check fires on the shared-seed trap)",
+      gs[lab_s].max() == 0 and raises(lambda: td.dsl_regression(
+          pd.DataFrame(dict(g=gs, z=z, p_hat=dd.p_hat, pi=0.15, y_true=np.where(lab_s, yd, np.nan))),
+          "y", ["g", "z"], lab_s, "pi", coded={"y": ("y_true", "p_hat")}, model="logit", show=False)))
+
+lab2 = r.random(n) < 0.15
+dd["y_const"] = np.where(lab2, 1.0, np.nan)
+check("logit DSL refuses a hand-coded outcome with a single value",
+      raises(lambda: td.dsl_regression(dd, "y", ["g", "z"], lab2, "pi", coded={"y": ("y_const", "p_hat")},
+                                       model="logit", show=False)))
+dd["zz"] = 2 * dd["z"]
+check("collinear regressors among hand-coded documents are reported",
+      raises(lambda: td.dsl_regression(dd.assign(y_true=np.where(lab2, yd, np.nan)), "y", ["z", "zz"], lab2, "pi",
+                                       coded={"y": ("y_true", "p_hat")}, model="logit", show=False)))
+
+# separated hand-coded sample: labeled-only benchmark fails, DSL is still reported
+lab3 = np.zeros(n, bool); lab3[:60] = True
+ysep = np.where(dd.z > 0, 1, 0)
+dsep = dd.assign(y_true=np.where(lab3, ysep, np.nan), p_hat=np.clip(0.5 + 0.3 * np.tanh(dd.z), 0.01, 0.99))
+with warnings.catch_warnings(record=True) as wlist:
+    warnings.simplefilter("always")
+    try:
+        rsep = td.dsl_regression(dsep, "y", ["z"], lab3, np.full(n, 60 / n), coded={"y": ("y_true", "p_hat")},
+                                 model="logit", show=False)
+        sep_ok = (np.all(np.isfinite(rsep["table"]["coef"])) and rsep["design_effect"].isna().all()
+                  and any("labeled-only benchmark" in str(w.message) for w in wlist))
+    except np.linalg.LinAlgError:
+        sep_ok = False
+check("separated hand-coded sample: DSL reported, design_effect NaN with a warning (not a spurious ~0)", sep_ok)
+
+# ---------------------------------------------------------------------------------------------
+# v1.8: benchmarks, segment_by and stability for the logit leaf model
+# ---------------------------------------------------------------------------------------------
+r = np.random.default_rng(7); n = 6000
+ten = r.exponential(24, n); use = r.normal(size=n); comp = r.poisson(1, n)
+price = r.binomial(1, 0.3, n); b2b = r.binomial(1, 0.35, n)
+eta = (-1.8 + 0.9 * (ten < 12) - 0.03 * np.minimum(ten, 60) + np.where(b2b == 1, 0.6, -0.8) * use
+       + 0.35 * comp + np.where(b2b == 1, 0.2, 1.4) * price)       # slopes, not rates, differ by b2b
+ch = pd.DataFrame(dict(churn=r.binomial(1, 1 / (1 + np.exp(-eta))), tenure=ten, usage=use, complaints=comp,
+                       price_increase=price, b2b=b2b))
+xs = ["tenure", "usage", "complaints", "price_increase", "b2b"]
+bm = {"interactions": "churn ~ tenure + usage*b2b + complaints + price_increase*b2b"}
+rl = sg.logit_leaf_model(ch, "churn", xs, max_depth=2, min_leaf=150, benchmarks=bm, segment_by=["b2b"], show=False)
+check("benchmark formula is scored on the same holdout", "interactions" in rl["performance"].index)
+check("when the heterogeneity is in slopes, the interaction benchmark wins and is named as best",
+      rl["best"] == "interactions", rl["performance"]["AUC"].round(3).tolist())
+check("segment_by warns when no split uses the variable", any("No split uses ['b2b']" in w for w in rl["warnings"]),
+      rl["split_variables"])
+check("a non-winning leaf model is flagged", any("does not have the best holdout AUC" in w for w in rl["warnings"]))
+check("segment_by outside x is rejected",
+      raises(lambda: sg.logit_leaf_model(ch, "churn", xs, segment_by=["region"], show=False)))
+check("benchmark names cannot overwrite built-in models",
+      raises(lambda: sg.logit_leaf_model(ch, "churn", xs, benchmarks={"tree": "churn ~ usage"}, show=False)))
+
+r2 = sg.logit_leaf_model(seg, "y", ["x1", "x2", "x3"], max_depth=1, min_leaf=200, segment_by=["x1"], show=False)
+check("no segment_by warning when the tree splits on it", not any("No split uses" in w for w in r2["warnings"])
+      and r2["split_variables"] == ["x1"])
+stab = sg.leaf_model_stability(seg, "y", ["x1", "x2", "x3"], seeds=range(4), max_depth=1, min_leaf=200, show=False)
+check("stability: the true segment variable splits in every seed", stab["split_frequency"]["x1"] == 1.0,
+      stab["split_frequency"].to_dict())
+check("stability: the leaf model is best in every seed for a true two-segment process",
+      stab["summary"].loc["logit_leaf", "share_best_AUC"] == 1.0)
+stab2 = sg.leaf_model_stability(ch, "churn", xs, seeds=range(3), max_depth=2, min_leaf=150, benchmarks=bm, show=False)
+check("stability: the slope-heterogeneity variable is never chosen by the purity-based tree",
+      stab2["split_frequency"]["b2b"] == 0.0 and stab2["summary"].loc["interactions", "share_best_AUC"] == 1.0)
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

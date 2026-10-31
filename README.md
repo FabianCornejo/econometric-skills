@@ -45,6 +45,11 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 - **Logit leaf model** (`segments.py`; De Caigny, Coussement & De Bock 2018): a shallow tree defines segments and a logit is fit in each, with honest sample splitting for valid leaf SEs, AMEs by segment, and holdout AUC and top-decile lift against a pooled logit and the tree.
 - **Validated** in `tests/test_llm_annotation_segments.py` (40 checks: closed-form LogTokU, exact identities of the estimator, Monte Carlo bias and coverage, known two-segment process); `hf_backend` was also run end to end on Qwen2.5-0.5B-Instruct.
 
+**Robustness of the v1.7 tools (v1.8):**
+- **`dsl_regression`:** checks that every regressor varies and the design has full rank among the hand-coded documents (and, for a logit, that both outcomes appear), naming the cause instead of failing with a singular matrix; the classic trigger is a draw seed shared with the data-generating code. A separated hand-coded logit no longer yields a spurious design effect near zero: the benchmark is reported as NaN with a warning and the DSL estimate is kept.
+- **Logit leaf model:** `benchmarks` scores theory-based logits (e.g. interactions with customer type) on the same holdout, `res["best"]` names the model to report, `segment_by` warns when the tree never splits on the groups the user asked about (CART splits on outcome rates, not slopes), and `leaf_model_stability` reports split-variable frequency and model ranking across seeds.
+- **Validated** in `tests/test_llm_annotation_segments.py` (55 checks), including a churn process whose slopes differ by customer type: the tree never splits on it and the interaction benchmark wins in every seed.
+
 Every rolling estimate uses only data available at the time. Look-ahead traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, filtered Kalman residuals, signal/return misalignment) are avoided in code and documented in the references.
 
 The skill's instructions are in English; Claude answers in the user's language.
@@ -64,7 +69,7 @@ econometrics/
 │   ├── causal.py                    matching/IPW/AIPW, double ML, RD, event study, CS-DiD + timing checks, synthetic control
 │   ├── survival.py                  Kaplan-Meier, Cox, PH test
 │   ├── text_data.py                 regex, TF-IDF, topics, classifiers, validation, LLM coding, DSL regression
-│   ├── segments.py                  logit leaf model (tree segments + leaf logits)
+│   ├── segments.py                  logit leaf model, theory benchmarks, stability across seeds
 │   ├── data_prep.py                 reading, auditing, merging, PDFs, scraping
 │   └── reporting.py                 publication-style regression tables
 └── references/
