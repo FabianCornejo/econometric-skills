@@ -18,6 +18,7 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Duan (1983), "Smearing estimate: a nonparametric retransformation method", *JASA* — predicting y from a model for log y.
 - Oster (2019), "Unobservable selection and coefficient stability", *Journal of Business & Economic Statistics*; Cinelli and Hazlett (2020), "Making sense of sensitivity: extending omitted variable bias", *Journal of the Royal Statistical Society B*.
 - Wooldridge, *Econometric Analysis of Cross Section and Panel Data*.
+- De Caigny, Coussement and De Bock (2018), "A new hybrid classification algorithm for customer churn prediction based on logistic regression and decision trees", *European Journal of Operational Research* 269(2): 760–772 — the logit leaf model; R package `LLM`. Zeileis, Hothorn and Hornik (2008), "Model-based recursive partitioning", *Journal of Computational and Graphical Statistics* (`partykit::glmtree`); Athey and Imbens (2016), "Recursive partitioning for heterogeneous causal effects", *PNAS* — honest sample splitting.
 - Croissant, *Microeconometrics with R* (2024); Adams, *Learning Microeconometrics with R* (2020).
 - Lee, McCrary, Moreira and Porter (2022), "Valid t-ratio inference for IV", *American Economic Review* — the F > 104.7 criterion.
 - Goodman-Bacon (2021); Callaway and Sant'Anna (2021); Sun and Abraham (2021) — DiD with staggered adoption.
@@ -40,7 +41,10 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Yin, *Case Study Research* — qualitative designs that complement quantitative ones.
 - Grimmer, Roberts and Stewart, *Text as Data* (2022); Gentzkow, Kelly and Taddy (2019), "Text as data", *Journal of Economic Literature*.
 - Ash and Hansen (2023), "Text algorithms in economics", *Annual Review of Economics*.
-- Egami, Hinck, Stewart and Wei (2023) — valid inference with LLM/ML-coded variables (design-based supervised learning).
+- Egami, Hinck, Stewart and Wei (2023), "Using imperfect surrogates for downstream inference: design-based supervised learning for social science applications of large language models", *NeurIPS* — valid inference with LLM/ML-coded variables; R package `dsl`.
+- Angelopoulos, Bates, Fannjiang, Jordan and Zrnic (2023), "Prediction-powered inference", *Science*; Zrnic and Candès (2024), "Active statistical inference", *ICML* — the same correction with sampling probabilities driven by model uncertainty.
+- Ludwig, Mullainathan and Rambachan (2025), "Large language models: an applied econometric framework" (NBER w33344; arXiv 2412.07031) — when LLM outputs can be used for prediction vs. estimation, and why a validation sample is needed for the latter.
+- Ma, Chen, Wang and Zhang (2025), "Estimating LLM uncertainty with logits" (arXiv 2502.00290) — LogTokU: aleatoric and epistemic uncertainty from top-k logits.
 - Priest and Klein (1984) — selection of disputes for litigation.
 
 ## Survival analysis

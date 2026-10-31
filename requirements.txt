@@ -15,4 +15,5 @@ tabulate>=0.9          # pandas needs it for Markdown export of regression table
 #   pymupdf, easyocr       PDF text and OCR (data_prep.pdf_text)
 #   requests               polite scraping (data_prep)
 #   sentence-transformers  text embeddings (text_data)
+#   transformers, torch    local LLM coding with token probabilities (text_data.hf_backend)
 #   wooldridge             textbook datasets used by the tests and examples

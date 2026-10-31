@@ -39,6 +39,12 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 - **Dependencies:** `requirements.txt` with lower bounds that the whole test suite was actually run on; `requirements-dev.txt` for tests and examples.
 - **Continuous integration:** GitHub Actions runs every test suite and every example on minimum and latest dependency versions, and checks that `dist/econometrics.skill` matches the source.
 
+**LLM coding with valid inference and segmented logit (v1.7):**
+- **LLM coding of documents:** answers constrained to a closed label set with a probability per category (`llm_classify`, any backend that returns logits; `hf_backend` runs a Hugging Face model locally, so personal data stay on the machine), a flag for documents where the model wanted to answer outside the codebook, and token-level aleatoric/epistemic uncertainty (LogTokU, Ma et al. 2025).
+- **Valid regressions on LLM-coded variables:** `dsl_regression` (OLS or logit, coded outcome and/or regressors) combines LLM codes for every document with a hand-coded subsample drawn with known probabilities (design-based supervised learning, Egami et al. 2023), with sandwich or clustered SEs; `dsl_sampling_probs` oversamples uncertain documents without breaking the design. In simulations with group-dependent coding errors, treating LLM codes as truth understates the effect by 13–32%; the corrected estimator is unbiased with nominal coverage.
+- **Logit leaf model** (`segments.py`; De Caigny, Coussement & De Bock 2018): a shallow tree defines segments and a logit is fit in each, with honest sample splitting for valid leaf SEs, AMEs by segment, and holdout AUC and top-decile lift against a pooled logit and the tree.
+- **Validated** in `tests/test_llm_annotation_segments.py` (40 checks: closed-form LogTokU, exact identities of the estimator, Monte Carlo bias and coverage, known two-segment process); `hf_backend` was also run end to end on Qwen2.5-0.5B-Instruct.
+
 Every rolling estimate uses only data available at the time. Look-ahead traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, filtered Kalman residuals, signal/return misalignment) are avoided in code and documented in the references.
 
 The skill's instructions are in English; Claude answers in the user's language.
@@ -57,7 +63,8 @@ econometrics/
 │   ├── regimes.py                   Markov switching, HMM, K-means regimes
 │   ├── causal.py                    matching/IPW/AIPW, double ML, RD, event study, CS-DiD + timing checks, synthetic control
 │   ├── survival.py                  Kaplan-Meier, Cox, PH test
-│   ├── text_data.py                 regex, TF-IDF, topics, clustering, classifiers, validation
+│   ├── text_data.py                 regex, TF-IDF, topics, classifiers, validation, LLM coding, DSL regression
+│   ├── segments.py                  logit leaf model (tree segments + leaf logits)
 │   ├── data_prep.py                 reading, auditing, merging, PDFs, scraping
 │   └── reporting.py                 publication-style regression tables
 └── references/
