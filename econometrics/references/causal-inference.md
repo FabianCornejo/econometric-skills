@@ -50,7 +50,7 @@ Workflow:
    - `ipw(..., estimand="ATE"/"ATT")` — normalized weights; reports effective sample size and the largest weight share. One unit carrying 5%+ of the weight is a red flag.
    - `nn_match(...)` — nearest-neighbour matching on the logit of the score with a 0.2-SD caliper (Austin, 2011); intuitive for non-technical readers; its SE ignores the matching step (use as a check).
 4. Re-run `balance_table` with the weights (or on the matched sample): balance after adjustment is the diagnostic that matters.
-5. **Sensitivity to unobserved confounding**: report how strong a hidden confounder would need to be to explain away the result (Oster, 2019, coefficient stability δ; Cinelli-Hazlett, 2020, robustness value via the `sensemakr` approach). Unconfoundedness cannot be tested; it can only be stress-tested.
+5. **Sensitivity to unobserved confounding**: report how strong a hidden confounder would need to be to explain away the result (Oster, 2019, coefficient stability δ: `specification.oster`; Cinelli-Hazlett, 2020, robustness value: `specification.sensitivity`, with observed covariates as benchmarks). Unconfoundedness cannot be tested; it can only be stress-tested. Details and interpretation in `ols-regression.md` §14.
 
 ## 4. Double/debiased machine learning
 

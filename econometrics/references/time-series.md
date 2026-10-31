@@ -132,7 +132,9 @@ m = smf.ols(f"d_sales ~ d_sales.shift(1) + {terms} + C(month)", data=df)\
        .fit(cov_type="HAC", cov_kwds={"maxlags": 6})
 ```
 
-- Long-run multiplier = Σβ / (1 − Σφ); standard error by the delta method (`m.t_test` on a linear combination, or bootstrap).
+- Long-run multiplier = Σβ / (1 − Σφ); it is a ratio, so its standard error needs the delta method (a `t_test` on Σβ is only right without lags of y). `specification.long_run_effect(m, x_terms=[...], y_lag_terms=[...])` returns effect, SE, CI and p from the model's (HAC) covariance.
+- **Finite distributed lag** (no lags of y): the long-run propensity LRP = Σβ_j is the effect of a permanent change; `long_run_effect(m, ["pe", "pe_1", "pe_2"])` reproduces Wooldridge Ex. 10.4 (.101, se .030). Lags of x are usually collinear, so individual β_j are imprecise while the LRP is well estimated — report the LRP.
+- **Geometric (Koyck) lag**: y_t = α + γx_t + ρy_{t−1} + v_t implies weights γρ^j and LRP = γ/(1−ρ). The transformation makes v_t = u_t − ρu_{t−1} correlated with y_{t−1}, so OLS is inconsistent; instrument y_{t−1} with x_{t−1} (and test for serial correlation). Rational distributed lags (add x_{t−1}) relax the single-ρ shape.
 - Lags by BIC or theory (monetary policy typically takes 6 to 12 months to affect activity).
 - Underestimating p (the AR order) makes estimators inconsistent; overestimating only costs efficiency.
 - **ARIMAX** (`SARIMAX(y, exog=X, order=...)`) when the residual has ARMA structure.

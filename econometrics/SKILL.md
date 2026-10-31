@@ -15,7 +15,8 @@ Answer in the user's language; the skill's instructions are in English but the a
 
 | File | When to read |
 |---|---|
-| `scripts/diagnostics.py` | Whenever you estimate a model: test batteries with plain-language conclusions (OLS, influence, Chow, stationarity with ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Tobit with lower/upper limits and three marginal effects, Diebold-Mariano) |
+| `scripts/diagnostics.py` | Whenever you estimate a model: test batteries with plain-language conclusions (OLS, influence, Chow, stationarity with ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Tobit with lower/upper limits and three marginal effects, Mundlak/CRE, count overdispersion, Diebold-Mariano) |
+| `scripts/specification.py` | Specification and sensitivity: FGLS for heteroskedasticity, CI vs. prediction intervals (with log-y smearing), long-run effects of distributed lags/ADL, standardized coefficients, exact omitted-variable bias, Oster δ, Cinelli-Hazlett robustness value |
 | `scripts/forecasting.py` | Forecasts: auto-ARIMA (statsmodels only), ARIMAX with lagged regressors, VAR forecasts, walk-forward evaluation, naive/seasonal/historical-mean benchmarks, DM and Pesaran-Timmermann tests |
 | `scripts/backtest.py` | Turning a forecast or signal into positions: one-bar-lag backtest with costs, performance table, walk-forward splits, time-series momentum, Sharpe bootstrap CI |
 | `scripts/risk.py` | VaR/ES (historical, normal/t, EWMA, filtered historical simulation, GARCH) and Kupiec/Christoffersen/Basel backtests |
@@ -136,6 +137,8 @@ from dependence import fit_copulas                            # tail dependence 
 from state_space import fit_kalman_regression                 # time-varying beta / hedge ratio
 from regimes import markov_switching                          # regimes with filtered probabilities
 from backtest import run_backtest, performance                # one-bar lag, costs, Sharpe, drawdown
+from specification import fgls_het, prediction_intervals, long_run_effect, oster, sensitivity
+from diagnostics import mundlak_test, count_diagnostics       # FE vs RE (clustered); Poisson variance
 ```
 
 Order (heteroskedasticity and autocorrelation are often symptoms of a wrong specification, so functional form comes first):
@@ -152,6 +155,8 @@ Order (heteroskedasticity and autocorrelation are often symptoms of a wrong spec
 | Stationarity (time series) | ADF + KPSS + DF-GLS | Difference or test for cointegration |
 | Stability | Chow, CUSUM, sup-Wald | Break dummies or subsamples |
 | Exogeneity | Theory + Durbin-Wu-Hausman with an instrument | IV/2SLS, panel FE, quasi-experiment |
+| FE vs. RE (panel) | Mundlak/CRE with clustered Wald (`mundlak_test`); classical Hausman only as a check | FE, or report the CRE model |
+| Poisson variance (counts) | Pearson dispersion, Cameron-Trivedi (`count_diagnostics`) | Robust or quasi-Poisson SEs; NB if count probabilities matter |
 
 **Spurious regression**: trending series (revenue and GDP in levels) almost always yield a high R² and significant t-statistics with no real relationship. Warning sign: R² > Durbin-Watson.
 
@@ -162,6 +167,7 @@ A conclusion is reliable only if it survives reasonable variations. Do at least 
 - subsample (without the pandemic; separate periods);
 - another estimator (OLS vs. IV; FE vs. RE; 2SLS vs. LIML; alternative Cholesky ordering);
 - another variable definition or aggregation level;
+- for causal claims resting on observed controls: sensitivity to unobserved confounders (`specification.oster` and/or `sensitivity`, `ols-regression.md` §14);
 - for forecasting: rolling-origin evaluation against naive, seasonal naive and ETS, with a Diebold-Mariano test;
 - for strategies and risk models: out-of-sample period, realistic costs, number of variants tried, VaR backtests (see `forecasting-backtesting.md` §9 and `risk-var.md` §3).
 
@@ -186,6 +192,8 @@ Interpretation rules:
 - **Association ≠ causation**: causal language only with an identification strategy (IV, DiD, experiment, discontinuity). Granger causality is predictive precedence. Otherwise, "is associated with".
 - **Direction of bias**: when identification is imperfect, say which way the bias probably goes.
 - **Honest precision**: 2–3 significant digits; forecasts always with intervals; elasticities hold for small changes within the observed range.
+- **Which interval**: a forecast for one unit uses the prediction interval, an average uses the CI of the mean (`specification.prediction_intervals`); from a log-y model, report the smearing-corrected mean in levels, not exp(ŷ).
+- **Lags**: report the long-run effect (Σβ, or Σβ/(1−Σφ) with lags of y) with its delta-method SE (`specification.long_run_effect`), not the individual lag coefficients.
 - **No look-ahead**: anything used to forecast, signal or risk-manage at t is computed with data up to t (lagged regressors, training-only scalers and fits, filtered not smoothed probabilities, positions applied to the next period's return).
 - **No invented numbers**: every coefficient, statistic or data point comes from a computation run in the session or a cited source. If data are missing, say so.
 

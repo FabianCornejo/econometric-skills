@@ -12,7 +12,10 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 
 ## Microeconometrics and causal inference
 - Angrist and Pischke, *Mostly Harmless Econometrics* (2008) — IV, LIML, bad controls, difference-in-differences, few clusters.
-- Cameron and Trivedi, *Microeconometrics: Methods and Applications* (2005) and *Microeconometrics Using Stata*.
+- Cameron and Trivedi, *Microeconometrics: Methods and Applications* (2005) and *Microeconometrics Using Stata*; Cameron and Trivedi (1990), "Regression-based tests for overdispersion in the Poisson model", *Journal of Econometrics* — the NB1/NB2 auxiliary-regression tests.
+- Mundlak (1978), "On the pooling of time series and cross section data", *Econometrica*; Wooldridge (2019), "Correlated random effects models with unbalanced panels", *Journal of Econometrics*.
+- Duan (1983), "Smearing estimate: a nonparametric retransformation method", *JASA* — predicting y from a model for log y.
+- Oster (2019), "Unobservable selection and coefficient stability", *Journal of Business & Economic Statistics*; Cinelli and Hazlett (2020), "Making sense of sensitivity: extending omitted variable bias", *Journal of the Royal Statistical Society B*.
 - Wooldridge, *Econometric Analysis of Cross Section and Panel Data*.
 - Croissant, *Microeconometrics with R* (2024); Adams, *Learning Microeconometrics with R* (2020).
 - Lee, McCrary, Moreira and Porter (2022), "Valid t-ratio inference for IV", *American Economic Review* — the F > 104.7 criterion.

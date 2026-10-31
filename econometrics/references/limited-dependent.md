@@ -95,6 +95,8 @@ y* = xβ + ε, ε ~ N(0, σ²); y = max(0, y*). With a ceiling (top-coded income
 | Unordered categories | Multinomial logit | `smf.mnlogit` (beware the independence of irrelevant alternatives assumption) |
 | Time to event | Survival (Kaplan-Meier, Cox, discrete-time hazard) | `scripts/survival.py`; see `survival.md` |
 
+**Counts — check the variance after a Poisson fit**: `diagnostics.count_diagnostics(poisson_res)` reports the Pearson dispersion σ̂² (1 under Poisson; Wooldridge Ex. 17.3 gives 1.52), Cameron-Trivedi tests for NB2 (Var = μ + αμ²) and NB1 (Var = (1+α)μ), and observed vs. Poisson-implied zeros. With overdispersion the Poisson *coefficients* stay consistent if the mean is right (quasi-MLE): keep them and fix the SEs — robust (`cov_type="HC1"`) or quasi-Poisson (× σ̂, returned as `quasi_poisson_se`). Move to negative binomial when predicted count probabilities matter; to hurdle/zero-inflated models when zeros come from a separate decision.
+
 ## 8. Pitfalls
 
 - Interpreting a logit/probit coefficient as a change in probability.
