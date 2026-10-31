@@ -26,7 +26,7 @@ Answer in the user's language; the skill's instructions are in English but the a
 | `scripts/causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD (bandwidth, robustness, density test, fuzzy), TWFE event study, Callaway-Sant'Anna (with anticipation), DiD timing sensitivity and uncertain adoption dates, synthetic control with placebo inference |
 | `scripts/survival.py` | Kaplan-Meier, log-rank, Cox with hazard ratios and clustered SE, proportional-hazards test, person-period expansion |
 | `scripts/text_data.py` | Regex coding with audit snippets, TF-IDF, LDA, text clustering, TF-IDF + logit classifier, validation against hand coding, misclassification correction, similarity to a reference group |
-| `scripts/data_prep.py` | Reading awkward files (encodings, `;` CSVs, XML/HTML ".xls", JSON, large CSVs), audit, safe merges, Brazilian numbers, mojibake, PDF text/OCR, polite scraping |
+| `scripts/data_prep.py` | Reading awkward files (encodings, `;` CSVs, XML/HTML ".xls", JSON, large CSVs), audit, missing-data report (patterns, complete-case N, MCAR check), safe merges, Brazilian numbers, mojibake, PDF text/OCR, polite scraping |
 | `scripts/reporting.py` | Publication-style regression tables (outreg2/esttab style) with FE rows, odds/hazard ratios, export to Markdown/Excel/LaTeX |
 | `references/ols-regression.md` | Every regression: functional forms, dummies, diagnostic order, HC/HAC/GLS, multicollinearity, influence, measurement error |
 | `references/time-series.md` | Data with a time dimension: unit roots, breaks, ARIMA/ETS/ARFIMA, ADL, cointegration/VECM, VAR/SVAR/BVAR, forecast evaluation and combination |
@@ -104,6 +104,7 @@ Classify the goal, because it changes the right model:
 - **Seasonality, holidays, events and breaks** (pandemic, methodology changes, a new menu or product line).
 - **Sample size**: with fewer than ~30 observations per parameter, warn that inference is fragile.
 - **Transformations**: logs for elasticities and variance; differences for non-stationary series.
+- **Missing values**: run `data_prep.missing_report(df, cols, predictors)` before estimating. Dropping incomplete rows is consistent if missingness depends only on the regressors, biased if it depends on y; under MAR in the regressors use multiple imputation (`data-collection-wrangling.md`, "Missing data"). Never mean-impute by default; report N per model.
 - Keep the raw data and do all cleaning in code (documented exclusions).
 
 ### 4. Specify and estimate

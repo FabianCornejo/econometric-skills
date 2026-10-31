@@ -120,7 +120,9 @@ def ols_diagnostics(res, bg_lags: int | None = None, time_series: bool = False,
     rows.append(_row("Breusch-Pagan", "homoskedasticity", lm, p_bp,
                      "Heteroskedasticity: use HC3 (or WLS/FGLS)" if p_bp < ALPHA else "No evidence"))
     try:
-        lm_w, p_w, _, _ = het_white(resid, exog)
+        with warnings.catch_warnings():  # squares of dummies duplicate columns: expected, not a problem
+            warnings.simplefilter("ignore")
+            lm_w, p_w, _, _ = het_white(resid, exog)
         rows.append(_row("White (full)", "homoskedasticity", lm_w, p_w,
                          "Heteroskedasticity" if p_w < ALPHA else "No evidence"))
     except Exception:  # noqa: BLE001  (fails with many regressors/dummies)

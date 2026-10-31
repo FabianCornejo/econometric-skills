@@ -1,5 +1,7 @@
 # econometric-skills
 
+[![tests](https://github.com/FabianCornejo/econometric-skills/actions/workflows/tests.yml/badge.svg)](https://github.com/FabianCornejo/econometric-skills/actions/workflows/tests.yml)
+
 Agent skills for Claude focused on applied econometrics.
 
 ## `econometrics`
@@ -30,6 +32,12 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 - **New module `specification.py`:** FGLS for heteroskedasticity of unknown form; confidence vs. prediction intervals (with Duan smearing for log-y models); long-run effects of distributed lags and ADL models with delta-method SEs; standardized (beta) coefficients; exact omitted-variable-bias decomposition; Oster (2019) coefficient stability; Cinelli-Hazlett (2020) robustness values with covariate benchmarks.
 - **Diagnostics:** Mundlak/correlated-random-effects test (FE vs RE with clustered errors); Poisson overdispersion (Pearson dispersion, Cameron-Trivedi NB1/NB2 tests, excess zeros).
 - **Validated** in `tests/test_specification_tools.py` against Wooldridge Examples 6.1, 6.5–6.6, 8.7, 10.4, 14.4 and 17.3, the Darfur example of Cinelli and Hazlett (2020), and known-truth simulations.
+
+**Packaging, CI and examples (v1.6):**
+- **Worked examples** (`examples/`): five end-to-end analyses on Wooldridge data following the 7-step workflow — returns to education with sensitivity analysis, IV, panel FE/RE/CRE, distributed lags, Tobit and Poisson — as scripts and executed notebooks.
+- **Missing data:** `data_prep.missing_report` (patterns, complete-case N, test of whether observables predict missingness) and guidance on listwise deletion, multiple imputation and what to avoid, verified by simulation.
+- **Dependencies:** `requirements.txt` with lower bounds that the whole test suite was actually run on; `requirements-dev.txt` for tests and examples.
+- **Continuous integration:** GitHub Actions runs every test suite and every example on minimum and latest dependency versions, and checks that `dist/econometrics.skill` matches the source.
 
 Every rolling estimate uses only data available at the time. Look-ahead traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, filtered Kalman residuals, signal/return misalignment) are avoided in code and documented in the references.
 
@@ -78,7 +86,7 @@ tests/                               91 known-truth checks on simulated data
 - **Claude.ai / desktop app:** download [`econometrics.skill`](https://github.com/FabianCornejo/econometric-skills/raw/main/dist/econometrics.skill) (also in the [latest release](../../releases/latest)) and upload it under Settings → Capabilities → Skills (or zip the `econometrics` folder yourself).
 - **Claude Code:** copy the `econometrics` folder into `~/.claude/skills/`.
 
-Python dependencies: `pip install statsmodels linearmodels arch scikit-learn` (optional: `rdrobust`, `hmmlearn`, `yfinance`, `pymupdf`, `sentence-transformers`).
+Python dependencies: `pip install -r requirements.txt` (optional extras are listed in that file; `pip install -r requirements-dev.txt` adds what the tests and examples need).
 
 ### Quick test of the script
 
@@ -90,6 +98,7 @@ python3 tests/test_financial_modules.py
 python3 tests/test_causal_text_survival.py
 python3 tests/test_textbook_replication.py   # needs: pip install wooldridge
 python3 tests/test_specification_tools.py    # needs: pip install wooldridge
+python3 tests/test_missing_data.py
 ```
 
 ## Feedback and contributions

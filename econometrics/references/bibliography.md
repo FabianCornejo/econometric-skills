@@ -14,6 +14,7 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Angrist and Pischke, *Mostly Harmless Econometrics* (2008) — IV, LIML, bad controls, difference-in-differences, few clusters.
 - Cameron and Trivedi, *Microeconometrics: Methods and Applications* (2005) and *Microeconometrics Using Stata*; Cameron and Trivedi (1990), "Regression-based tests for overdispersion in the Poisson model", *Journal of Econometrics* — the NB1/NB2 auxiliary-regression tests.
 - Mundlak (1978), "On the pooling of time series and cross section data", *Econometrica*; Wooldridge (2019), "Correlated random effects models with unbalanced panels", *Journal of Econometrics*.
+- Little and Rubin, *Statistical Analysis with Missing Data* (3rd ed., 2019); van Buuren, *Flexible Imputation of Missing Data* (2nd ed., 2018, free online) — mechanisms, multiple imputation; Jones (1996), "Indicator and stratification methods for missing explanatory variables in multiple linear regression", *JASA*.
 - Duan (1983), "Smearing estimate: a nonparametric retransformation method", *JASA* — predicting y from a model for log y.
 - Oster (2019), "Unobservable selection and coefficient stability", *Journal of Business & Economic Statistics*; Cinelli and Hazlett (2020), "Making sense of sensitivity: extending omitted variable bias", *Journal of the Royal Statistical Society B*.
 - Wooldridge, *Econometric Analysis of Cross Section and Panel Data*.

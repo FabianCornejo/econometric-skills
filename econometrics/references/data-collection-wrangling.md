@@ -40,7 +40,32 @@ m = safe_merge(cases, judges, on="judge_id", how="left", validate="m:1")
 ## 4. Variables
 
 - Dummies: `pd.get_dummies(df, columns=[...], drop_first=True, dtype=int)` for scikit-learn; in statsmodels formulas use `C(var, Treatment('ref'))` and let the formula create them.
-- Missing values: do not drop rows by reflex (`dropna` on all columns can remove most of the sample and select it); look at the pattern first; for regressions, report N and how missingness was handled.
+- Missing values: do not drop rows by reflex (`dropna` on all columns can remove most of the sample and select it); look at the pattern first; for regressions, report N and how missingness was handled. See "Missing data" below.
+
+### Missing data
+
+Start with `data_prep.missing_report(df, cols=[y, *xs], predictors=[...])`: missing share per variable, the complete-case N, the most frequent patterns, and whether observed variables predict missingness.
+
+| Mechanism | Meaning | Testable? |
+|---|---|---|
+| MCAR | Missingness unrelated to anything | Can be rejected (missingness predicted by observables) |
+| MAR | Depends only on observed variables | Not testable against MNAR |
+| MNAR | Depends on the missing value itself (high earners hide income) | No — argue from the data-generating process |
+
+What to do, for a regression of y on x:
+- **Listwise deletion (complete cases)** is consistent whenever missingness depends only on the regressors — even if it is not MCAR — because conditioning on x does not change E(y\|x) (Wooldridge, exogenous sample selection). It is **biased** when missingness depends on y or on the error (e.g. firms that went bankrupt stop reporting). The cost otherwise is only precision. Verified by simulation in `tests/test_missing_data.py`.
+- **Missing y**: imputing the outcome adds nothing to estimation under MAR given x; it matters only for MNAR (Heckman-type selection, `limited-dependent.md` §6).
+- **Missing x, MAR**: **multiple imputation** with chained equations keeps the cases and propagates imputation uncertainty (Rubin's rules). Include y in the imputation model (leaving it out biases coefficients toward zero). Use at least as many imputations as the percentage of incomplete cases (20+).
+  ```python
+  from statsmodels.imputation.mice import MICEData, MICE
+  imp = MICEData(df[["y", "x1", "x2", "x3"]])            # chained equations; numeric columns
+  res = MICE("y ~ x1 + x2 + x3", sm.OLS, imp).fit(n_burnin=10, n_imputations=20)
+  print(res.summary())                                    # combined by Rubin's rules
+  ```
+- **Avoid by default**: mean imputation (shrinks variance, biases slopes and SEs) and the missing-indicator method (fill with 0 and add a dummy), which is biased in observational data (Jones, 1996); the latter is acceptable only for pre-treatment covariates in a randomized experiment.
+- **Time series**: interpolate only for plots. For estimation, state-space models (SARIMAX, UnobservedComponents) handle NaN in the Kalman filter natively.
+- **Panels**: attrition that depends only on the unit effect is handled by FE; attrition related to shocks is not — compare early leavers with stayers at baseline.
+- Report: N per model, the complete-case share, the `missing_report` test, and whether conclusions change between complete cases and multiple imputation.
 - Dates: `pd.to_datetime(..., dayfirst=True)` for dd/mm/yyyy; check the parsed range.
 - Deflate monetary values (IPCA) when comparing across years.
 

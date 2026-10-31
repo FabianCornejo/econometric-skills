@@ -10,6 +10,8 @@ read_any(path)                          csv/txt (sniffs separator and encoding),
 read_csv_filtered(path, keep, ...)      stream a large CSV in chunks, keep only the rows/columns needed
 read_spreadsheetml(path)                parse XML "Excel 2003" files (outreg2/esttab exports, gov portals)
 audit(df)                               types, missing share, cardinality, examples, duplicates, constants
+missing_report(df, cols, predictors)    missing shares, complete-case N, patterns, and whether missingness
+                                        is predicted by observables (evidence against MCAR)
 fix_mojibake(s)                         'setor_censitÃ¡rio' -> 'setor_censitário'
 br_number(s)                            '1.234.567,89' -> 1234567.89 ; 'R$ 3,5 mil' handled up to the unit
 safe_merge(left, right, on, how, validate)   merge with cardinality check and a match report
@@ -119,6 +121,54 @@ def audit(df: pd.DataFrame, max_examples: int = 3, show: bool = True) -> pd.Data
         if any(df[c].astype(str).str.contains("Ã|Â", regex=True).any() for c in df.columns[:200] if df[c].dtype == object):
             print("  Mojibake detected (Ã, Â): file read with the wrong encoding; re-read or use fix_mojibake.")
     return tab
+
+
+def missing_report(df: pd.DataFrame, cols: list[str] | None = None, predictors: list[str] | None = None,
+                   top_patterns: int = 5, show: bool = True) -> dict:
+    """Missing-data diagnostics before estimating a model on `cols`.
+
+    - shares: missing share per column; complete_n: rows usable by listwise deletion.
+    - patterns: most frequent missingness patterns (1 = missing).
+    - tests (if predictors given): for each column with missing values, a linear probability
+      model of the missing indicator on the (fully observed) predictors, with an HC3 joint F test.
+      Rejection = missingness depends on observables: not MCAR. MAR vs MNAR cannot be tested.
+    What to do depends on WHY data are missing (see data-collection-wrangling.md, missing data):
+    in a regression, dropping rows is consistent if missingness depends only on the regressors,
+    biased if it depends on the outcome.
+    """
+    import statsmodels.api as sm
+
+    cols = list(cols or df.columns)
+    miss = df[cols].isna()
+    shares = miss.mean().sort_values(ascending=False)
+    patterns = (miss.astype(int).value_counts().head(top_patterns).rename("rows").reset_index())
+    out = {"shares": shares, "complete_n": int((~miss.any(axis=1)).sum()), "n": len(df), "patterns": patterns}
+    if predictors:
+        X = df[predictors]
+        ok = X.notna().all(axis=1)
+        Xc = sm.add_constant(X[ok].astype(float), has_constant="add")
+        rows = {}
+        for c in shares.index[shares > 0]:
+            if c in predictors:
+                continue
+            m = sm.OLS(miss.loc[ok, c].astype(float), Xc).fit(cov_type="HC3")
+            R = np.eye(len(Xc.columns))[1:]
+            w = m.wald_test(R, scalar=True, use_f=True)
+            rows[c] = {"share_missing": float(miss.loc[ok, c].mean()), "F": float(w.statistic),
+                       "p": float(w.pvalue)}
+        out["tests"] = pd.DataFrame(rows).T
+    if show:
+        print(f"\nMissing data: {out['complete_n']} of {out['n']} rows complete on {len(cols)} columns "
+              f"({out['complete_n'] / max(out['n'], 1):.1%})")
+        print(shares[shares > 0].to_string(float_format=lambda v: f"{v:.1%}") if (shares > 0).any() else "none")
+        print("Most frequent patterns (1 = missing):")
+        print(patterns.to_string(index=False))
+        if "tests" in out and len(out["tests"]):
+            print("Is missingness predicted by observables? (H0: no — consistent with MCAR)")
+            print(out["tests"].to_string(float_format=lambda v: f"{v:.4f}"))
+            print("Rejection: not MCAR. Listwise deletion is still consistent if missingness depends only on the "
+                  "regressors; otherwise use multiple imputation (MAR) or a selection model (MNAR).")
+    return out
 
 
 def fix_mojibake(s):
