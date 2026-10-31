@@ -78,7 +78,12 @@ check("rolling_var picks lag 1 mostly and indexes target dates", rv["lag_order"]
 # ---------- risk ----------
 import risk
 from arch import arch_model
+from arch.univariate import StudentsT
 sim = arch_model(None, vol="GARCH", p=1, q=1, dist="t")
+# Seeded: without it every CI run simulates new data and the Kupiec check below (a test at 5%)
+# fails in about 5% of runs with no bug. Across 40 seeds the GARCH-t VaR passed in 38 (95%),
+# mean violation rate 1.09% for a 1% VaR, which is the expected behaviour of a correct model.
+sim.distribution = StudentsT(seed=np.random.default_rng(0))
 simd = sim.simulate([0.02, 0.05, 0.08, 0.9, 6.0], 3000)
 rr = pd.Series(simd["data"].to_numpy() / 100, index=pd.bdate_range("2008-01-01", periods=3000))
 ew = risk.ewma_volatility(rr)
