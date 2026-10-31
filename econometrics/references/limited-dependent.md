@@ -120,8 +120,21 @@ res["performance"]   # holdout AUC and top-decile lift vs pooled logit and tree
 p = predict_leaf_model(res["model"], new_customers)
 ```
 
+When the user names the groups whose drivers may differ ("between customer types"), pass them and the theory model too, then check stability:
+
+```python
+res = logit_leaf_model(df, "churn", x, max_depth=2, min_leaf=100, segment_by=["b2b"],
+                       benchmarks={"interactions": "churn ~ tenure + usage*b2b + complaints + price_increase*b2b"})
+res["best"], res["warnings"], res["split_variables"]
+stab = leaf_model_stability(df, "churn", x, seeds=range(10), max_depth=2, min_leaf=100,
+                            benchmarks={"interactions": "churn ~ tenure + usage*b2b + complaints + price_increase*b2b"})
+stab["split_frequency"]; stab["summary"]      # share of seeds each variable splits; mean AUC/lift, share best
+```
+
 - **When it earns its place**: prediction or targeting with readable output (a few rules plus one coefficient table per segment). The original study found it beats its building blocks and matches random forests on churn data, judged by AUC and top-decile lift. If it does not beat the pooled logit on the holdout, report the pooled logit.
 - **Settings**: depth 2–3 and at least ~100 observations per leaf (the R package default) so each leaf supports a logit; forward selection by AIC keeps each leaf model short. sklearn's CART replaces the C4.5 tree of the original; use `ccp_alpha` to prune.
 - **Inference**: the segments are chosen by the data. With `honest=True` the tree and the leaf logits use different halves of the training sample, so the leaf standard errors are valid *given* the segments (Athey & Imbens, 2016). With `honest=False`, the leaf p-values are too optimistic; use them only descriptively. In both cases, a segment is a hypothesis about heterogeneity: refit with other seeds and samples and report only segments that reappear.
+- **The tree splits on purity, not on slopes.** CART cuts where the outcome *rate* differs. If the groups differ in *how* x affects y but not much in the average rate (usage lowers churn for consumers and raises it for business accounts), the tree may never split on that variable and the leaf model gains little over the pooled logit. In the test suite's simulation of exactly this case the tree split on tenure and price in every seed, never on the customer type; the logit with theory interactions reached AUC 0.80 against 0.78 (leaf) and 0.76 (pooled). Hence `segment_by` (warns when the named groups are not used), `benchmarks` (the interaction model on the same holdout) and `res["best"]`.
+- **Which model to report**: the one with the best holdout AUC and top-decile lift, averaged across seeds (`leaf_model_stability`). Report segments only if the same split variables reappear in most seeds.
 - **Not causal**: segment-specific coefficients are associations, like any logit. For heterogeneous *treatment* effects use causal designs with interactions specified in advance or causal forests (`causal-inference.md`).
 - **Alternatives**: interactions written from theory (always preferable when theory exists); model-based recursive partitioning (`partykit::glmtree` in R; Zeileis, Hothorn & Hornik, 2008), which chooses splits by testing parameter instability in the logit itself rather than by node purity, and is the more principled choice when the goal is to find where coefficients change.

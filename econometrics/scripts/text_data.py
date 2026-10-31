@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -470,9 +471,41 @@ def dsl_sampling_probs(score, n_expected: float, uniform_share: float = 0.2, max
 
 
 def draw_validation_sample(pi, seed: int = 0) -> np.ndarray:
-    """Independent Bernoulli(pi_i) draws: True = send the document to human coders."""
+    """Independent Bernoulli(pi_i) draws: True = send the document to human coders.
+
+    Use a seed reserved for this draw. Reusing a seed that also generated, simulated or shuffled
+    the data makes the draw a deterministic function of the data (same uniforms), which breaks
+    the design; dsl_regression then stops if a regressor no longer varies in the sample."""
     rng = np.random.default_rng(seed)
     return rng.random(len(pi)) < np.asarray(pi, float)
+
+
+def _check_labeled_support(yl, Xl, cols, model, n_labeled):
+    """Fail early, with a diagnosis, when the hand-coded documents cannot identify the model.
+
+    The correction term of dsl_regression is estimated only from the hand-coded documents. If a
+    regressor does not vary among them, the correction for that coefficient is not identified and
+    the solver would stop with an uninformative "singular matrix". This almost always means the
+    validation sample was not drawn independently of the data (a draw seed shared with whatever
+    generated the data, or pi equal to zero for a whole group)."""
+    hint = ("Check that `labeled` came from draw_validation_sample with its own seed (never one also "
+            "used to generate or shuffle the data) and that no group has pi = 0.")
+    for j, c in enumerate(cols):
+        if c == "const":
+            continue
+        v = Xl[:, j]
+        if np.ptp(v) == 0:
+            raise ValueError(f"'{c}' takes a single value ({v[0]:g}) in all {n_labeled} hand-coded documents, "
+                             f"so the correction for its coefficient is not identified. {hint}")
+    if np.linalg.matrix_rank(Xl) < Xl.shape[1]:
+        raise ValueError(f"The regressors are collinear within the {n_labeled} hand-coded documents "
+                         f"(rank {np.linalg.matrix_rank(Xl)} < {Xl.shape[1]} columns). {hint}")
+    if model == "logit":
+        if set(np.unique(yl)) - {0.0, 1.0}:
+            raise ValueError("For model='logit' the hand-coded outcome must be 0/1.")
+        if yl.min() == yl.max():
+            raise ValueError(f"The hand-coded outcome is {yl[0]:g} in all {n_labeled} hand-coded documents; "
+                             "a logit correction needs both outcomes. Code more documents.")
 
 
 def dsl_regression(df: pd.DataFrame, y: str, x: list[str], labeled, pi, coded: dict | None = None,
@@ -529,9 +562,10 @@ def dsl_regression(df: pd.DataFrame, y: str, x: list[str], labeled, pi, coded: d
         raise ValueError("Surrogate data have missing values; impute or drop those documents first.")
     if np.isnan(yt[R]).any() or np.isnan(Xt[R]).any():
         raise ValueError("Some hand-coded documents have no true value for a coded variable.")
+    cols = (["const"] if add_const else []) + names
+    _check_labeled_support(yt[R], Xt[R], cols, model, int(R.sum()))
     yt = np.where(R, yt, 0.0); Xt = np.where(R[:, None], Xt, 0.0)
     w = np.where(R, 1.0 / p, 0.0)
-    cols = (["const"] if add_const else []) + names
 
     def psi(b):
         if model == "ols":
@@ -587,26 +621,41 @@ def dsl_regression(df: pd.DataFrame, y: str, x: list[str], labeled, pi, coded: d
     b = solve(b0)
     V = sandwich(b, psi(b), jac(b))
 
-    # hand-coded documents alone, inverse-probability weighted (what you would do without the LLM)
+    # hand-coded documents alone, inverse-probability weighted (what you would do without the LLM).
+    # It is only a benchmark for the design effect: if it cannot be estimated (e.g. separation in a
+    # small hand-coded logit), the DSL estimate is still reported.
     Xl, yl, wl = Xt[R], yt[R], w[R]
-    if model == "ols":
-        bl = np.linalg.solve((Xl * wl[:, None]).T @ Xl, (Xl * wl[:, None]).T @ yl)
-        Pl = Xl * (wl * (yl - Xl @ bl))[:, None]; Jl = -(Xl * wl[:, None]).T @ Xl
-    else:
-        bl = b.copy()
-        for _ in range(100):
+    try:
+        if model == "ols":
+            bl = np.linalg.solve((Xl * wl[:, None]).T @ Xl, (Xl * wl[:, None]).T @ yl)
+            Pl = Xl * (wl * (yl - Xl @ bl))[:, None]; Jl = -(Xl * wl[:, None]).T @ Xl
+        else:
+            bl = b.copy(); converged = False
+            for _ in range(100):
+                pl = 1 / (1 + np.exp(-Xl @ bl))
+                step = np.linalg.solve((Xl * (wl * pl * (1 - pl))[:, None]).T @ Xl, (Xl * wl[:, None]).T @ (yl - pl))
+                bl = bl + step
+                if np.max(np.abs(step)) < 1e-10:
+                    converged = True
+                    break
+            if not converged or np.max(np.abs(Xl @ bl)) > 30:   # separation: estimates drift to infinity
+                raise np.linalg.LinAlgError("labeled-only logit did not converge (separation)")
             pl = 1 / (1 + np.exp(-Xl @ bl))
-            step = np.linalg.solve((Xl * (wl * pl * (1 - pl))[:, None]).T @ Xl, (Xl * wl[:, None]).T @ (yl - pl))
-            bl = bl + step
-            if np.max(np.abs(step)) < 1e-10:
-                break
-        pl = 1 / (1 + np.exp(-Xl @ bl))
-        Pl = Xl * (wl * (yl - pl))[:, None]; Jl = -(Xl * (wl * pl * (1 - pl))[:, None]).T @ Xl
-    Vl = np.linalg.inv(Jl) @ (Pl.T @ Pl) @ np.linalg.inv(Jl).T
+            Pl = Xl * (wl * (yl - pl))[:, None]; Jl = -(Xl * (wl * pl * (1 - pl))[:, None]).T @ Xl
+        Vl = np.linalg.inv(Jl) @ (Pl.T @ Pl) @ np.linalg.inv(Jl).T
+        if not (np.all(np.isfinite(bl)) and np.all(np.isfinite(np.diag(Vl)))):
+            raise np.linalg.LinAlgError("non-finite estimates")
+        labeled_only = table(bl, Vl)
+        deff = np.diag(V) / np.diag(Vl)
+    except np.linalg.LinAlgError:
+        warnings.warn("The labeled-only benchmark could not be estimated (singular or separated hand-coded "
+                      "sample); the DSL estimate is unaffected, but design_effect is NaN.")
+        labeled_only = pd.DataFrame(np.nan, index=cols, columns=["coef", "se", "z", "p", "ci_low", "ci_high"])
+        deff = np.full(len(cols), np.nan)
 
-    out = {"table": table(b, V), "naive": table(b0, naive_V), "labeled_only": table(bl, Vl),
+    out = {"table": table(b, V), "naive": table(b0, naive_V), "labeled_only": labeled_only,
            "n": n, "n_labeled": int(R.sum()), "min_pi": float(p.min()),
-           "design_effect": pd.Series(np.diag(V) / np.diag(Vl), index=cols, name="var_DSL / var_labeled_only")}
+           "design_effect": pd.Series(deff, index=cols, name="var_DSL / var_labeled_only")}
     if show:
         print(f"\nDSL {model.upper()} with LLM-coded {sorted(set(coded) & set([y] + names)) or '(none)'}: "
               f"{n} documents, {R.sum()} hand-coded (min pi = {p.min():.3f}).")
