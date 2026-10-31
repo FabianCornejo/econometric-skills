@@ -24,6 +24,8 @@ Main functions
     overid_test(...)                  Wooldridge nR² and Sargan
     hausman(fe, re)                   FE vs RE (linearmodels)
     panel_bp_lm(...)                  pooled vs random effects (Breusch-Pagan LM)
+    mundlak_test(df, y, x_vary, ...)  FE vs RE via correlated random effects, clustered Wald
+    count_diagnostics(poisson_res)    Pearson dispersion, Cameron-Trivedi NB1/NB2 tests, excess zeros
     tobit(y, X, lower, upper)         Tobit with lower/upper/two-limit censoring; 3 AMEs with delta SEs
     diebold_mariano(e1, e2, h)        equal forecast accuracy (HLN correction)
 
@@ -501,6 +503,82 @@ def panel_bp_lm(resid_pooled: pd.Series, show: bool = True) -> dict:
 # =============================================================================
 # Tobit
 # =============================================================================
+def mundlak_test(df: pd.DataFrame, y: str, x_vary: list[str], entity: str, time: str,
+                 x_const: list[str] | None = None, time_effects: bool = True, show: bool = True) -> dict:
+    """Mundlak / correlated random effects (CRE) test: FE vs RE robust to heteroskedasticity and
+    within-unit correlation (clustered by entity) — preferable to the classical Hausman test.
+
+    Estimates RE of y on x_vary, x_const, unit means of x_vary (and time dummies), then a clustered
+    Wald test that the means are jointly zero. Rejection ⇒ the unit effect is correlated with x
+    ⇒ use FE (or keep the CRE model, whose coefficients on x_vary equal FE in a balanced panel
+    while still estimating time-invariant x_const). In unbalanced panels the equality with FE also
+    requires the unit means of the time dummies (Wooldridge, 2019); a warning is printed.
+    """
+    from linearmodels.panel import RandomEffects
+
+    x_const = list(x_const or [])
+    d = df[[y, entity, time] + list(x_vary) + x_const].dropna().copy()
+    means = []
+    for v in x_vary:
+        d[f"{v}_mean"] = d.groupby(entity)[v].transform("mean")
+        means.append(f"{v}_mean")
+    balanced = d.groupby(entity)[time].nunique().nunique() == 1
+    d["_period"] = d[time].values
+    d = d.set_index([entity, time])
+    rhs = ["1"] + list(x_vary) + x_const + means + (["C(_period)"] if time_effects else [])
+    res = RandomEffects.from_formula(f"{y} ~ " + " + ".join(rhs), d) \
+        .fit(cov_type="clustered", cluster_entity=True)
+    w = res.wald_test(formula=", ".join(f"{m} = 0" for m in means))
+    out = {"statistic": float(w.stat), "p": float(w.pval), "df": int(w.df), "results": res,
+           "coefficients": res.params, "balanced": bool(balanced)}
+    if show:
+        print(f"\nMundlak / CRE test (RE with unit means, clustered by {entity}): "
+              f"Wald χ²({out['df']}) = {out['statistic']:.3f}, p = {out['p']:.4f} → "
+              + ("unit effects correlated with x: use FE (or report the CRE model)" if out["p"] < ALPHA
+                 else "no evidence against RE: RE (or CRE) is acceptable and more efficient"))
+        if not balanced and time_effects:
+            print("WARNING: unbalanced panel — add unit means of the time dummies for exact equality with FE.")
+    return out
+
+
+def count_diagnostics(res, show: bool = True) -> dict:
+    """Overdispersion checks after a Poisson fit (statsmodels Poisson or GLM Poisson).
+
+    - Pearson dispersion σ̂² = Σ(y−μ̂)²/μ̂ / (n−k): ≈1 under Poisson; >1 overdispersion.
+    - Cameron-Trivedi (1990) regression tests, one-sided (H1: α > 0):
+        NB2 (Var = μ + αμ²): regress ((y−μ̂)² − y)/μ̂ on μ̂ without a constant;
+        NB1 (Var = (1+α)μ):   regress the same on a constant.
+    - Zeros: observed share vs the share implied by the Poisson fit (excess zeros → hurdle/ZIP).
+    Poisson coefficients stay consistent under overdispersion (QMLE) if the mean is right: the
+    usual fix is robust SEs (cov_type="HC0"/"HC1"), or quasi-Poisson SEs (× σ̂), or NB if the
+    variance itself matters (predicted probabilities of counts).
+    """
+    yv = np.asarray(res.model.endog, dtype=float)
+    mu = np.asarray(res.predict(), dtype=float)
+    n, k = len(yv), len(res.params)
+    disp = float(np.sum((yv - mu) ** 2 / mu) / (n - k))
+    z = ((yv - mu) ** 2 - yv) / mu
+    rows = {}
+    for label, X in (("NB2 (Var = μ + αμ²)", mu.reshape(-1, 1)), ("NB1 (Var = (1+α)μ)", np.ones((n, 1)))):
+        a = sm.OLS(z, X).fit()
+        t = float(a.tvalues[0])
+        rows[label] = {"alpha": float(a.params[0]), "t": t, "p": float(stats.norm.sf(t))}
+    tests = pd.DataFrame(rows).T
+    zeros_obs, zeros_pred = float(np.mean(yv == 0)), float(np.mean(np.exp(-mu)))
+    out = {"dispersion": disp, "tests": tests, "zeros_observed": zeros_obs, "zeros_predicted": zeros_pred,
+           "quasi_poisson_se": pd.Series(np.asarray(res.bse) * np.sqrt(disp), index=getattr(res.bse, "index", None))}
+    if show:
+        print(f"\nPoisson overdispersion: Pearson σ̂² = {disp:.3f} (σ̂ = {np.sqrt(disp):.3f}; 1 under Poisson)")
+        print(tests.to_string(float_format=_fmt))
+        over = (tests["p"] < ALPHA).any()
+        print(("Overdispersion: keep Poisson coefficients (QMLE) with robust SEs, or use quasi-Poisson SEs "
+               "(× σ̂), or a negative binomial if count probabilities matter.") if over
+              else "No evidence of overdispersion: Poisson SEs are fine.")
+        print(f"Zeros: observed {zeros_obs:.1%} vs Poisson-implied {zeros_pred:.1%}"
+              + (" → excess zeros: consider hurdle or zero-inflated models." if zeros_obs > 1.2 * zeros_pred else ""))
+    return out
+
+
 def _tobit_parts(xb, s, a, b):
     """Pieces of a Tobit with lower limit a and upper limit b (either may be None) at index xb."""
     za = (a - xb) / s if a is not None else np.full_like(xb, -np.inf)

@@ -26,6 +26,11 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 - **Tobit:** lower, upper or two-limit censoring; the three average marginal effects (total, intensive and extensive margins) with delta-method standard errors.
 - **Stata parity:** documented `debiased=True` for textbook/Stata `small` IV standard errors.
 
+**Specification and sensitivity tools (v1.5):**
+- **New module `specification.py`:** FGLS for heteroskedasticity of unknown form; confidence vs. prediction intervals (with Duan smearing for log-y models); long-run effects of distributed lags and ADL models with delta-method SEs; standardized (beta) coefficients; exact omitted-variable-bias decomposition; Oster (2019) coefficient stability; Cinelli-Hazlett (2020) robustness values with covariate benchmarks.
+- **Diagnostics:** Mundlak/correlated-random-effects test (FE vs RE with clustered errors); Poisson overdispersion (Pearson dispersion, Cameron-Trivedi NB1/NB2 tests, excess zeros).
+- **Validated** in `tests/test_specification_tools.py` against Wooldridge Examples 6.1, 6.5–6.6, 8.7, 10.4, 14.4 and 17.3, the Darfur example of Cinelli and Hazlett (2020), and known-truth simulations.
+
 Every rolling estimate uses only data available at the time. Look-ahead traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, filtered Kalman residuals, signal/return misalignment) are avoided in code and documented in the references.
 
 The skill's instructions are in English; Claude answers in the user's language.
@@ -35,6 +40,7 @@ econometrics/
 ├── SKILL.md                         7-step workflow
 ├── scripts/
 │   ├── diagnostics.py               test batteries with plain-language conclusions
+│   ├── specification.py             FGLS, prediction intervals, long-run effects, OVB and sensitivity
 │   ├── forecasting.py               auto-ARIMA, ARIMAX, VAR forecasts, walk-forward evaluation
 │   ├── backtest.py                  look-ahead-free backtests, performance, momentum
 │   ├── risk.py                      VaR/ES estimators and backtests
@@ -83,6 +89,7 @@ python3 econometrics/scripts/forecasting.py your_data.csv --col yield --season 1
 python3 tests/test_financial_modules.py
 python3 tests/test_causal_text_survival.py
 python3 tests/test_textbook_replication.py   # needs: pip install wooldridge
+python3 tests/test_specification_tools.py    # needs: pip install wooldridge
 ```
 
 ## Feedback and contributions

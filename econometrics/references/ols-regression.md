@@ -12,6 +12,9 @@
 9. Influential observations
 10. Measurement error
 11. Model selection
+12. Prediction: confidence vs. prediction intervals
+13. Standardized (beta) coefficients
+14. Omitted variables: bias and sensitivity to unobserved confounders
 
 ## 1. Assumptions and consequences
 
@@ -83,7 +86,7 @@ Tests:
 Fixes, from most to least common:
 1. **Robust (HC) standard errors** — the default. Hansen (2020) recommends **HC2 or HC3** over HC1 (Stata's default): HC2 is unbiased under homoskedasticity and HC3 is conservative. They only differ much when there are high-leverage observations (h_ii near 1). Use `cov_type="HC3"`.
 2. **WLS** when the form is known, Var(ε\|x) = σ²h(x): divide everything by √h(x). `sm.WLS(y, X, weights=1/h)`. Interpret coefficients in the original model.
-3. **FGLS/FWLS** with an unknown form (Wooldridge): estimate OLS; regress ln(ê²) on the X's; ĥ = exp(ĝ); estimate WLS with weights 1/ĥ. Also report robust errors in the WLS, since ĥ may be misspecified.
+3. **FGLS/FWLS** with an unknown form (Wooldridge): estimate OLS; regress ln(ê²) on the X's; ĥ = exp(ĝ); estimate WLS with weights 1/ĥ. Also report robust errors in the WLS, since ĥ may be misspecified. `specification.fgls_het(formula, df)` does all three steps and prints OLS vs. FGLS side by side with the SE ratio (HC3 by default; `cov_type="nonrobust"` reproduces textbook tables — it matches Wooldridge Example 8.7). Coefficients that move a lot between OLS and FGLS signal a misspecified mean, not just a variance problem.
 4. Transforming the variable (logs) often removes heteroskedasticity and improves the functional form at the same time.
 
 R² is not affected by heteroskedasticity.
@@ -121,3 +124,27 @@ R² is not affected by heteroskedasticity.
 - Adjusted R², AIC, BIC (BIC penalizes more and picks smaller models; preferable for identifying the model; AIC tends to be better for forecasting).
 - Never use isolated significance as the only inclusion criterion; report how many specifications were tried.
 - **Bad controls** (Angrist-Pischke): do not control for variables that are themselves outcomes of the treatment (e.g., when measuring a promotion's effect on revenue, do not control for the number of customers, which the promotion affects).
+
+## 12. Prediction: confidence vs. prediction intervals
+
+Two different questions, two different intervals:
+- **CI for E(y\|x)** — "average sales of stores with these characteristics": only estimation error in β; shrinks as n grows.
+- **Prediction interval (PI) for a new y** — "sales of *this* new store": adds the error variance σ²; does not shrink with n and is much wider (Wooldridge Ex. 6.5 vs 6.6: CI 2.66–2.74 vs PI 1.60–3.80 for the same prediction).
+
+`specification.prediction_intervals(res, newdata)` returns both (columns `ci_*` and `pi_*`). The PI assumes homoskedastic normal errors; with heteroskedasticity, model the variance or use quantile regression / empirical residual quantiles.
+
+**Models for log y**: exp(predicted log y) estimates the *median*, not the mean. With `log_y=True` the function adds `mean_y` (Duan smearing: exp(ŷ)·mean(exp(û))), `median_y`, and the PI in y units (`pi_lower_y`, `pi_upper_y` = exp of the log-scale bounds, valid because exp is monotone). For forecasts in levels (revenue, prices), report `mean_y`.
+
+## 13. Standardized (beta) coefficients
+
+β·sd(x)/sd(y): the effect of a one-standard-deviation change in x, in standard deviations of y. Use it to compare regressors measured in different units ("which matters more, pollution or room count?"), not as a substitute for the effect in natural units. `specification.standardized_coefficients(res)` works from the design matrix (so logs and squares are standardized as they enter), keeps t and p unchanged, flags dummies (where "one SD" is not meaningful) and returns coef/se/p — it can go straight into `reporting.regression_table`. Rescaling a variable (thousands vs. units) changes β but not t, p or R² (Wooldridge 6.1).
+
+## 14. Omitted variables: bias and sensitivity to unobserved confounders
+
+**Known omitted variable** (observed, but left out of a short regression): the bias is exact — β̃ (short) = β̂ (long) + γ̂·δ̃, where γ̂ is the omitted variable's coefficient and δ̃ the slope of the omitted variable on the focal regressor. `specification.ovb_decomposition(df, y, focal, omitted, included=[...])` reports each piece. The sign of the bias is sign(γ)·sign(δ): reason about it even when the variable is unavailable.
+
+**Unobserved confounders** (cannot be added): stress-test instead of hoping.
+- **Oster (2019)**, `specification.oster(res_uncontrolled, res_controlled, "d")`: uses how much the coefficient and R² move when observed controls are added. Reports β* (bias-adjusted, δ = 1 means unobservables are as important as observables) and δ needed for β = 0. Default R_max = min(1.3·R̃, 1). |δ| > 1 is the usual bar. Closed-form approximation; Stata's `psacalc` solves the exact version. Recovers the truth in simulation when selection is proportional (`tests/test_specification_tools.py`).
+- **Cinelli and Hazlett (2020)**, `specification.sensitivity(res, "d")`: partial R² of the treatment and the **robustness value** RV — the share of residual variance a confounder would need to explain in *both* treatment and outcome to remove the effect (RV_q,α: to make it insignificant). Compare RV with the partial R² of the strongest observed covariates (`benchmarks`): if a confounder would need to be several times stronger than, say, income, the result is robust. Uses the classical t. Reproduces the paper's Darfur example (RV = 13.9%, RV_α = 7.6%). For formal "k times as strong as covariate X" bounds use `sensemakr` (R/Stata; the Python port PySensemakr is early-stage).
+
+Report one of the two whenever the causal claim rests on selection on observables.

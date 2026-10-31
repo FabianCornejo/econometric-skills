@@ -123,7 +123,8 @@ re.theta, re.variance_decomposition   # weight of the individual component
 - **Pooled vs. RE**: Breusch-Pagan LM (H0: individual-effect variance = 0) — `scripts/diagnostics.py` has `panel_bp_lm`.
 - **FE vs. pooled**: `fe.f_pooled`.
 - **FE vs. RE (Hausman)**: H0 = RE consistent (and efficient). H = (b_FE − b_RE)'[V_FE − V_RE]⁻¹(b_FE − b_RE) ~ χ²(k), using common coefficients and **non-robust** covariances. `scripts/diagnostics.py hausman`. If V_FE − V_RE is not positive semidefinite, the statistic can be negative (Stata works around it with `sigmamore`); in that case use Mundlak.
-- **Mundlak (robust, preferable with clustering)**: add the unit means of the X's to the RE model; if they are jointly significant (clustered Wald), use FE.
+- **Mundlak (robust, preferable with clustering)**: add the unit means of the X's to the RE model; if they are jointly significant (clustered Wald), use FE. `diagnostics.mundlak_test(df, y, x_vary=[...], entity, time, x_const=[...])` runs it with time dummies and entity-clustered errors. The resulting **correlated random effects (CRE)** model is worth reporting in itself: its coefficients on time-varying X equal FE exactly in a balanced panel (verified on Wooldridge's WAGEPAN, Ex. 14.4) while it still estimates time-invariant variables (education, region, store format) that FE absorbs. In unbalanced panels, add the unit means of the time dummies for the exact equivalence (Wooldridge, 2019).
+- **LSDV = FE**: OLS with one dummy per unit gives the same slopes as the within estimator (only the degrees of freedom bookkeeping differs); use it to show the equivalence, `PanelOLS` to estimate.
 - In business data, FE almost always wins: location and management correlate with price and promotion.
 
 ## 10. Difference-in-differences
