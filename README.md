@@ -20,6 +20,12 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 - **Text as data:** regex coding with audit snippets, TF-IDF, LDA, clustering with representative documents, classifiers with proper validation, agreement with hand coding, misclassification correction, similarity to a reference group.
 - **Data and reporting:** robust readers for Brazilian files (`;`, latin-1, decimal comma, XML/HTML ".xls"), large CSVs, safe merges, PDF/OCR, polite scraping; outreg2/esttab-style regression tables.
 
+**Textbook replication and core fixes (v1.4):**
+- **Replication suite:** `tests/test_textbook_replication.py` checks the skill's functions and the recipes in its references against published results from Wooldridge's *Introductory Econometrics* (Examples 8.4, 13.3, 14.4, 15.1, 15.5, 15.7, 15.8, 17.2, 17.3), alongside the known-truth simulations.
+- **Diagnostics:** Durbin-Watson and Breusch-Godfrey run only for time series (in a cross-section the row order is arbitrary); time series also get Engle's ARCH-LM. CLI flag `--ts`.
+- **Tobit:** lower, upper or two-limit censoring; the three average marginal effects (total, intensive and extensive margins) with delta-method standard errors.
+- **Stata parity:** documented `debiased=True` for textbook/Stata `small` IV standard errors.
+
 Every rolling estimate uses only data available at the time. Look-ahead traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, filtered Kalman residuals, signal/return misalignment) are avoided in code and documented in the references.
 
 The skill's instructions are in English; Claude answers in the user's language.
@@ -76,6 +82,7 @@ python3 econometrics/scripts/diagnostics.py stationarity your_data.csv --cols po
 python3 econometrics/scripts/forecasting.py your_data.csv --col yield --season 12
 python3 tests/test_financial_modules.py
 python3 tests/test_causal_text_survival.py
+python3 tests/test_textbook_replication.py   # needs: pip install wooldridge
 ```
 
 ## Feedback and contributions

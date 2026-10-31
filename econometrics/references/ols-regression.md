@@ -66,13 +66,13 @@ Cautions:
 1. Plots: y vs. each x; residuals vs. fitted; residuals vs. order/time; squared residuals vs. each x.
 2. **RESET** (functional form). If it rejects, respecify before anything else.
 3. Heteroskedasticity (Breusch-Pagan; full White or the simplified version with ŷ and ŷ²).
-4. Autocorrelation (Durbin-Watson only as an indicator; Breusch-Godfrey with p lags).
+4. Autocorrelation — **time series only** (Durbin-Watson only as an indicator; Breusch-Godfrey with p lags). In a cross-section the row order is arbitrary, so these tests are meaningless: sorting the data by a regressor can manufacture "autocorrelation". For time series also run Engle's ARCH-LM on the residuals (volatility clustering: HC/HAC errors stay valid, but intervals and risk measures need a variance model, see `volatility.md`).
 5. Normality (Jarque-Bera) — relevant only in small samples.
 6. Multicollinearity (VIF, condition number) and influential observations.
 7. Stability (Chow with a known date, CUSUM) when there is time or groups.
 8. Exogeneity (theory + Hausman test when an instrument exists) → `panel-iv.md`.
 
-`scripts/diagnostics.py` covers 2–6 in one call (`ols_diagnostics`), plus `influence` and `chow`.
+`scripts/diagnostics.py` covers 2–6 in one call (`ols_diagnostics`), plus `influence` and `chow`. Pass `time_series=True` (CLI: `--ts` or `--hac`) to add Durbin-Watson, Breusch-Godfrey, ARCH-LM and the R² > DW spurious-regression check; without it they are skipped.
 
 ## 6. Heteroskedasticity
 

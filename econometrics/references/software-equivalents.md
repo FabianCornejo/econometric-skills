@@ -37,6 +37,7 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | Stata | EViews | Python |
 |---|---|---|
 | `ivregress 2sls y (x = z1 z2) w, vce(robust)` | `tsls y c x w @ c z1 z2 w` | `IV2SLS.from_formula("y ~ 1 + w + [x ~ z1 + z2]", df).fit(cov_type="robust")` |
+| `ivregress 2sls ..., small` | — | add `debiased=True` to `.fit(...)` (n−k correction, t and F statistics) |
 | `..., first` | — | `res.first_stage` |
 | `estat endogenous` | Endogeneity test | `res.wu_hausman()`, `res.durbin()` |
 | `estat overid` | Instrument orthogonality | `res.sargan`; robust: `IVGMM(...).fit().j_stat` |

@@ -5,14 +5,15 @@ Use as a module:
     from diagnostics import *
 
 Use from the command line (CSV or XLSX; optional date column via --date):
-    python3 diagnostics.py ols data.csv --y log_sales --x log_price,log_income [--hac 6]
+    python3 diagnostics.py ols data.csv --y log_sales --x log_price,log_income [--hac 6 | --ts]
     python3 diagnostics.py influence data.csv --y log_sales --x log_price,log_income
     python3 diagnostics.py chow data.csv --y log_sales --x log_price --break 2020-03-01
     python3 diagnostics.py stationarity data.csv --cols policy_rate,cpi,log_sales
     python3 diagnostics.py cointegration data.csv --cols log_p,log_fx,log_pforeign [--lags 2]
 
 Main functions
-    ols_diagnostics(res)              RESET, Breusch-Pagan, White, simplified White, DW, BG, JB, VIF
+    ols_diagnostics(res)              RESET, Breusch-Pagan, White, simplified White, JB, VIF;
+                                      time_series=True adds DW, Breusch-Godfrey, ARCH-LM
     influence(res)                    leverage, DFBETA, max|h*e~| (Hansen)
     chow(y, X, point)                 Chow test for a break at a known date (plus robust Wald)
     compare_standard_errors(...)      classical vs HC3 vs HAC
@@ -23,7 +24,7 @@ Main functions
     overid_test(...)                  Wooldridge nR² and Sargan
     hausman(fe, re)                   FE vs RE (linearmodels)
     panel_bp_lm(...)                  pooled vs random effects (Breusch-Pagan LM)
-    tobit(y, X)                       Tobit censored at a limit (maximum likelihood)
+    tobit(y, X, lower, upper)         Tobit with lower/upper/two-limit censoring; 3 AMEs with delta SEs
     diebold_mariano(e1, e2, h)        equal forecast accuracy (HLN correction)
 
 Default significance level: 5%.
@@ -39,6 +40,7 @@ import statsmodels.api as sm
 from scipy import optimize, stats
 from statsmodels.stats.diagnostic import (
     acorr_breusch_godfrey,
+    het_arch,
     het_breuschpagan,
     het_white,
     linear_reset,
@@ -83,11 +85,18 @@ def white_simplified(res):
 
 
 def ols_diagnostics(res, bg_lags: int | None = None, time_series: bool = False,
-                    show: bool = True) -> pd.DataFrame:
+                    arch_lags: int = 4, show: bool = True) -> pd.DataFrame:
     """Full battery for a statsmodels OLS result (any cov_type).
 
     Order: functional form → heteroskedasticity → autocorrelation → normality.
     The chosen standard-error type does not change the diagnostics.
+
+    time_series=False (cross-section): Durbin-Watson and Breusch-Godfrey are NOT run, because
+    they depend on the row order, which is arbitrary in a cross-section (sorting the data by a
+    regressor would create spurious "autocorrelation"). If the order is meaningful (e.g. units
+    sorted by distance), pass time_series=True deliberately.
+    time_series=True: adds Durbin-Watson, Breusch-Godfrey, Engle's ARCH-LM on the residuals
+    (arch_lags lags) and the R² > DW spurious-regression warning.
     """
     base = _plain_ols(res)
     resid = np.asarray(base.resid)
@@ -118,21 +127,32 @@ def ols_diagnostics(res, bg_lags: int | None = None, time_series: bool = False,
     rows.append(_row("White simplified (ŷ, ŷ²)", "homoskedasticity", lm_ws, p_ws,
                      "Heteroskedasticity" if p_ws < ALPHA else "No evidence"))
 
-    dw = durbin_watson(resid)
-    rows.append(_row("Durbin-Watson", "no 1st-order autocorrelation (≈2)", dw, np.nan,
-                     "Positive autocorrelation likely" if dw < 1.5 else
-                     "Negative autocorrelation likely" if dw > 2.5 else "Close to 2"))
-    try:
+    dw = np.nan
+    if time_series:
+        dw = durbin_watson(resid)
+        rows.append(_row("Durbin-Watson", "no 1st-order autocorrelation (≈2)", dw, np.nan,
+                         "Positive autocorrelation likely" if dw < 1.5 else
+                         "Negative autocorrelation likely" if dw > 2.5 else "Close to 2"))
         try:
-            bg = acorr_breusch_godfrey(base, nlags=bg_lags, result_object=False)
-        except TypeError:  # older statsmodels
-            bg = acorr_breusch_godfrey(base, nlags=bg_lags)
-        lm_bg, p_bg = bg[0], bg[1]
-        rows.append(_row(f"Breusch-Godfrey ({bg_lags} lags)", "no autocorrelation", lm_bg, p_bg,
-                         "Autocorrelation: use HAC and/or model the dynamics (or omitted variable/functional form)"
-                         if p_bg < ALPHA else "No evidence"))
-    except Exception:  # noqa: BLE001
-        pass
+            try:
+                bg = acorr_breusch_godfrey(base, nlags=bg_lags, result_object=False)
+            except TypeError:  # older statsmodels
+                bg = acorr_breusch_godfrey(base, nlags=bg_lags)
+            lm_bg, p_bg = bg[0], bg[1]
+            rows.append(_row(f"Breusch-Godfrey ({bg_lags} lags)", "no autocorrelation", lm_bg, p_bg,
+                             "Autocorrelation: use HAC and/or model the dynamics (or omitted variable/functional form)"
+                             if p_bg < ALPHA else "No evidence"))
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            lm_a, p_a, _, _ = het_arch(resid, nlags=arch_lags)
+            rows.append(_row(f"ARCH-LM ({arch_lags} lags)", "no conditional heteroskedasticity (ARCH)", lm_a, p_a,
+                             "ARCH effects: volatility clustering; HC/HAC SEs remain valid, model the variance "
+                             "(GARCH, see volatility.md) if it matters for intervals or risk"
+                             if p_a < ALPHA else "No evidence"))
+        except Exception:  # noqa: BLE001
+            pass
 
     jb, p_jb, skew, kurt = jarque_bera(resid)
     rows.append(_row("Jarque-Bera", "normal residuals", jb, p_jb,
@@ -140,7 +160,7 @@ def ols_diagnostics(res, bg_lags: int | None = None, time_series: bool = False,
                       + ("relevant: small sample" if n < 100 else "of little concern with large N"))
                      if p_jb < ALPHA else "No evidence against normality"))
 
-    if time_series and base.rsquared > dw:
+    if time_series and np.isfinite(dw) and base.rsquared > dw:
         rows.append(_row("R² > DW", "—", base.rsquared, np.nan,
                          "SPURIOUS REGRESSION warning: test stationarity/cointegration"))
 
@@ -150,6 +170,9 @@ def ols_diagnostics(res, bg_lags: int | None = None, time_series: bool = False,
         print(f"\nOLS diagnostics (N={n}, R²={base.rsquared:.3f}, adj. R²={base.rsquared_adj:.3f}, "
               f"condition number={np.linalg.cond(exog):.1f})")
         print(table.to_string(index=False, float_format=_fmt))
+        if not time_series:
+            print("Cross-section: autocorrelation tests skipped (row order is arbitrary). "
+                  "For time series, pass time_series=True.")
         if not vif.empty:
             print("\nVIF (>10 worrying; >5 watch):")
             print(vif.to_string(index=False, float_format=lambda v: f"{v:.2f}"))
@@ -478,25 +501,74 @@ def panel_bp_lm(resid_pooled: pd.Series, show: bool = True) -> dict:
 # =============================================================================
 # Tobit
 # =============================================================================
-def tobit(y, X, lower_limit: float = 0.0, show: bool = True) -> dict:
-    """Left-censored Tobit by maximum likelihood. X without constant (it is added).
+def _tobit_parts(xb, s, a, b):
+    """Pieces of a Tobit with lower limit a and upper limit b (either may be None) at index xb."""
+    za = (a - xb) / s if a is not None else np.full_like(xb, -np.inf)
+    zb = (b - xb) / s if b is not None else np.full_like(xb, np.inf)
+    Pa, Pb = stats.norm.cdf(za), stats.norm.cdf(zb)
+    pa, pb = stats.norm.pdf(za), stats.norm.pdf(zb)
+    # z·φ(z) → 0 as |z| → ∞; avoid inf·0 = nan
+    zpa = np.where(np.isfinite(za), za * pa, 0.0)
+    zpb = np.where(np.isfinite(zb), zb * pb, 0.0)
+    D = np.clip(Pb - Pa, 1e-300, None)
+    lam = (pa - pb) / D
+    return za, zb, Pa, Pb, pa, pb, zpa, zpb, D, lam
 
-    Returns latent-variable coefficients, sigma, standard errors (inverse numerical Hessian)
-    and average marginal effects on E(y|x) = Φ(xβ/σ)·β (unconditional).
+
+def _tobit_ames(theta, XX, a, b):
+    """Average marginal effects (per unit of each regressor) of a Tobit at parameters theta = (β, log σ).
+
+    Each expectation depends on x only through xβ, so ∂f/∂x_j = f'(xβ)·β_j:
+      E(y|x):             f' = Φ(z_b) − Φ(z_a)                          (McDonald-Moffitt)
+      E(y|a<y<b, x):      f' = 1 + (z_a φ_a − z_b φ_b)/D − λ²,  λ = (φ_a − φ_b)/D
+      P(a<y<b | x):       f' = (φ_a − φ_b)/σ
     """
+    beta, s = theta[:-1], np.exp(theta[-1])
+    _, _, _, _, pa, pb, zpa, zpb, D, lam = _tobit_parts(XX @ beta, s, a, b)
+    d_all = D
+    d_in = 1 + (zpa - zpb) / D - lam ** 2
+    d_p = (pa - pb) / s
+    return np.concatenate([beta * d_all.mean(), beta * d_in.mean(), beta * d_p.mean()])
+
+
+def tobit(y, X, lower_limit: float | None = 0.0, upper_limit: float | None = None,
+          show: bool = True) -> dict:
+    """Censored (Tobit) regression by maximum likelihood. X without constant (it is added).
+
+    lower_limit / upper_limit: censoring points (None = no censoring on that side). The default
+    (0, None) is the classic corner-solution Tobit; (None, c) handles top-coding; (a, b) two limits.
+
+    Returns latent coefficients, σ, standard errors (inverse numerical Hessian) and the three
+    average marginal effects with delta-method standard errors (`marginal_effects`):
+      E[y|x]              effect on the observed outcome (participation + intensity);
+      E[y|uncensored,x]   effect for units strictly inside the limits (intensive margin);
+      P(uncensored|x)     effect on the probability of being uncensored (extensive margin;
+                          with only a lower limit, the probability of y > lower_limit).
+    The effects are derivatives; for a dummy regressor they approximate the discrete change.
+    """
+    if lower_limit is None and upper_limit is None:
+        raise ValueError("Give at least one censoring limit (lower_limit and/or upper_limit).")
+    if lower_limit is not None and upper_limit is not None and not lower_limit < upper_limit:
+        raise ValueError("lower_limit must be smaller than upper_limit.")
     d = pd.concat([y, X], axis=1).dropna()
-    yy = d.iloc[:, 0].values
-    XX = sm.add_constant(d.iloc[:, 1:]).values
+    yy = d.iloc[:, 0].values.astype(float)
+    XX = sm.add_constant(d.iloc[:, 1:], has_constant="add").values
     names = ["const"] + list(d.columns[1:])
-    cens = yy <= lower_limit
+    a, b = lower_limit, upper_limit
+    cens_lo = yy <= a if a is not None else np.zeros(len(yy), bool)
+    cens_hi = yy >= b if b is not None else np.zeros(len(yy), bool)
+    inside = ~(cens_lo | cens_hi)
 
     def nll(theta):
-        b, log_s = theta[:-1], theta[-1]
+        beta, log_s = theta[:-1], theta[-1]
         s = np.exp(log_s)
-        xb = XX @ b
-        ll_c = stats.norm.logcdf((lower_limit - xb[cens]) / s)
-        ll_u = stats.norm.logpdf((yy[~cens] - xb[~cens]) / s) - log_s
-        return -(ll_c.sum() + ll_u.sum())
+        xb = XX @ beta
+        ll = stats.norm.logpdf((yy[inside] - xb[inside]) / s).sum() - log_s * inside.sum()
+        if cens_lo.any():
+            ll += stats.norm.logcdf((a - xb[cens_lo]) / s).sum()
+        if cens_hi.any():
+            ll += stats.norm.logsf((b - xb[cens_hi]) / s).sum()
+        return -ll
 
     b0 = np.linalg.lstsq(XX, yy, rcond=None)[0]
     theta0 = np.r_[b0, np.log(np.std(yy - XX @ b0))]
@@ -512,18 +584,37 @@ def tobit(y, X, lower_limit: float = 0.0, show: bool = True) -> dict:
     H = approx_hess(opt.x, nll)
     cov = np.linalg.inv(H)
     se = np.sqrt(np.diag(cov))
-    b, s = opt.x[:-1], np.exp(opt.x[-1])
-    scale = stats.norm.cdf((XX @ b - lower_limit) / s).mean()
-    tab = pd.DataFrame({"latent_coef": b, "se": se[:-1], "z": b / se[:-1],
-                        "p": 2 * (1 - stats.norm.cdf(np.abs(b / se[:-1]))),
-                        "marginal_effect_E[y|x]": b * scale}, index=names)
-    out = {"table": tab, "sigma": s, "llf": -opt.fun, "converged": opt.success,
-           "n_censored": int(cens.sum()), "n": len(yy)}
+    beta, s = opt.x[:-1], np.exp(opt.x[-1])
+
+    k = len(beta)
+    ames = _tobit_ames(opt.x, XX, a, b)
+    J = approx_fprime(opt.x, lambda th: _tobit_ames(th, XX, a, b), centered=True)
+    se_ames = np.sqrt(np.clip(np.diag(J @ cov @ J.T), 0, None))
+    cols = ["E[y|x]", "E[y|uncensored,x]", "P(uncensored|x)"]
+    me = pd.DataFrame({c: ames[i * k:(i + 1) * k] for i, c in enumerate(cols)}, index=names)
+    for i, c in enumerate(cols):
+        me[f"se {c}"] = se_ames[i * k:(i + 1) * k]
+    me = me.drop(index="const")[[cols[0], f"se {cols[0]}", cols[1], f"se {cols[1]}", cols[2], f"se {cols[2]}"]]
+
+    tab = pd.DataFrame({"latent_coef": beta, "se": se[:-1], "z": beta / se[:-1],
+                        "p": 2 * (1 - stats.norm.cdf(np.abs(beta / se[:-1]))),
+                        # kept from v1.3 for backward compatibility (= marginal_effects["E[y|x]"])
+                        "marginal_effect_E[y|x]": ames[:k]}, index=names)
+    out = {"table": tab, "marginal_effects": me, "sigma": s, "se_sigma": float(s * se[-1]),
+           "llf": -opt.fun, "converged": opt.success, "n": len(yy),
+           "n_censored": int(cens_lo.sum() + cens_hi.sum()),
+           "n_censored_lower": int(cens_lo.sum()), "n_censored_upper": int(cens_hi.sum()),
+           "lower_limit": a, "upper_limit": b}
     if show:
-        print(f"\nTobit (censored at {lower_limit}; {cens.sum()} of {len(yy)} censored), σ = {s:.4f}, "
-              f"log-likelihood = {-opt.fun:.2f}, converged = {opt.success}")
-        print(tab.to_string(float_format=_fmt))
-        print("Marginal effect on E(y|x) = Φ(xβ/σ)·β, averaged over the sample.")
+        lims = " and ".join(f"{side} at {v}" for side, v in (("below", a), ("above", b)) if v is not None)
+        print(f"\nTobit (censored {lims}; {cens_lo.sum()} below, {cens_hi.sum()} above, of {len(yy)}), "
+              f"σ = {s:.4f}, log-likelihood = {-opt.fun:.2f}, converged = {opt.success}")
+        print(tab.drop(columns="marginal_effect_E[y|x]").to_string(float_format=_fmt))
+        print("\nAverage marginal effects (delta-method SEs):")
+        print(me.to_string(float_format=_fmt))
+        print("E[y|x]: total effect on the observed outcome. E[y|uncensored,x]: intensive margin "
+              "(units inside the limits). P(uncensored|x): extensive margin. Report the one that "
+              "answers the question; latent coefficients are not effects on observed y.")
     return out
 
 
@@ -576,6 +667,7 @@ def main():
     ap.add_argument("--cols", help="comma-separated columns")
     ap.add_argument("--date", default="date", help="date column (optional)")
     ap.add_argument("--hac", type=int, help="HAC lags (time series)")
+    ap.add_argument("--ts", action="store_true", help="time series: add DW, Breusch-Godfrey, ARCH-LM")
     ap.add_argument("--lags", type=int, default=1, help="Johansen k_ar_diff")
     ap.add_argument("--break", dest="brk", help="date/label where the 2nd regime starts (Chow)")
     a = ap.parse_args()
@@ -592,7 +684,7 @@ def main():
         res = sm.OLS(data[a.y], sm.add_constant(data[xs])).fit(**cov)
         if a.action == "ols":
             print(res.summary())
-            ols_diagnostics(res, time_series=bool(a.hac))
+            ols_diagnostics(res, time_series=bool(a.hac) or a.ts)
         else:
             influence(res)
     elif a.action == "stationarity":
