@@ -1,0 +1,60 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.deps }} dependencies (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - deps: minimum
+            python: "3.12"
+          - deps: latest
+            python: "3.13"
+    env:
+      # One BLAS thread: floating-point sums happen in a fixed order, so results are reproducible.
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      PYTHONWARNINGS: ignore
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ matrix.deps }}" = "minimum" ]; then
+            pip install -r requirements-dev.txt -c ci/constraints-min.txt
+          else
+            pip install -r requirements-dev.txt
+          fi
+          pip list
+      - name: Test suites
+        run: |
+          status=0
+          for t in tests/test_*.py; do
+            echo "::group::$t"
+            python "$t" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+      - name: Worked examples run end to end
+        working-directory: examples
+        run: |
+          for f in 0*.py; do echo "== $f"; python "$f" > /dev/null || exit 1; done
+      - name: Packaged skill matches the source folder (same files, same contents)
+        run: |
+          mkdir -p "$RUNNER_TEMP/pkg"
+          unzip -q dist/econometrics.skill -d "$RUNNER_TEMP/pkg"
+          diff -r -x __pycache__ "$RUNNER_TEMP/pkg/econometrics" econometrics \
+            || { echo "dist/econometrics.skill is stale: rebuild it with 'zip -qrD dist/econometrics.skill econometrics -x \"*__pycache__*\"'"; exit 1; }

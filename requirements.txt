@@ -1,0 +1,18 @@
+# Core dependencies of the econometrics skill.
+# Lower bounds are the oldest versions on which the full test suite was run (see CI).
+numpy>=2.1
+pandas>=2.2
+scipy>=1.14
+statsmodels>=0.14.4
+linearmodels>=6.1
+arch>=7.2
+scikit-learn>=1.5
+tabulate>=0.9          # pandas needs it for Markdown export of regression tables
+
+# Optional, imported only by the functions that need them:
+#   rdrobust               regression discontinuity bandwidths and robust inference (causal.py)
+#   hmmlearn               Gaussian hidden Markov models (regimes.hmm_regimes)
+#   pymupdf, easyocr       PDF text and OCR (data_prep.pdf_text)
+#   requests               polite scraping (data_prep)
+#   sentence-transformers  text embeddings (text_data)
+#   wooldridge             textbook datasets used by the tests and examples
