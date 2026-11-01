@@ -88,6 +88,28 @@ check("with a debt beta, round trip still exact",
 comps = np.array([1.1, 1.4, 0.9])
 check("vectorized over comparables", fe.unlever_beta(comps, np.array([0.2, 0.8, 0.5]), 0.34).shape == (3,))
 
+hp = fe.unlever_beta(1.3, 0.6, 0.34, method="harris_pringle")
+check("Harris-Pringle: 1.3 / (1 + 0.6) = 0.8125 and round trip exact",
+      abs(float(hp) - 1.3 / 1.6) < 1e-12 and abs(fe.relever_beta(hp, 0.6, method="harris_pringle") - 1.3) < 1e-12)
+check("Harris-Pringle asset beta < Hamada asset beta when t > 0 (no tax shield credited to equity)", float(hp) < float(bu))
+check("Harris-Pringle with debt beta: (1.3 + 0.2*0.6) / 1.6",
+      abs(float(fe.unlever_beta(1.3, 0.6, debt_beta=0.2, method="harris_pringle")) - (1.3 + 0.12) / 1.6) < 1e-12)
+try:
+    fe.unlever_beta(1.3, 0.6, 0.34, method="mm")
+    check("unknown levering method raises", False)
+except ValueError:
+    check("unknown levering method raises", True)
+
+# Dimson beta: a thinly traded stock absorbs half of the market move with a one-day delay
+rmd = pd.Series(rng.normal(0.0004, 0.012, 1500), index=dates)
+thin = 0.5 * rmd + 0.5 * rmd.shift(1).fillna(0) + pd.Series(rng.normal(0, 0.012, 1500), index=dates)
+dm = fe.dimson_beta(thin, rmd, lags=1, leads=1)
+check("non-synchronous trading: OLS beta biased to ~0.5, Dimson beta CI covers the true 1.0",
+      abs(dm["ols_beta"] - 0.5) < 0.1 and dm["ci_low"] < 1.0 < dm["ci_high"], f"OLS {dm['ols_beta']:.2f}, Dimson {dm['beta']:.2f}")
+sync = 1.0 * rmd + pd.Series(rng.normal(0, 0.012, 1500), index=dates)
+ds = fe.dimson_beta(sync, rmd)
+check("synchronous stock: Dimson ~ OLS beta (difference < 2 SE)", abs(ds["beta"] - ds["ols_beta"]) < 2 * ds["se"])
+
 # ---------------------------------------------------------------------------------------------
 # Factor model (monthly, FF3-style)
 # ---------------------------------------------------------------------------------------------
@@ -134,6 +156,36 @@ try:
     check("overlapping estimation and event windows raise", False)
 except ValueError:
     check("overlapping estimation and event windows raise", True)
+
+# ---------------------------------------------------------------------------------------------
+# Repeated acquirers, skipped events and the cross-sectional CAR regression
+# ---------------------------------------------------------------------------------------------
+r_ = np.random.default_rng(31)
+rm2 = pd.Series(r_.normal(0.0003, 0.01, 900), index=dates[:900])
+R2, rows_ev = {}, []
+for j in range(30):
+    e = r_.normal(0, 0.018, 900)
+    for k, d0 in enumerate((350, 650)):                      # every firm announces two deals
+        stock = int(r_.integers(0, 2))
+        e[d0] += 0.02 - 0.03 * stock                         # cash deals +2%, stock deals -1%
+        rows_ev.append({"firm": f"f{j}", "date": rm2.index[d0], "stock_paid": stock, "size": r_.uniform(0.1, 1)})
+    R2[f"f{j}"] = 0.0002 + r_.uniform(0.6, 1.4) * rm2 + e
+R2 = pd.DataFrame(R2)
+R2.loc[:R2.index[300], "f0"] = np.nan                         # f0 listed recently: first event cannot be evaluated
+evdf = pd.DataFrame(rows_ev)
+es2 = fe.event_study(R2, rm2, evdf, est_win=(-250, -30), evt_win=(-5, 5), car_windows=((0, 0),))
+check("repeated acquirers: one event_id per deal, the unevaluable one listed as skipped",
+      es2["n_events"] == 59 and es2["skipped"] == ["f0_" + str(rm2.index[350].date())] and es2["ar"].index.is_unique)
+cr = fe.car_regression(es2, evdf, "CAR ~ stock_paid + size", window="(0, 0)", cluster="firm")
+check("car_regression: stock-paid deals ~3 p.p. lower (CI covers -0.03), skipped event dropped, clusters by acquirer",
+      cr["table"].loc["stock_paid", "ci_low"] < -0.03 < cr["table"].loc["stock_paid", "ci_high"] and cr["n"] == 59
+      and cr["n_clusters"] == 30 and any("not used" in w for w in cr["warnings"]),
+      f"{cr['table'].loc['stock_paid', 'estimate']:.4f}")
+try:
+    fe.event_study(R2, rm2, evdf.assign(event_id="same"), est_win=(-250, -30), evt_win=(-5, 5))
+    check("duplicated event_id raises", False)
+except ValueError:
+    check("duplicated event_id raises", True)
 
 # ---------------------------------------------------------------------------------------------
 # Event study: Monte Carlo size, with and without event-induced variance

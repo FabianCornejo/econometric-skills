@@ -178,8 +178,8 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | R `glmnet`, `pls::pcr`, `pls::plsr`, Stata `lasso` | `linear_models.shrinkage_compare` |
 | Stata `pdslasso`, R `hdm::rlassoEffect` | `linear_models.post_double_selection` |
 | R `leaps::regsubsets` | `linear_models.select_subsets` |
-| R `PerformanceAnalytics::CAPM.beta`, Stata `regress` on market | `finance_empirics.market_model`, `rolling_beta`, `adjusted_beta` |
-| Stata `estudy`, `eventstudy2`; R `estudy2` | `finance_empirics.event_study` |
+| R `PerformanceAnalytics::CAPM.beta`, Stata `regress` on market | `finance_empirics.market_model`, `rolling_beta`, `adjusted_beta`, `dimson_beta` |
+| Stata `estudy`, `eventstudy2`; R `estudy2` | `finance_empirics.event_study`, `car_regression` |
 | R `PerformanceAnalytics` (Sharpe, Sortino, Treynor, InformationRatio) | `finance_empirics.performance_ratios` |
 | R `tseries::portfolio.optim`, `PortfolioAnalytics` | `finance_empirics.efficient_frontier`, `shrink_cov` |
 | Stata `ritest`, R `ri2` | `causal.randomization_inference` |

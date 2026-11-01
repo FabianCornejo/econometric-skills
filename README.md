@@ -29,7 +29,7 @@ The mode changes the form of the answer, never the computations: every number co
 | Heterogeneous effects | CATE (DR-learner, linear DML, forests, meta-learners), BLP/GATES/CLAN, TOC/Qini, policy trees with costs | `hte.py` |
 | Panel, IV, limited dependent variables | FE/RE/Mundlak, IV/2SLS with weak-instrument checks, logit/probit/Tobit with marginal effects, count models | `diagnostics.py` + references |
 | Time series and forecasting | Unit roots, breaks, ARIMA/ARIMAX, VAR/SVAR, cointegration, walk-forward evaluation, Diebold-Mariano | `forecasting.py` |
-| Finance and risk | Betas for WACC (rolling, Blume/Vasicek, Hamada), factor models (Fama-French, NEFIN), event studies, performance ratios, Markowitz, GARCH, VaR/ES backtests, copulas, Kalman, regimes, look-ahead-free backtests | `finance_empirics.py`, `risk.py`, `dependence.py`, `state_space.py`, `regimes.py`, `backtest.py` |
+| Finance and risk | Betas for WACC (rolling, Dimson, Blume/Vasicek, Hamada/Harris-Pringle), factor models (Fama-French, NEFIN), event studies, performance ratios, Markowitz, GARCH, VaR/ES backtests, copulas, Kalman, regimes, look-ahead-free backtests | `finance_empirics.py`, `risk.py`, `dependence.py`, `state_space.py`, `regimes.py`, `backtest.py` |
 | Survival | Kaplan-Meier, Cox with clustered SEs, PH tests | `survival.py` |
 | Text as data | Regex coding, topics, classifiers, LLM coding with valid downstream inference (DSL) | `text_data.py` |
 | Segments | Logit leaf model with honest splits, temporal holdout and calibration | `segments.py` |
@@ -38,7 +38,7 @@ The mode changes the form of the answer, never the computations: every number co
 
 ### How it is validated
 
-- **364 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels and scipy, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
+- **373 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels and scipy, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
 - **Continuous integration** runs every test suite and worked example on the minimum and the latest supported dependency versions, and checks that `dist/econometrics.skill` matches the source.
 - **Blind evals** (`evals/`): plain-language prompts with objective must / must-not criteria, run in a fresh conversation before each release.
 - **Look-ahead discipline**: every rolling estimate uses only data available at the time; the usual traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, signal/return misalignment) are avoided in code and documented.

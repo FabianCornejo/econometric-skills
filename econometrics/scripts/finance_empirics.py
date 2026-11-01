@@ -10,10 +10,12 @@ Betas and cost of equity
     market_model(r_i, r_m, rf)                    alpha, beta (CAPM if rf is given), HAC SEs, R2, idiosyncratic vol
     rolling_beta(r_i, r_m, window, rf)            beta over a moving window with a 95% band
     adjusted_beta(beta, method, ...)              Blume (0.67 b + 0.33) or Vasicek (Bayesian shrinkage by SE)
-    unlever_beta / relever_beta                   Hamada (with optional debt beta): comparable-company betas
+    unlever_beta / relever_beta                   Hamada/Conine or Harris-Pringle (optional debt beta): comparables
+    dimson_beta(r_i, r_m, lags, leads)            beta for thinly traded stocks (sum of lead/lag coefficients)
     factor_model(r_i, factors, rf)                Fama-French 3/5, Carhart, NEFIN (Brazil) loadings and alpha
 
 Events and performance
+    car_regression(es, events, formula)          CARs on deal characteristics, skipped events dropped, clustered
     event_study(r, r_m, events, ...)              abnormal returns, CAR/CAAR, cross-sectional t, Patell,
                                                   BMP (robust to event-induced variance) and Corrado rank tests
     performance_ratios(r_p, r_b, rf)              Sharpe (with Lo SE), Sortino, Treynor, information ratio,
@@ -148,19 +150,68 @@ def adjusted_beta(beta: float, method: str = "blume", se: float | None = None, p
     return {"method": method, "raw_beta": float(beta), "adjusted_beta": float(adj), "weight_on_raw": float(w)}
 
 
-def unlever_beta(beta_levered, debt_to_equity, tax_rate, debt_beta: float = 0.0):
-    """Asset (unlevered) beta from an equity beta, Hamada with optional debt beta:
-    beta_U = (beta_L + beta_D (1 - t) D/E) / (1 + (1 - t) D/E). Use market values of D and E,
-    and each comparable's own D/E and marginal tax rate (34% for Brazilian companies under
-    lucro real: 25% IRPJ + 9% CSLL)."""
-    k = (1 - tax_rate) * np.asarray(debt_to_equity, float)
+def _lever_factor(debt_to_equity, tax_rate, method):
+    de = np.asarray(debt_to_equity, float)
+    if method == "hamada":
+        return (1 - tax_rate) * de
+    if method == "harris_pringle":
+        return de
+    raise ValueError("method must be 'hamada' or 'harris_pringle'")
+
+
+def unlever_beta(beta_levered, debt_to_equity, tax_rate: float = 0.0, debt_beta: float = 0.0,
+                 method: str = "hamada"):
+    """Asset (unlevered) beta from an equity beta.
+
+    method "hamada" (fixed amount of debt, tax shield as risky as the debt; with debt_beta > 0 this
+    is Conine's 1980 extension): beta_U = (beta_L + beta_D (1 - t) D/E) / (1 + (1 - t) D/E).
+    method "harris_pringle" (debt rebalanced to a constant D/E, tax shield as risky as the assets;
+    tax_rate is ignored): beta_U = (beta_L + beta_D D/E) / (1 + D/E).
+    Use market values of D and E averaged over the beta's estimation window, and each comparable's
+    own D/E and marginal tax rate (34% for Brazilian companies under lucro real: 25% IRPJ + 9% CSLL).
+    Use the same method to unlever and to relever."""
+    k = _lever_factor(debt_to_equity, tax_rate, method)
     return (np.asarray(beta_levered, float) + debt_beta * k) / (1 + k)
 
 
-def relever_beta(beta_unlevered, debt_to_equity, tax_rate, debt_beta: float = 0.0):
-    """Equity beta at a target capital structure: beta_L = beta_U + (beta_U - beta_D)(1 - t) D/E."""
-    k = (1 - tax_rate) * np.asarray(debt_to_equity, float)
+def relever_beta(beta_unlevered, debt_to_equity, tax_rate: float = 0.0, debt_beta: float = 0.0,
+                 method: str = "hamada"):
+    """Equity beta at a target capital structure (same methods as unlever_beta):
+    beta_L = beta_U + (beta_U - beta_D) k, with k = (1 - t) D/E (Hamada/Conine) or D/E (Harris-Pringle)."""
+    k = _lever_factor(debt_to_equity, tax_rate, method)
     return np.asarray(beta_unlevered, float) + (np.asarray(beta_unlevered, float) - debt_beta) * k
+
+
+def dimson_beta(r_i, r_m, lags: int = 1, leads: int = 1, rf=None, hac_lags: int | None = None) -> dict:
+    """Dimson (1979) beta for thinly traded stocks: regress r_i on the market return at t and its
+    lags and leads; beta = sum of the coefficients (SE of the sum from the HAC covariance).
+    When a stock does not trade every day (many zero returns, common among Brazilian small caps),
+    its price reacts to market news with a delay and the plain OLS beta is biased toward zero.
+    Compare with market_model: a Dimson beta well above the OLS beta signals that bias; weekly or
+    monthly returns are the other remedy."""
+    import statsmodels.api as sm
+    if rf is not None:
+        ri, rm, f = _align(r_i, r_m, rf if isinstance(rf, pd.Series) else pd.Series(rf, index=r_i.index))
+        y, x = ri - f, rm - f
+    else:
+        y, x = _align(r_i, r_m)
+    cols = {"m(t)": x}
+    for k in range(1, lags + 1):
+        cols[f"m(t-{k})"] = x.shift(k)
+    for k in range(1, leads + 1):
+        cols[f"m(t+{k})"] = x.shift(-k)
+    X = pd.DataFrame(cols)
+    d = pd.concat([y.rename("_y"), X], axis=1).dropna()
+    n = len(d)
+    hl = _nw_lags(n) if hac_lags is None else hac_lags
+    fit = sm.OLS(d["_y"], sm.add_constant(d[list(cols)])).fit(cov_type="HAC", cov_kwds={"maxlags": hl})
+    a = np.array([0.0] + [1.0] * len(cols))
+    b = float(a @ fit.params.to_numpy())
+    se = float(np.sqrt(a @ fit.cov_params().to_numpy() @ a))
+    ols = market_model(y, x, hac_lags=hl)
+    return {"method": f"Dimson beta ({lags} lag(s), {leads} lead(s))", "beta": b, "se": se,
+            "ci_low": b - 1.96 * se, "ci_high": b + 1.96 * se, "coefficients": fit.params.drop("const"),
+            "ols_beta": ols["beta"], "share_zero_returns": float((y == 0).mean()), "n": n}
 
 
 def factor_model(r_i, factors: pd.DataFrame, rf=None, hac_lags: int | None = None,
@@ -192,8 +243,12 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
     """Short-run event study (MacKinlay 1997; Campbell, Lo & MacKinlay ch. 4; Ang 5.5).
 
     r: returns, one column per firm, indexed by trading date; r_m: market returns (None for the
-    constant-mean model); events: dict {firm: date} or DataFrame with columns firm, date (the event
-    day is the first trading day on or after the date). Windows are in trading days relative to
+    constant-mean model); events: dict {firm: date} or DataFrame with columns firm, date and
+    optionally event_id (needed when a firm has several events; built as firm_date otherwise). The
+    event day is the first trading day on or after the date: shift announcements made after the
+    close to the next day before calling. Results (ar, car) are indexed by event_id; events that
+    cannot be evaluated are listed in "skipped". For a cross-sectional regression of CARs on deal
+    characteristics use car_regression, which aligns events, drops skipped ones and clusters. Windows are in trading days relative to
     day 0; the estimation window must end before the event window starts.
     model "market" (alpha + beta r_m), "market_adjusted" (r - r_m, no estimation) or "mean".
 
@@ -209,8 +264,14 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
     if isinstance(events, dict):
         ev = pd.DataFrame({"firm": list(events), "date": pd.to_datetime(list(events.values()))})
     else:
-        ev = events.rename(columns=str.lower)[["firm", "date"]].copy()
+        ev = events.rename(columns=str.lower).copy()
         ev["date"] = pd.to_datetime(ev["date"])
+    if "event_id" not in ev.columns:
+        dup = ev["firm"].duplicated(keep=False)
+        ev["event_id"] = np.where(dup, ev["firm"].astype(str) + "_" + ev["date"].dt.strftime("%Y-%m-%d"),
+                                  ev["firm"].astype(str))
+    if ev["event_id"].duplicated().any():
+        raise ValueError("event_id must be unique (one row per event)")
     if est_win[1] >= evt_win[0]:
         raise ValueError("the estimation window must end before the event window starts")
     idx = r.index
@@ -218,16 +279,16 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
     L1 = est_win[1] - est_win[0] + 1
     rows, ar_mat, sar_mat, rank_day0, skipped = [], [], [], [], []
     for _, e in ev.iterrows():
-        f = e["firm"]
+        f, eid = e["firm"], e["event_id"]
         pos = idx.searchsorted(e["date"])
         if f not in r.columns or pos + evt_win[1] >= len(idx) or pos + est_win[0] < 0:
-            skipped.append(f)
+            skipped.append(eid)
             continue
         est = slice(pos + est_win[0], pos + est_win[1] + 1)
         evw = slice(pos + evt_win[0], pos + evt_win[1] + 1)
         ye, yv = r[f].iloc[est].to_numpy(float), r[f].iloc[evw].to_numpy(float)
         if np.isnan(ye).mean() > 0.2 or np.isnan(yv).any():
-            skipped.append(f)
+            skipped.append(eid)
             continue
         if model == "market":
             xe, xv = r_m.iloc[est].to_numpy(float), r_m.iloc[evw].to_numpy(float)
@@ -260,10 +321,10 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
         rk = stats.rankdata(allar)
         rank_day0.append((rk[len(allar) - len(ar) + list(days).index(0)] - (len(allar) + 1) / 2,
                           rk - (len(allar) + 1) / 2, len(ar)))
-        rows.append({"firm": f, "event_date": idx[pos], "s2": s2, "L1": int(np.sum(~np.isnan(ar_est)))})
+        rows.append({"event_id": eid, "firm": f, "event_date": idx[pos], "s2": s2, "L1": int(np.sum(~np.isnan(ar_est)))})
     if not ar_mat:
         raise ValueError("no event could be evaluated (check dates, windows and data coverage)")
-    AR = pd.DataFrame(ar_mat, columns=days, index=[x["firm"] for x in rows])
+    AR = pd.DataFrame(ar_mat, columns=days, index=pd.Index([x["event_id"] for x in rows], name="event_id"))
     SAR = pd.DataFrame(sar_mat, columns=days, index=AR.index)
     N = len(AR)
     aar = AR.mean()
@@ -299,6 +360,47 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
     return {"method": f"event study ({model} model)", "caar": pd.DataFrame(caar_rows).set_index("window"),
             "aar": aar_tab, "ar": AR, "car": pd.DataFrame(cars), "corrado_day0_z": float(corrado),
             "p_corrado_day0": float(2 * stats.norm.sf(abs(corrado))), "n_events": N, "skipped": skipped}
+
+
+def car_regression(es: dict, events: pd.DataFrame, formula: str, window: str = "(-1, 1)",
+                   cluster: str | None = None, id_col: str = "event_id") -> dict:
+    """Cross-sectional regression of CARs on event characteristics (deal size, payment, target
+    listed, same industry...), e.g. formula = "CAR ~ np.log(rel_size) + C(payment) + listed_target".
+    events: the same events table passed to event_study plus the characteristics (with event_id,
+    or firm/date from which event_study built it). CARs are matched by event_id, events skipped
+    by event_study are dropped, and the clustered covariance uses the groups of the rows actually
+    used (cluster by acquirer when firms announce several deals). HC3 when cluster is None."""
+    import statsmodels.formula.api as smf
+    ev = events.rename(columns=str.lower).copy()
+    if id_col not in ev.columns:
+        ev["date"] = pd.to_datetime(ev["date"])
+        dup = ev["firm"].duplicated(keep=False)
+        ev[id_col] = np.where(dup, ev["firm"].astype(str) + "_" + ev["date"].dt.strftime("%Y-%m-%d"),
+                              ev["firm"].astype(str))
+    if window not in es["car"].columns:
+        raise KeyError(f"window {window!r} not in event_study output {list(es['car'].columns)}")
+    car = es["car"][window].rename("CAR")
+    d = ev.merge(car, left_on=id_col, right_index=True, how="inner")
+    import patsy
+    y, X = patsy.dmatrices(formula, d, return_type="dataframe", NA_action="drop")
+    used = d.loc[X.index]
+    if cluster:
+        fit = smf.ols(formula, used).fit(cov_type="cluster", cov_kwds={"groups": used[cluster]})
+        n_cl = int(used[cluster].nunique())
+    else:
+        fit = smf.ols(formula, used).fit(cov_type="HC3")
+        n_cl = None
+    ci = fit.conf_int(ALPHA)
+    tab = pd.DataFrame({"estimate": fit.params, "se": fit.bse, "z": fit.tvalues, "p": fit.pvalues,
+                        "ci_low": ci[0], "ci_high": ci[1]})
+    warn = []
+    if n_cl is not None and n_cl < 40:
+        warn.append(f"only {n_cl} clusters: consider estimation.wild_cluster_bootstrap")
+    dropped = len(ev) - len(used)
+    if dropped:
+        warn.append(f"{dropped} events not used (skipped by event_study or missing characteristics)")
+    return {"method": f"cross-sectional regression of CAR{window}", "table": tab, "n": int(fit.nobs),
+            "n_clusters": n_cl, "r2": float(fit.rsquared), "warnings": warn, "model": fit}
 
 
 # =============================================================================
