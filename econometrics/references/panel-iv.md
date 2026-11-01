@@ -115,7 +115,7 @@ re.theta, re.variance_decomposition   # weight of the individual component
 
 - Observations of the same unit are correlated: clustering by entity is the default (`cluster_entity=True`); common time shocks → two-way clustering (`cluster_time=True` too) or Driscoll-Kraay (`cov_type="kernel"`).
 - **The number of clusters is the effective sample size** (Hansen): G = 20 is a very small sample.
-- **Few clusters** (Angrist-Pischke: fewer than ~42): clustered errors understate uncertainty. Options: use t with G − k degrees of freedom; BRL/CR2 bias correction; wild cluster bootstrap; report the larger of the robust and conventional errors.
+- **Few clusters** (Angrist-Pischke: fewer than ~42): clustered errors understate uncertainty. Options: use t with G − k degrees of freedom; BRL/CR2 bias correction; wild cluster bootstrap (`estimation.wild_cluster_bootstrap(df, formula, coef, cluster)`: restricted bootstrap-t with Webb weights when G < 12, p-value and test-inversion CI; Stata `boottest`); report the larger of the robust and conventional errors.
 - **At what level to cluster** (Hansen): too fine → bias (errors too small); too aggregate → imprecise errors. There is no definitive rule; cluster at the level where shocks are shared and where treatment varies, checking there are still enough clusters.
 
 ## 9. Hausman, Mundlak and Breusch-Pagan LM

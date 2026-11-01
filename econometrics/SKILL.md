@@ -1,214 +1,111 @@
 ---
 name: econometrics
-description: Rigorous applied econometrics in Python (statsmodels, linearmodels, arch) — regression with full diagnostics, IV, panel data, logit/probit/tobit, causal designs (matching/IPW/AIPW, double ML, regression discontinuity, staggered DiD/event studies, synthetic control), survival/Cox models, text as data (regex, TF-IDF, topics, classifiers, LLM coding with valid downstream inference), logit leaf model, time series (auto-ARIMA/ARIMAX, VAR, cointegration), GARCH, VaR/ES backtests, copulas, Kalman, regime switching, look-ahead-free backtests, demand elasticities, data collection and cleaning (BCB/IBGE/TSE/CNJ, scraping, PDFs), publication tables. Use for any regression, effect of X on Y, policy or law evaluation, elasticity, forecast, duration or time-to-event question, coding of documents into variables (including with an LLM), customer or churn segments, VaR or tail risk, hedge ratio, regimes, strategy backtest, or "does X explain/cause/predict Y?" question, even without the word econometrics.
+description: Rigorous applied econometrics in Python, as consultant, teacher or reviewer - regression with full diagnostics, IV, panel data, logit/probit/tobit, causal designs (matching/AIPW, double ML, RD, staggered DiD, synthetic control), heterogeneous effects (CATE, causal forests, meta-learners, BLP/GATES, targeting policies), custom maximum likelihood, delta method, wild cluster bootstrap, survival, text as data and LLM coding with valid inference, time series (ARIMA, VAR, cointegration), GARCH, VaR/ES, copulas, Kalman, regimes, backtests, demand elasticities, Brazilian data, publication tables. Use for any regression, effect of X on Y, for whom an effect is larger or whom to target, policy or law evaluation, elasticity, forecast, time-to-event, coding documents into variables, churn segments, tail risk, strategy backtest, teaching or explaining an econometric method, or reviewing someone else's empirical analysis, even without the word econometrics.
 ---
 
 # Applied econometrics
 
-This skill turns an economic question ("do interest rates hurt my sales?", "what is the price elasticity of this product?") into an estimated, diagnosed and defensible model. The value is in the **rigor of the process**: anyone can run `sm.OLS(...).fit()`; what separates a reliable analysis from a misleading one is the specification, the assumption tests, the identification strategy, and honesty about what the model does not prove.
+This skill turns an economic question into an estimated, diagnosed and defensible answer, and explains or audits such answers. The value is in the **rigor of the process**: anyone can run `sm.OLS(...).fit()`; what makes an analysis reliable is the specification, the assumption tests, the identification strategy and honesty about what the model does not prove. Methods follow Wooldridge, Greene, Hansen, Angrist-Pischke, Cameron-Trivedi, Hamilton, Chernozhukov et al. and EconML (`references/bibliography.md`).
 
-The methodology follows the reference literature (Wooldridge, Greene, Hansen, Angrist-Pischke, Cameron-Trivedi, Hamilton, Enders, Stock, Kilian, Huse-Salvo) and the protocols taught in graduate econometrics and time-series courses. `references/bibliography.md` points to where each topic can be studied further.
+Answer in the user's language; these instructions are in English.
 
-Answer in the user's language; the skill's instructions are in English but the analysis, tables and report should match the conversation.
+## 1. Pick the mode
 
-## Resources in this skill
+| Mode | When | Deliverable | Read |
+|---|---|---|---|
+| **Consultant** (default) | Estimate, test, forecast, evaluate a policy | Study card, analysis, report + reproducible script | `references/workflow.md`, `references/interpretation-rules.md` |
+| **Teacher** | "Explain", "teach", "why does...", a class, exam or exercises | Method card: intuition, model, assumptions, estimator, derivation, simulation, code, diagnostics, interpretation, pitfalls, exercise | `references/teaching.md` |
+| **Reviewer** | Review, audit or referee a paper, report, expert opinion or model | Opinion: claim, verdict, findings by severity, what would change the verdict | `references/review-checklist.md` |
 
-| File | When to read |
+Modes change the form of the answer, never the computations: every number comes from the same scripts and rules.
+
+## 2. Route the question
+
+Answer four questions, then read only the files they point to: (1) the **goal**: an effect, a causal effect without an experiment, for whom the effect is larger or whom to treat, a forecast, a risk measure; (2) the **data structure and type of y**; (3) the **source of identification**: experiment, observed confounders, instrument, cutoff, adoption date, single treated unit; (4) **can the effect vary across units?**
+
+| Situation | Reference | Main functions |
+|---|---|---|
+| Cross-section, continuous y | `ols-regression.md` | `diagnostics.ols_diagnostics`, `specification.*` |
+| Time series (levels, lags, cointegration, VAR) | `time-series.md` | `diagnostics.stationarity`, `cointegration` |
+| Panel data, endogeneity, instruments | `panel-iv.md` | `diagnostics.mundlak_test`, `endogeneity_test`, `overid_test` |
+| Binary, count, censored, fractional or ordered y | `limited-dependent.md` | `diagnostics.tobit`, `count_diagnostics` |
+| Prices and quantities, elasticities, pass-through | `demand-elasticities.md` | IV recipes |
+| Effect of a policy, law, decision or program (non-random) | `causal-inference.md` | `causal.aipw`, `dml_plr`, `rdd`, `att_gt`, `synth` |
+| For whom the effect is larger; whom to treat | `heterogeneous-effects.md` | `hte.cate_fit`, `blp_test`, `gates`, `policy_tree` |
+| Custom likelihood, NLS, function of parameters, few clusters | `estimation-theory.md` | `estimation.mle`, `delta_method`, `wild_cluster_bootstrap` |
+| Time until an event, with censoring | `survival.md` | `survival.cox`, `ph_test` |
+| Documents into variables (incl. LLM coding) | `text-as-data.md` | `text_data.llm_classify`, `dsl_regression` |
+| Binary y with segments whose drivers differ (prediction) | `limited-dependent.md` §9 | `segments.logit_leaf_model` |
+| Messy files, scraping, PDFs; fetching data | `data-collection-wrangling.md`, `data-sources.md` | `data_prep.*` |
+| Returns and volatility | `volatility.md` | `arch` recipes |
+| VaR and Expected Shortfall | `risk-var.md` | `risk.*` |
+| Joint extremes, contagion | `dependence-copulas.md` | `dependence.fit_copulas` |
+| Time-varying relations, regimes, pairs | `state-space-regimes.md` | `state_space.*`, `regimes.*` |
+| Forecasts and model-based strategies | `forecasting-backtesting.md` | `forecasting.*`, `backtest.*` |
+| Translating Stata, EViews or R code | `software-equivalents.md` | |
+
+## 3. Consultant workflow
+
+Full detail, code and the diagnostic order are in `references/workflow.md`. Explain each step and why it is done.
+
+0. **Study card** before any estimate: question, estimand, design, identifying assumption in words, y, X (effect modifiers), W (confounders), Z (instruments), data, threats, robustness plan.
+1. **Frame** the hypothesis and expected signs; classify the goal (effect, causal effect, heterogeneity, forecast).
+2. **Identify the structure** of the data (table above).
+3. **Obtain and audit** the data: source and code, frequency, nominal vs real, breaks, missing values (`data_prep.missing_report`), N per parameter.
+4. **Specify and estimate**: the simplest model that answers the question; robust SEs by default.
+5. **Diagnose** in order: functional form, heteroskedasticity, autocorrelation, ARCH, normality, collinearity, influence, stationarity, stability, exogeneity.
+6. **Test robustness**: at least two variations (specification, subsample, estimator, definition, sensitivity to unobserved confounding).
+7. **Interpret and report**: answer with magnitude and interval, data, model, results, diagnostics, robustness, limitations.
+
+## 4. Non-negotiable rules
+
+Full versions and reasons in `references/interpretation-rules.md`.
+
+- **Design before data**: choose the estimand, design, covariates, bandwidths and windows before looking at outcomes.
+- **DiD**: ask whether the adoption date is exact (and its source), announced in advance or gradual; run `causal.did_timing_sensitivity` next to `att_gt`; relay any timing WARNING in plain words.
+- **Robust SEs by default** (HC3; HAC for time series). **Cluster where the regressor of interest varies** (a judge's sex: by judge, not by court), the same level in text and code; report the number of clusters; with fewer than ~40, add `estimation.wild_cluster_bootstrap`.
+- **Association is not causation**: causal language only with an identification strategy; Granger causality is predictive precedence; say which way remaining bias probably goes.
+- **Statistical is not economic significance**: magnitude and interval, 2-3 significant digits, forecasts with intervals.
+- **Interpret by functional form** (log-log elasticity, log-lin 100*(e^b - 1)%); **average marginal effects** in nonlinear models (Tobit: say which margin); **long-run effects** with delta-method SEs for lags; **prediction vs confidence intervals**, with smearing for log-y.
+- **No look-ahead** in anything used to forecast, signal or manage risk at time t.
+- **LLM-coded variables are measurements with error**: hand-code a random sample with known probabilities and use `text_data.dsl_regression`; report naive and corrected side by side.
+- **Segmented logit**: benchmarks must contain every regressor of the leaf model; report segments only if they recur across seeds.
+- **Heterogeneous effects only with evidence**: `hte.blp_test` rejects and `hte.gates` separates groups, on out-of-fold predictions; compare a linear and a flexible model; value policies on held-out units.
+- **Run more than one model** for causal claims (simple structural and flexible); disagreement is a finding.
+- **Advice must match the tools**: never recommend a step and show code that does something else; if no function exists, say so and write the code.
+- **No invented numbers**: every figure comes from a computation run in the session or a cited source.
+
+## 5. Output contract
+
+New and refactored functions return the same shapes so results can be compared and tabulated: a single estimand is a dict with `estimand`, `estimate`, `se`, `ci_low`, `ci_high`, `p`, `n` (plus `method` and `warnings`); several parameters come as a DataFrame `table` with columns `estimate`, `se`, `z` or `t`, `p`, `ci_low`, `ci_high`. Relay every entry of `warnings` to the user. Tables for reports: `reporting.regression_table` and `export_table` (Markdown, Excel, LaTeX).
+
+## 6. Scripts
+
+Import with `sys.path.insert(0, '<skill>/scripts')`. They are tested starting points: read and adapt them.
+
+| Script | Contents |
 |---|---|
-| `scripts/diagnostics.py` | Whenever you estimate a model: test batteries with plain-language conclusions (OLS, influence, Chow, stationarity with ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Tobit with lower/upper limits and three marginal effects, Mundlak/CRE, count overdispersion, Diebold-Mariano) |
-| `scripts/specification.py` | Specification and sensitivity: FGLS for heteroskedasticity, CI vs. prediction intervals (with log-y smearing), long-run effects of distributed lags/ADL, standardized coefficients, exact omitted-variable bias, Oster δ, Cinelli-Hazlett robustness value |
-| `scripts/forecasting.py` | Forecasts: auto-ARIMA (statsmodels only), ARIMAX with lagged regressors, VAR forecasts, walk-forward evaluation, naive/seasonal/historical-mean benchmarks, DM and Pesaran-Timmermann tests |
-| `scripts/backtest.py` | Turning a forecast or signal into positions: one-bar-lag backtest with costs, performance table, walk-forward splits, time-series momentum, Sharpe bootstrap CI |
-| `scripts/risk.py` | VaR/ES (historical, normal/t, EWMA, filtered historical simulation, GARCH) and Kupiec/Christoffersen/Basel backtests |
-| `scripts/dependence.py` | Rank correlations, tail dependence, copulas (Gaussian, t, Clayton, Gumbel, Frank, rotations) by MLE, copula simulation, mutual information, distance correlation |
-| `scripts/state_space.py` | Kalman filter with time-varying coefficients (MLE of noise variances), half-life, Hurst, cointegration pretest, pairs positions and returns |
-| `scripts/regimes.py` | Markov-switching models, Gaussian HMM with filtered probabilities, K-means on features, regime summaries |
-| `scripts/causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD (bandwidth, robustness, density test, fuzzy), TWFE event study, Callaway-Sant'Anna (with anticipation), DiD timing sensitivity and uncertain adoption dates, synthetic control with placebo inference |
-| `scripts/survival.py` | Kaplan-Meier, log-rank, Cox with hazard ratios and clustered SE, proportional-hazards test, person-period expansion |
-| `scripts/text_data.py` | Regex coding with audit snippets, TF-IDF, LDA, text clustering, TF-IDF + logit classifier, validation against hand coding, misclassification correction, similarity to a reference group; LLM coding constrained to a label set with probabilities and uncertainty (LogTokU), sampling of the hand-coded subsample, and `dsl_regression` for valid OLS/logit on LLM-coded variables |
-| `scripts/segments.py` | Logit leaf model: tree segments + one logit per segment, honest splitting, AMEs by segment, holdout AUC, top-decile lift, Brier score and calibration vs pooled logit, tree and theory-based benchmark formulas; time-based holdout (`time_col`); categorical `segment_by` with a warning when the tree ignores it; `leaf_model_stability` across seeds |
-| `scripts/data_prep.py` | Reading awkward files (encodings, `;` CSVs, XML/HTML ".xls", JSON, large CSVs), audit, missing-data report (patterns, complete-case N, MCAR check), safe merges, Brazilian numbers, mojibake, PDF text/OCR, polite scraping |
-| `scripts/reporting.py` | Publication-style regression tables (outreg2/esttab style) with FE rows, odds/hazard ratios, export to Markdown/Excel/LaTeX |
-| `references/ols-regression.md` | Every regression: functional forms, dummies, diagnostic order, HC/HAC/GLS, multicollinearity, influence, measurement error |
-| `references/time-series.md` | Data with a time dimension: unit roots, breaks, ARIMA/ETS/ARFIMA, ADL, cointegration/VECM, VAR/SVAR/BVAR, forecast evaluation and combination |
-| `references/panel-iv.md` | Endogeneity, instruments, simultaneous equations, panel data (FE/RE), difference-in-differences, dynamic panels |
-| `references/limited-dependent.md` | Binary, count, censored, fractional or ordered y (LPM, logit, probit, tobit, Heckman, PPML); segment-specific logits (§9) |
-| `references/demand-elasticities.md` | Prices, promotions, cannibalization, cost pass-through, elasticities |
-| `references/volatility.md` | Financial returns, exchange rates: stylized facts and GARCH family |
-| `references/risk-var.md` | VaR and Expected Shortfall: estimators, backtests, model choice |
-| `references/forecasting-backtesting.md` | Any out-of-sample forecast or model-based strategy: auto-ARIMA, ARIMAX, VAR forecasts, walk-forward, benchmarks, backtest conventions, momentum, multiple testing |
-| `references/dependence-copulas.md` | Joint behavior beyond correlation: tail dependence, copulas, mutual information |
-| `references/state-space-regimes.md` | Time-varying coefficients (Kalman), pairs trading, Markov switching, HMM, clustering of regimes |
-| `references/causal-inference.md` | Any causal question without randomization: choosing a design, matching/weighting, double ML, RD, staggered DiD, synthetic control, law-and-economics designs (judge leniency, movers) |
-| `references/survival.md` | Time until an event, with censoring: Kaplan-Meier, Cox, PH checks, competing risks |
-| `references/text-as-data.md` | Turning documents into variables and validating them; LLM coding, design of the hand-coded sample, and valid regressions on LLM-coded variables (§6–7) |
-| `references/data-collection-wrangling.md` | Messy files, large files, merges, scraping, PDFs/OCR, Brazilian administrative and judicial data |
-| `references/data-sources.md` | Fetching data (FRED, World Bank, IMF, OECD, BCB/SGS, IBGE/SIDRA, Ipeadata) |
-| `references/software-equivalents.md` | Translating Stata/EViews procedures into Python |
-| `references/bibliography.md` | Going deeper on a topic in the reference literature |
+| `diagnostics.py` | OLS battery, influence, Chow, ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Mundlak/CRE, Tobit with three margins, count overdispersion, Diebold-Mariano |
+| `specification.py` | FGLS, CI vs prediction intervals with smearing, long-run effects, standardized coefficients, exact OVB, Oster delta, Cinelli-Hazlett robustness value |
+| `estimation.py` | Generic MLE (Newton/BFGS; Hessian, OPG, sandwich, cluster SEs), LR/Wald/LM trinity, NLS, delta method, pairs/cluster bootstrap, wild cluster bootstrap-t with CI |
+| `causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD with robustness, TWFE event study, Callaway-Sant'Anna, DiD timing sensitivity, synthetic control |
+| `hte.py` | CATE (DR-learner, linear DML, forest, T/S/X-learners), BLP calibration test, GATES, CLAN, TOC/AUTOC/Qini, R-score, policy trees and policy value |
+| `forecasting.py`, `backtest.py` | Auto-ARIMA, ARIMAX, VAR forecasts, walk-forward, benchmarks, DM/PT tests; look-ahead-free backtests, momentum, Sharpe CI |
+| `risk.py`, `dependence.py` | VaR/ES (historical, parametric, EWMA, FHS, GARCH) and backtests; copulas, tail dependence, mutual information |
+| `state_space.py`, `regimes.py` | Kalman time-varying coefficients, half-life, pairs; Markov switching, HMM, K-means regimes |
+| `survival.py` | Kaplan-Meier, log-rank, Cox with clustered SEs, PH test, person-period data |
+| `text_data.py` | Regex coding, TF-IDF, LDA, classifiers, validation, LLM coding with probabilities and uncertainty, DSL regression |
+| `segments.py` | Logit leaf model with honest splits, benchmarks, temporal holdout, calibration, stability |
+| `data_prep.py`, `reporting.py` | Awkward files, audits, missing-data report, safe merges, Brazilian numbers, PDFs, scraping; regression tables |
 
-Read only the references the case needs. The scripts are starting points: read the code and adapt it when needed. Import them with `sys.path.insert(0, '<skill>/scripts')`; `forecasting.evaluate` imports `diagnostics`.
-
-## Combining with other skills
-
-- A statistical-analysis/EDA skill, if available, for the initial exploration (distributions, outliers, correlation ≠ causation caveats); this skill takes over at the modeling stage.
-- The available data-visualization skill for charts (observed vs. fitted, residuals, impulse responses, forecasts with intervals).
-- The skill for the delivery format (spreadsheet, document, slides) when the result becomes a file.
-- Any "no invented numbers" skill, if available, as reinforcement: no figure without a computation or a source.
-
-## Environment
+## 7. Environment
 
 ```bash
-python3 -c "import statsmodels, linearmodels, arch" 2>/dev/null || \
-  pip install --break-system-packages -q statsmodels linearmodels arch
+python3 -c "import statsmodels, linearmodels, arch, sklearn" 2>/dev/null || \
+  pip install --break-system-packages -q statsmodels linearmodels arch scikit-learn
 ```
-For causal designs and text: `scikit-learn` (required by `causal.aipw/dml_plr` and `text_data`); `rdrobust` (recommended for RD inference). Optional depending on the case: `pandas-datareader`/`fredapi`, `wbgapi`, `python-bcb`, `sidrapy`, `yfinance` (data), `ruptures` (multiple breaks), `pydynpd` (dynamic panels), `scikit-learn` (ROC/AUC, cross-validation, K-means, mutual information), `hmmlearn` (hidden Markov models), `transformers` + `torch` (local LLM coding with token probabilities). `pmdarima` is not needed: `forecasting.auto_arima` covers it.
+Optional by case: `rdrobust` (RD inference), `hmmlearn`, `ruptures`, `pydynpd`, `econml` (causal forests with CIs, IV and dynamic CATE), `transformers` + `torch` (local LLM coding), data clients (`python-bcb`, `sidrapy`, `wbgapi`, `fredapi`, `yfinance`).
 
-## Workflow
+## 8. Combining with other skills and deliverables
 
-Follow the steps in order; each exists because skipping it produces a specific kind of error. Explain to the user what is being done at each step and why.
-
-### 1. Frame the question and the hypothesis
-
-Before touching the data, write down: dependent variable, regressors, expected sign of each coefficient and why (theory or business logic). This prevents "fishing" across specifications until something is significant.
-
-Classify the goal, because it changes the right model:
-- **Estimate an effect** (elasticity, policy impact): the focus is an unbiased coefficient → identification, endogeneity, omitted variables.
-- **Estimate a causal effect without an experiment**: choose the design first (selection on observables, RD, DiD/event study, synthetic control, IV) and write its identifying assumption in words → `causal-inference.md`.
-  - **DiD/event study: settle the treatment date before estimating.** Ask the user whether the adoption date is exact (and its source), whether it was announced or anticipated, and whether adoption was gradual within units. Never assume the date is right because it is in the data. Then run `causal.did_timing_sensitivity` (or `did_uncertain_dates` when only a window is known) next to `att_gt`, and report the date-robust result with the main one (`causal-inference.md` §6.1). If `att_gt` or `event_study` prints a timing WARNING, tell the user in plain words before reporting any effect.
-- **Forecast**: the focus is out-of-sample error → time-based validation and comparison with naive benchmarks. A model can forecast well without its coefficients having a causal interpretation.
-
-### 2. Identify the data structure
-
-| Structure / type of y | Example | Reference |
-|---|---|---|
-| Cross-section, continuous y | 500 stores in one month | `ols-regression.md` |
-| Time series | Monthly sales 2015–2026 | `time-series.md` |
-| Panel | 80 stores × 48 months | `panel-iv.md` |
-| Binary, count or censored y | Default, number of orders, spending with zeros | `limited-dependent.md` |
-| Price and quantity | Elasticity, promotion | `demand-elasticities.md` |
-| Effect of a policy, law, decision or program (non-random) | Effect of a reform on case duration | `causal-inference.md` |
-| Time until an event, with censored spells | Time to decision, tenure, churn, default | `survival.md` |
-| Documents (decisions, contracts, tenders, news) | Outcome of health-litigation decisions | `text-as-data.md` |
-| Binary y with segments that behave differently | Churn drivers by customer type | `limited-dependent.md` §9 |
-| Raw files, web pages, PDFs | TSE CSVs, court websites | `data-collection-wrangling.md` |
-| Returns, volatility | Daily stock index | `volatility.md` |
-| Market risk | VaR/ES of a position or portfolio | `risk-var.md` |
-| Joint extremes | Two assets crashing together, contagion | `dependence-copulas.md` |
-| Changing relationships or regimes | Time-varying hedge ratio, calm vs. crisis | `state-space-regimes.md` |
-| Forecast or trading signal | Yield forecast, VAR signal, momentum | `forecasting-backtesting.md` |
-
-### 3. Obtain and audit the data
-
-- Sources in `data-sources.md`. Record source, series code, extraction date and unit.
-- **Frequency and alignment**: aggregate consistently (monthly average policy rate ≠ end-of-month rate).
-- **Nominal vs. real**: deflate monetary values over long horizons (CPI for consumption).
-- **Seasonality, holidays, events and breaks** (pandemic, methodology changes, a new menu or product line).
-- **Sample size**: with fewer than ~30 observations per parameter, warn that inference is fragile.
-- **Transformations**: logs for elasticities and variance; differences for non-stationary series.
-- **Missing values**: run `data_prep.missing_report(df, cols, predictors)` before estimating. Dropping incomplete rows is consistent if missingness depends only on the regressors, biased if it depends on y; under MAR in the regressors use multiple imputation (`data-collection-wrangling.md`, "Missing data"). Never mean-impute by default; report N per model.
-- Keep the raw data and do all cleaning in code (documented exclusions).
-
-### 4. Specify and estimate
-
-Start with the simplest model that answers the question; add complexity only when a diagnostic or theory justifies it.
-
-```python
-import numpy as np, statsmodels.formula.api as smf
-m = smf.ols("np.log(sales) ~ np.log(price) + np.log(income) + C(month)", data=df).fit(cov_type="HC3")
-# time series: cov_type="HAC", cov_kwds={"maxlags": int(4*(len(df)/100)**(2/9))}
-# panel/groups: clustered errors (see panel-iv.md)
-```
-
-Robust errors by default: heteroskedasticity and autocorrelation do not bias coefficients, but they invalidate standard errors and p-values. HC3 is preferable to HC1 (Hansen, 2020).
-
-### 5. Diagnose
-
-```bash
-python3 scripts/diagnostics.py ols data.csv --y log_sales --x log_price,log_income [--hac 6 | --ts]
-python3 scripts/diagnostics.py influence data.csv --y log_sales --x log_price,log_income
-python3 scripts/diagnostics.py stationarity data.csv --cols policy_rate,cpi,log_sales
-python3 scripts/diagnostics.py cointegration data.csv --cols log_p,log_fx --lags 2
-```
-or `from diagnostics import ...` in Python. For forecasting and strategies:
-```bash
-python3 scripts/forecasting.py data.csv --col yield --season 12      # auto-ARIMA + walk-forward vs naive
-```
-```python
-from risk import var_garch, var_ewma, backtest_var            # VaR models + Kupiec/Christoffersen
-from dependence import fit_copulas                            # tail dependence beyond correlation
-from state_space import fit_kalman_regression                 # time-varying beta / hedge ratio
-from regimes import markov_switching                          # regimes with filtered probabilities
-from backtest import run_backtest, performance                # one-bar lag, costs, Sharpe, drawdown
-from specification import fgls_het, prediction_intervals, long_run_effect, oster, sensitivity
-from diagnostics import mundlak_test, count_diagnostics       # FE vs RE (clustered); Poisson variance
-```
-
-Order (heteroskedasticity and autocorrelation are often symptoms of a wrong specification, so functional form comes first):
-
-| Assumption | Test | If it fails |
-|---|---|---|
-| Functional form | Ramsey RESET | Logs, quadratics, interactions; re-estimate before moving on |
-| Homoskedasticity | Breusch-Pagan, White (full or with ŷ and ŷ²) | HC3; WLS/FGLS if the form is known |
-| No autocorrelation (time series only; row order is arbitrary in a cross-section) | Breusch-Godfrey, Durbin-Watson (`time_series=True`) | HAC; model the dynamics (lags) |
-| No ARCH (time series) | Engle ARCH-LM on residuals | HC/HAC still valid; GARCH if intervals or risk matter (`volatility.md`) |
-| Normality | Jarque-Bera | Only matters in small samples |
-| Multicollinearity | VIF, condition number | Combine/drop variables, or accept it if it only affects controls |
-| Influence | Leverage, DFBETA, max\|h·ẽ\| | Check for data errors; report with and without |
-| Stationarity (time series) | ADF + KPSS + DF-GLS | Difference or test for cointegration |
-| Stability | Chow, CUSUM, sup-Wald | Break dummies or subsamples |
-| Exogeneity | Theory + Durbin-Wu-Hausman with an instrument | IV/2SLS, panel FE, quasi-experiment |
-| FE vs. RE (panel) | Mundlak/CRE with clustered Wald (`mundlak_test`); classical Hausman only as a check | FE, or report the CRE model |
-| Poisson variance (counts) | Pearson dispersion, Cameron-Trivedi (`count_diagnostics`) | Robust or quasi-Poisson SEs; NB if count probabilities matter |
-
-**Spurious regression**: trending series (revenue and GDP in levels) almost always yield a high R² and significant t-statistics with no real relationship. Warning sign: R² > Durbin-Watson.
-
-### 6. Test robustness
-
-A conclusion is reliable only if it survives reasonable variations. Do at least two:
-- alternative specification (controls, functional form, lags);
-- subsample (without the pandemic; separate periods);
-- another estimator (OLS vs. IV; FE vs. RE; 2SLS vs. LIML; alternative Cholesky ordering);
-- another variable definition or aggregation level;
-- for causal claims resting on observed controls: sensitivity to unobserved confounders (`specification.oster` and/or `sensitivity`, `ols-regression.md` §14);
-- for forecasting: rolling-origin evaluation against naive, seasonal naive and ETS, with a Diebold-Mariano test;
-- for strategies and risk models: out-of-sample period, realistic costs, number of variants tried, VaR backtests (see `forecasting-backtesting.md` §9 and `risk-var.md` §3).
-
-Present them side by side (`comparison_table` in the script, paper style).
-
-### 7. Interpret and report
-
-Structure:
-1. **Question and short answer**, with magnitude and interval: "A 1 p.p. increase in the policy rate is associated with a 0.8% to 1.4% drop in sales after 6 months (95% CI)."
-2. **Data**: sources, period, frequency, transformations, exclusions and why.
-3. **Model**: equation, estimator, standard-error type, identification strategy.
-4. **Results**: coefficients, standard errors, CIs, N, adjusted R² (or pseudo-R²), information criteria when comparing models.
-5. **Diagnostics**: test, statistic, p-value, conclusion.
-6. **Robustness**: what changed and what did not.
-7. **Limitations**: what the model does not prove.
-
-Interpretation rules:
-- **By functional form** (table in `ols-regression.md`): log-log → elasticity; log-lin → 100·β% (exact: 100·(e^β − 1)); lin-log → β/100 per 1%; quadratic → effect β₁ + 2β₂x.
-- **In nonlinear models** (logit, probit, tobit), report average marginal effects, not raw coefficients. For Tobit, say which margin answers the question: total E(y|x), intensive E(y|y>0,x) or extensive P(y>0|x).
-- **Replicating published or Stata results**: in `linearmodels` IV, `debiased=True` gives the n−k correction of textbooks and Stata's `small` option.
-- **Statistical ≠ economic significance**: report magnitude and interval, not only the p-value.
-- **Association ≠ causation**: causal language only with an identification strategy (IV, DiD, experiment, discontinuity). Granger causality is predictive precedence. Otherwise, "is associated with".
-- **Direction of bias**: when identification is imperfect, say which way the bias probably goes.
-- **Honest precision**: 2–3 significant digits; forecasts always with intervals; elasticities hold for small changes within the observed range.
-- **Which interval**: a forecast for one unit uses the prediction interval, an average uses the CI of the mean (`specification.prediction_intervals`); from a log-y model, report the smearing-corrected mean in levels, not exp(ŷ).
-- **Lags**: report the long-run effect (Σβ, or Σβ/(1−Σφ) with lags of y) with its delta-method SE (`specification.long_run_effect`), not the individual lag coefficients.
-- **No look-ahead**: anything used to forecast, signal or risk-manage at t is computed with data up to t (lagged regressors, training-only scalers and fits, filtered not smoothed probabilities, positions applied to the next period's return).
-- **LLM-coded variables are measurements with error**: never put them in a regression as if they were the truth. Hand-code a random sample drawn with known probabilities and estimate with `text_data.dsl_regression`; report the naive and corrected estimates side by side (`text-as-data.md` §6–7).
-- **Segmented logit vs pooled**: when the user asks whether drivers differ across groups, run `segments.logit_leaf_model` with `segment_by=` the groups they named (categorical columns are fine) and `benchmarks=` a logit with those interactions **and every regressor the leaf model uses** (otherwise the comparison is not like for like; the function warns), then `leaf_model_stability`. If the model will score future periods, pass `time_col=` so the holdout is the most recent period. Report the model with the best holdout AUC and top-decile lift, its calibration (slope and mean bias), and the segments only if they reappear across seeds (`limited-dependent.md` §9).
-- **Advice must match the tools**: never recommend a step (a temporal split, a calibration check, a test) and then show code that does something else. If a recommended step has no function in the skill, say so and write the code for it.
-- **Cluster at the level where the regressor of interest varies**: a judge's sex varies by judge, so cluster by judge, not by court or chamber (a court with three judges is one cluster, not three); a policy adopted by state, by state. Use the same level in the text and in the code, and report the number of clusters, not only the number of observations; with fewer than ~40 clusters, say that the SEs are fragile (wild cluster bootstrap).
-- **No invented numbers**: every coefficient, statistic or data point comes from a computation run in the session or a cited source. If data are missing, say so.
-
-Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows={"Year FE": ["YES", "YES"]})` produces the side-by-side table (coefficients, SEs in parentheses, stars, N, R², FE rows; `exponentiate=True` for odds/hazard ratios) and `export_table` writes Markdown, Excel or LaTeX. Rescale regressors whose coefficients print as 1e-05 (`reporting.rescale_hint`), and mark a fixed effect YES only where it is in that column's model.
-
-## Deliverables
-
-- Quick analysis: answer in the conversation with the main table and summarized diagnostics.
-- Analysis to keep or share: a report with the sections above and a reproducible `.py` script.
-- For study or reuse: a step-by-step commented `.ipynb` notebook.
-- Charts that communicate the result: observed vs. fitted, residuals over time, impulse responses with bands, forecasts with intervals, marginal effects.
+Use an EDA skill for initial exploration, the data-visualization skill for charts (observed vs fitted, residuals, impulse responses, GATES, TOC curves, forecasts with intervals), the delivery-format skill when the result becomes a file, and any "no invented numbers" skill as reinforcement. Deliverables: a quick answer in the conversation with the main table and summarized diagnostics; a report with the sections of step 7 plus a reproducible `.py` script for work to keep or share; a commented `.ipynb` notebook for study or reuse.

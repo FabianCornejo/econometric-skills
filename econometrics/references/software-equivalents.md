@@ -144,3 +144,23 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | `regexm`, `regexs` | `text_data.regex_flags`, `text_data.regex_extract` |
 | R `dsl::dsl` (design-based supervised learning) | `text_data.dsl_regression` (+ `dsl_sampling_probs`, `draw_validation_sample`) |
 | Hugging Face `LogitsProcessor` restricting the next token to labels | `text_data.llm_classify` (+ `hf_backend`, `label_probs_from_logits`) |
+
+## Estimation engine and heterogeneous effects (Stata / R / EconML → Python)
+
+| Stata / R / EconML | Python (this skill) |
+|---|---|
+| Stata `ml model lf`, R `maxLik`, statsmodels `GenericLikelihoodModel` | `estimation.mle(loglik, theta0, args, cov_type=...)` |
+| `ml ... vce(robust)`, `vce(cluster c)` | `estimation.mle(..., cov_type="sandwich" / "cluster", cluster=...)` |
+| `lrtest`, `test`, `testnl` | `estimation.trinity_test`, `estimation.delta_method` |
+| `nl`, R `nls` | `estimation.nls` |
+| `nlcom` | `estimation.delta_method` |
+| `bootstrap, reps() cluster()` | `estimation.bootstrap(stat_fn, df, B, cluster=...)` |
+| `boottest` (Roodman et al.), R `fwildclusterboot` | `estimation.wild_cluster_bootstrap` |
+| EconML `LinearDRLearner`, `LinearDML` | `hte.cate_fit(method="dr")`, `hte.cate_fit(method="linear_dml")` |
+| EconML `ForestDRLearner`, `TLearner`, `SLearner`, `XLearner` | `hte.cate_fit(method="forest" / "t_learner" / "s_learner" / "x_learner")` |
+| EconML `CausalForestDML`, R `grf::causal_forest` | `econml` itself; validate its out-of-fold predictions with `hte.blp_test(res, tau=...)` |
+| R `grf::test_calibration`; GenericML BLP | `hte.blp_test` |
+| GenericML GATES / CLAN | `hte.gates`, `hte.clan` |
+| R `grf::rank_average_treatment_effect` (AUTOC, Qini) | `hte.toc` |
+| EconML `RScorer` | `hte.rscore`, `hte.compare_cate_models` |
+| EconML `DRPolicyTree`, R `policytree::policy_tree` | `hte.policy_tree`, `hte.policy_value` |

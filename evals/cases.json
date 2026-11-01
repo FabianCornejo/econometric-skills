@@ -1,5 +1,5 @@
 {
-  "version": "1.9",
+  "version": "2.0",
   "how_to_run": "See evals/README.md. Paste each prompt, alone, in a fresh conversation with the current econometrics skill installed. Grade the answer against every criterion; a case passes only if all 'must' criteria hold and no 'must_not' criterion is triggered.",
   "cases": [
     {
@@ -41,6 +41,55 @@
         "Uses a benchmark formula that drops a regressor used by the leaf model.",
         "Claims the leaf segments are findings without a stability check.",
         "Interprets segment-specific coefficients as causal effects."
+      ]
+    },
+    {
+      "id": "discount-targeting-heterogeneity",
+      "language": "pt-BR",
+      "prompt": "Demos um desconto de 10% para parte dos clientes no ano passado (não foi aleatório: os gerentes escolheram). Tenho 20 mil clientes com histórico de compras, região, tempo de casa e se receberam o desconto. Quero saber para quais clientes o desconto realmente reduz o churn e para quem vale a pena dar no ano que vem, sabendo que cada desconto custa em média R$ 40 de margem.",
+      "must": [
+        "States that the assignment was not random and that the analysis rests on unconfoundedness given observed characteristics; lists which manager criteria must be in the data (W) and the overlap requirement.",
+        "Separates effect modifiers X (chosen in advance) from confounders W, and excludes post-treatment variables.",
+        "Uses hte.cate_fit with at least one linear (dr or linear_dml) and one flexible (forest or meta-learner) model with the same seed, and reports the cross-fitted AIPW ATE with CI.",
+        "Checks whether heterogeneity is real with hte.blp_test and hte.gates on out-of-fold predictions before describing subgroups; says to report only the ATE if BLP does not reject.",
+        "Uses hte.policy_tree with the cost of the discount expressed in the units of the outcome (converts R$ 40 into churn-equivalent value or redefines y as margin) and reports the held-out value against discounting everyone.",
+        "Reads the overlap diagnostics (share of clipped propensity scores) and explains what they mean for the targeted groups."
+      ],
+      "must_not": [
+        "Reports subgroup effects from in-sample fitted values or from the spread of predicted tau without a test.",
+        "Treats variables that predict churn as variables that modify the effect of the discount.",
+        "Values the targeting rule on the same data used to learn it.",
+        "Mixes R$ cost with a churn-probability outcome without converting units."
+      ]
+    },
+    {
+      "id": "teach-instrumental-variables",
+      "language": "pt-BR",
+      "prompt": "Me explique variáveis instrumentais como se eu estivesse num mestrado em economia. Quero entender de verdade por que funciona e quando falha.",
+      "must": [
+        "Uses Teacher mode: intuition, model, assumptions (relevance, exclusion, monotonicity for LATE), estimator formula, short derivation (ratio of reduced forms / 2SLS), diagnostics, interpretation, pitfalls and an exercise with a solution.",
+        "Includes a simulation (fixed seed, repeated samples) showing OLS bias under endogeneity and 2SLS bias toward OLS with a weak instrument.",
+        "Explains the LATE interpretation (compliers) and the weak-instrument diagnostics (first-stage F, effective F or the Lee et al. 104.7 threshold).",
+        "Every number shown comes from code run in the answer."
+      ],
+      "must_not": [
+        "Claims the exclusion restriction can be tested with a single instrument.",
+        "Presents IV as removing every bias without stating its assumptions."
+      ]
+    },
+    {
+      "id": "review-few-clusters-did",
+      "language": "pt-BR",
+      "prompt": "Recebi um parecer que estima o efeito de uma lei estadual adotada em 6 estados (de 27) com DiD e erros clusterizados por estado. O coeficiente é 0,12 com p = 0,01. Pode revisar se a conclusão se sustenta?",
+      "must": [
+        "Uses Reviewer mode: summary of the claim, verdict, findings by severity (critical/major/minor) and what would change the verdict.",
+        "Flags inference with few treated clusters (6 treated states): clustered SEs over-reject; recommends the wild cluster bootstrap (estimation.wild_cluster_bootstrap) and reports that the number of clusters, not N, is the effective sample size.",
+        "Asks whether adoption dates were staggered and, if so, flags plain TWFE and recommends causal.att_gt plus the timing checks.",
+        "Asks for pre-trends evidence and treatment-date verification."
+      ],
+      "must_not": [
+        "Accepts p = 0.01 at face value without discussing the number of treated clusters.",
+        "Invents numbers from the opinion that the user did not provide."
       ]
     }
   ]
