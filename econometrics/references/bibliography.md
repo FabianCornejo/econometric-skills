@@ -34,6 +34,9 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Chernozhukov et al. (2018), "Double/debiased machine learning", *Econometrics Journal*.
 - Crump, Hotz, Imbens and Mitnik (2009) — trimming for overlap; Austin (2011) — calipers; Oster (2019); Cinelli and Hazlett (2020) — sensitivity to unobserved confounding.
 - Kling (2006); Dobbie, Goldin and Yang (2018) — judge/examiner leniency designs.
+- Pearl, *Causality* (2nd ed., 2009); Cinelli, Forney and Pearl (2022), "A crash course in good and bad controls", *Sociological Methods & Research*; Henckel, Perković and Maathuis (2022), "Graphical criteria for efficient total effect estimation via adjustment in causal linear models", *JRSS-B*; Textor et al. (2016), "Robust causal inference using directed acyclic graphs: the R package dagitty", *International Journal of Epidemiology*.
+- Chernozhukov, Cinelli, Newey, Sharma and Syrgkanis (2022), "Long story short: omitted variable bias in causal machine learning", NBER WP 30302 — sensitivity bounds for DML.
+- McKenzie (2012), "Beyond baseline and follow-up: the case for more T in experiments", *Journal of Development Economics*; Burlig, Preonas and Woerman (2020), "Panel data and experimental design", *Journal of Development Economics* — power with serial correlation.
 
 ## Heterogeneous treatment effects and policy learning
 - Battocchi, Dillon, Hei, Lewis, Oka, Oprescu and Syrgkanis, *EconML: A Python Package for ML-Based Heterogeneous Treatment Effects Estimation* (Microsoft Research / PyWhy; https://www.pywhy.org/EconML/) — estimator comparison, flowchart for choosing an estimator, validation (DRTester, RScorer), policy trees.
@@ -134,6 +137,8 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - McNeil, Frey and Embrechts, *Quantitative Risk Management* (2015) — ES, extreme values, copulas, tail dependence.
 - J.P. Morgan/Reuters (1996), *RiskMetrics — Technical Document* — EWMA, λ = 0.94.
 - Kupiec (1995) and Christoffersen (1998), on VaR backtests; Basel Committee (1996) traffic-light framework.
+- Smith (1987), "Estimating tails of probability distributions", *Annals of Statistics*; McNeil and Frey (2000), "Estimation of tail-related risk measures for heteroscedastic financial time series: an extreme value approach", *Journal of Empirical Finance*; Embrechts, Klüppelberg and Mikosch, *Modelling Extremal Events* (1997).
+- Acerbi and Szekely (2014), "Backtesting expected shortfall", *Risk*; Fissler and Ziegel (2016), "Higher order elicitability and Osband's principle", *Annals of Statistics*; Patton, Ziegel and Chen (2019), "Dynamic semiparametric models for expected shortfall (and Value-at-Risk)", *Journal of Econometrics*.
 - Patton (2006), "Modelling asymmetric exchange rate dependence", *International Economic Review* — copula-GARCH.
 - Joe, *Dependence Modeling with Copulas* (2014); Nelsen, *An Introduction to Copulas* (2006).
 - Kraskov, Stögbauer and Grassberger (2004) — kNN mutual information; Székely, Rizzo and Bakirov (2007) — distance correlation.

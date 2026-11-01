@@ -43,3 +43,10 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 
 - **Betas for a valuation** come from comparables whose windows start after any break in their risk profile (change of control, privatization, new regulation); report the unlevering method (Hamada/Conine or Harris-Pringle, with or without debt beta), and use `finance_empirics.dimson_beta` or weekly returns for thinly traded stocks.
 - **Scripts must run on the user's machine and on real data**: a `SKILL_DIR` variable for this skill's `scripts/` folder (never a sandbox path), and a test on simulated data that include the cases real data bring (events without enough history, missing values, repeated units). In event studies, use `finance_empirics.car_regression` for the cross-section of CARs rather than hand-merging results.
+
+## Rules added in v2.2
+
+- **Choose controls with a graph, not by availability.** Before estimating an effect from observational data, write the causal graph and run `dag.adjustment_report`: control for a minimal (or the optimal) adjustment set, never for mediators, colliders, post-treatment variables or pure instruments; if no valid set exists, say the effect is not identified by adjustment. Report the graph and the result of `dag.test_implications`.
+- **Causal claims from observables carry a sensitivity analysis**: report the robustness value (OLS: `specification.sensitivity`; DML: `causal.dml_sensitivity`) benchmarked on the strongest observed covariates (`causal.dml_benchmark`), in words: "a confounder k times as strong as X would move the estimate to ...".
+- **An insignificant effect needs its MDE**: report the minimum detectable effect of the design (`simulation.mde_did`; with serial correlation or few treated units, `simulation.power_did_sim`) and the largest effect the CI excludes. Plan power before collecting data.
+- **Far-tail risk (99.5% and beyond) uses EVT** (`risk.gpd_fit`, `risk.var_evt`) with the threshold-stability table, and states ξ with its CI; **ES forecasts are backtested** (`risk.es_backtest`) and ranked with `risk.compare_es_models`, not judged by eye.

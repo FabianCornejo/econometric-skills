@@ -25,20 +25,21 @@ The mode changes the form of the answer, never the computations: every number co
 | Regression and diagnostics | OLS with full test batteries, robust/HAC SEs, influence, FGLS, prediction intervals, omitted-variable bias, Oster and Cinelli-Hazlett sensitivity | `diagnostics.py`, `specification.py` |
 | Classical linear models | ANOVA and multiple comparisons, ANCOVA, robust and quantile regression, permutation tests, Box-Cox, lasso/ridge/PCR/PLS, post-double-selection | `linear_models.py` |
 | Estimation engine | Maximum likelihood from any likelihood, LR/Wald/LM, NLS, delta method, bootstrap, wild cluster bootstrap | `estimation.py` |
-| Causal inference | Matching, IPW, AIPW, double ML, regression discontinuity, staggered DiD (Callaway-Sant'Anna) with timing checks, synthetic control, randomization inference for few treated units | `causal.py` |
+| Causal graphs | Minimal and optimal adjustment sets, good vs bad controls (confounders, mediators, colliders, instruments), tests of the graph's implications | `dag.py` |
+| Causal inference | Matching, IPW, AIPW, double ML with omitted-confounder bounds and benchmarks, regression discontinuity, staggered DiD (Callaway-Sant'Anna) with timing checks, synthetic control, randomization inference for few treated units | `causal.py` |
 | Heterogeneous effects | CATE (DR-learner, linear DML, forests, meta-learners), BLP/GATES/CLAN, TOC/Qini, policy trees with costs | `hte.py` |
 | Panel, IV, limited dependent variables | FE/RE/Mundlak, IV/2SLS with weak-instrument checks, logit/probit/Tobit with marginal effects, count models | `diagnostics.py` + references |
 | Time series and forecasting | Unit roots, breaks, ARIMA/ARIMAX, VAR/SVAR, cointegration, walk-forward evaluation, Diebold-Mariano | `forecasting.py` |
-| Finance and risk | Betas for WACC (rolling, Dimson, Blume/Vasicek, Hamada/Harris-Pringle), factor models (Fama-French, NEFIN), event studies, performance ratios, Markowitz, GARCH, VaR/ES backtests, copulas, Kalman, regimes, look-ahead-free backtests | `finance_empirics.py`, `risk.py`, `dependence.py`, `state_space.py`, `regimes.py`, `backtest.py` |
+| Finance and risk | Betas for WACC (rolling, Dimson, Blume/Vasicek, Hamada/Harris-Pringle), factor models (Fama-French, NEFIN), event studies, performance ratios, Markowitz, GARCH, VaR/ES with extreme value theory, VaR and ES backtests, copulas, Kalman, regimes, look-ahead-free backtests | `finance_empirics.py`, `risk.py`, `dependence.py`, `state_space.py`, `regimes.py`, `backtest.py` |
 | Survival | Kaplan-Meier, Cox with clustered SEs, PH tests | `survival.py` |
 | Text as data | Regex coding, topics, classifiers, LLM coding with valid downstream inference (DSL) | `text_data.py` |
 | Segments | Logit leaf model with honest splits, temporal holdout and calibration | `segments.py` |
-| Teaching lab | Monte Carlo demos (omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD), power and MDE | `simulation.py` |
+| Teaching lab | Monte Carlo demos (omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD), power and MDE, including simulated power for DiD with serial correlation | `simulation.py` |
 | Data and reporting | Awkward Brazilian files, audits, missing data, safe merges, PDFs, scraping; FRED, World Bank, IMF, OECD, BCB, IBGE, Ipeadata, NEFIN; publication tables | `data_prep.py`, `reporting.py` |
 
 ### How it is validated
 
-- **373 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels and scipy, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
+- **431 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels and scipy, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
 - **Continuous integration** runs every test suite and worked example on the minimum and the latest supported dependency versions, and checks that `dist/econometrics.skill` matches the source.
 - **Blind evals** (`evals/`): plain-language prompts with objective must / must-not criteria, run in a fresh conversation before each release.
 - **Look-ahead discipline**: every rolling estimate uses only data available at the time; the usual traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, signal/return misalignment) are avoided in code and documented.
@@ -50,7 +51,7 @@ Release notes for every version are in [CHANGELOG.md](CHANGELOG.md).
 ```
 econometrics/
 ├── SKILL.md               router: modes, routing table, rules, output contract
-├── scripts/               19 tested modules (see the table above)
+├── scripts/               20 tested modules (see the table above)
 └── references/
     ├── workflow.md            Consultant mode: study card + 7 steps
     ├── interpretation-rules.md

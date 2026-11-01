@@ -4,11 +4,11 @@ Use when the question is "what is the effect of X on Y?" and X was not randomize
 
 ## Contents
 1. Potential outcomes and the design-first rule
-2. Choosing a design
+2. Choosing a design (2.1 choosing controls with a causal graph)
 3. Selection on observables: regression, matching, weighting, doubly robust
-4. Double/debiased machine learning
+4. Double/debiased machine learning (4.1 sensitivity to omitted confounders)
 5. Regression discontinuity
-6. Difference-in-differences and event studies with staggered adoption
+6. Difference-in-differences and event studies with staggered adoption (6.2 power)
 7. Synthetic control
 8. Designs common in law and economics
 9. Reporting checklist
@@ -39,6 +39,32 @@ Decide the design before looking at outcomes: choose covariates, bandwidths, com
 
 When several designs are possible, run more than one; agreement across designs with different assumptions is the strongest evidence available.
 
+### 2.1 Choosing controls with a causal graph
+
+"Control for everything available" is wrong: some controls remove bias, others create it. Write the causal graph (DAG) of the problem, from institutional knowledge, before looking at outcomes, and let `scripts/dag.py` do the graph algebra (Pearl 2009; Cinelli, Forney & Pearl 2022):
+
+```python
+import dag
+g = dag.DAG("income -> price_sensitivity; income -> discount; discount -> purchase; "
+            "price_sensitivity -> purchase; discount -> visits -> purchase; purchase -> review; discount -> review; "
+            "region -> discount; season -> purchase")      # "a <-> b" adds an unobserved common cause
+rep = dag.adjustment_report(g, "discount", "purchase", df=data)   # sets {income} or {price_sensitivity};
+                                                                  # optimal {price_sensitivity, season}
+```
+
+It returns the **minimal adjustment sets** (backdoor criterion), the **optimal set** (Henckel, Perković & Maathuis 2022: among valid sets, the one with the smallest variance; it adds outcome predictors and drops pure treatment predictors), the **role of every variable** and, with data, **tests of the graph's implications**.
+
+| Role (`classify_controls`) | Example | Control? |
+|---|---|---|
+| Confounder (causes x and y) | income for a discount's effect on purchases | Yes (or a set that blocks its path) |
+| Mediator (x → v → y) | site visits caused by the discount | No: removes part of the effect (unless the question is the direct effect) |
+| Descendant of x / collider | a review written after the purchase | No: post-treatment, can open a path |
+| Collider of two causes, not a descendant of x (M-bias) | a variable caused by two independent causes of x and y | No: controlling opens a path |
+| Instrument-like (affects y only through x) | region of a randomized rollout | No: raises variance and amplifies any remaining bias; use it as an instrument |
+| Outcome predictor (not a cause of x) | season for purchases | Optional: improves precision |
+
+`test_implications` checks the conditional independences the graph implies (partial correlations, Holm-adjusted): a rejection says an edge is missing; passing does not prove the graph. If no valid set exists (an unobserved confounder opens every backdoor path), the effect is **not identified by adjustment**: say so and move to an instrument, a panel design or a front-door path. Show the graph in the report (`g.to_mermaid()` gives a Mermaid diagram).
+
 ## 3. Selection on observables
 
 **Assumptions**: (i) unconfoundedness — conditional on X, treatment is as good as random; (ii) overlap — 0 < P(T=1|X) < 1. Choose X among **pre-treatment** variables that affect both treatment and outcome; never control for variables affected by the treatment ("bad controls", Angrist-Pischke).
@@ -61,6 +87,16 @@ Workflow:
 3. Repeat over several splits and take the median (`n_rep`).
 
 Use it when there are many controls or nonlinear confounding. It does **not** solve unobserved confounding: DML is selection on observables with better functional form. Prediction-oriented ML (lazy comparisons of 30 classifiers, maximizing accuracy) answers a different question: good prediction of Y is not an effect of D.
+
+### 4.1 Sensitivity to omitted confounders
+
+DML removes functional-form bias, not omitted-variable bias. `dml_sensitivity(res, cf_y, cf_d, rho=1)` (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022, "Long Story Short") bounds what a latent confounder A would do:
+
+|θ_short − θ_long| ≤ |ρ| · S · √(cf_y · cf_d / (1 − cf_d)),  S² = E[(Y − θD − ℓ(X))²] · E[α²],  α = (D − m(X)) / E[(D − m(X))²]
+
+- **cf_y**: share of the outcome's residual variance (given D and X) that A would explain; **cf_d**: share of the treatment's residual variance (given X) that A would explain; **ρ**: how aligned the two omitted pieces are (1 = worst case).
+- It returns bounds, confidence bounds (sampling error added through influence functions), a table of the lower bound over a grid of (cf_y, cf_d) for a contour plot, and the **robustness values** RV (strength, equal on both sides, that moves θ to zero) and RVa (that makes it insignificant). With linear learners these reproduce Cinelli-Hazlett's OLS values exactly (tested).
+- **Benchmark** with `dml_benchmark(df, y, d, X, ["income", "age"], res=res)`: it refits without each observed covariate and reports its implied cf_y, cf_d, ρ and the change in θ. "A confounder as strong as income would reduce θ from 0.21 to 0.12" is a sentence the reader can judge; RV = 3% alone is not.
 
 When the effect may vary with characteristics X, the same cross-fitting machinery estimates tau(x) instead of a single theta (`hte.cate_fit(..., method="linear_dml")`, the R-learner); see `heterogeneous-effects.md`.
 
@@ -104,6 +140,14 @@ Read the shift table as mechanical, not as a test: shifting a correct date also 
 Not covered: treatment intensity that varies continuously within a unit (dose; de Chaisemartin & D'Haultfœuille, 2024; Callaway, Goodman-Bacon & Sant'Anna, 2024) and formal HonestDiD bounds (Rambachan & Roth, 2023); use R's `did`, `DIDmultiplegtDYN` and `HonestDiD` for those.
 - **Clustering**: at the level of treatment assignment (state, court, municipality); with fewer than ~30 clusters, use wild cluster bootstrap (`estimation.wild_cluster_bootstrap`); with few **treated** clusters (about 1–5 adopting states), add randomization inference with `causal.randomization_inference(df, unit, time, y, gvar)` (reassigns the observed adoption dates to random sets of units and ranks the actual estimate; p-value and test-inversion CI), because the wild bootstrap also degrades there. It assumes the treated units are exchangeable with the others (similar error variance and dynamics); if adopters are systematically more volatile, use Ferman-Pinto or Conley-Taber.
 
+### 6.2 Power before the study
+
+A DiD with an insignificant result is uninformative unless it could have detected a relevant effect. Before collecting data or choosing the sample, compute the minimum detectable effect:
+- `simulation.mde_did(n_units=..., n_pre=m, n_post=r, sd=..., rho=...)`: analytic MDE (McKenzie 2012) with equicorrelated errors: Var = σ²(1 − ρ)(1/m + 1/r) / (P(1 − P)N). More periods and higher ρ lower the MDE.
+- `simulation.power_did_sim(n_units, T, share_treated, effect, adoption, rho_ar, ...)`: simulates the panel you will have (unit effects, common shocks, **AR(1) errors**, simultaneous or staggered adoption) and the inference you will use (TWFE with unit-clustered SEs, t(G−1) critical values); reports power, size and coverage. `mde_did_sim` searches the effect with 80% power.
+- With decaying serial correlation the analytic formula overstates power (Burlig, Preonas & Woerman 2020): in the skill's tests, a design with 80% analytic power has 51% simulated power at AR(1) ρ = 0.8, and the MDE rises by 40%. Use the simulation for the final number; with fewer than ~10 treated units, plan randomization inference (the clustered SE over-rejects: 10% size with 3 treated of 12).
+- After the study, report the MDE next to an insignificant estimate ("the design could detect effects above X; the CI excludes effects above Y").
+
 ## 7. Synthetic control
 
 `synth(df, unit, time, y, treated="SP", t0=2016)`:
@@ -132,5 +176,7 @@ Qualitative evidence (interviews, case studies, process tracing) complements the
 - [ ] Main estimate with CI; at least one alternative estimator; robustness (bandwidths, donors, controls, comparison groups).
 - [ ] Placebo outcomes or placebo timing.
 - [ ] Clustering at the level of assignment.
-- [ ] Sensitivity to unobserved confounding or to violations of parallel trends.
+- [ ] Controls justified by a causal graph (no mediators, colliders or post-treatment variables); the graph shown.
+- [ ] Sensitivity to unobserved confounding (Oster, Cinelli-Hazlett or `dml_sensitivity`, benchmarked on observed covariates) or to violations of parallel trends.
+- [ ] Power or MDE of the design, especially next to an insignificant result.
 - [ ] What the design cannot say (external validity, mechanisms).

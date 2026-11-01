@@ -30,7 +30,7 @@ Every method is explained with the same eleven blocks, in this order. Skip a blo
 
 ## 3. Simulations that teach
 
-Ready-made demos are in `scripts/simulation.py` (each returns a table and a one-line lesson; show their code and let the student change one parameter): `demo_omitted_variable`, `demo_bad_control`, `demo_measurement_error`, `demo_heteroskedasticity`, `demo_spurious_regression`, `demo_weak_iv`, `demo_few_clusters`, `demo_staggered_did`; `monte_carlo(dgp, estimators, R, truth)` builds any other one, and `power_mde` answers "how large a sample?" or "how small an effect can we detect?". The heterogeneity lesson uses `hte` (a linear CATE vs a forest on a symmetric effect).
+Ready-made demos are in `scripts/simulation.py` (each returns a table and a one-line lesson; show their code and let the student change one parameter): `demo_omitted_variable`, `demo_bad_control`, `demo_measurement_error`, `demo_heteroskedasticity`, `demo_spurious_regression`, `demo_weak_iv`, `demo_few_clusters`, `demo_staggered_did`; `monte_carlo(dgp, estimators, R, truth)` builds any other one, and `power_mde` answers "how large a sample?" or "how small an effect can we detect?" (for a DiD, `mde_did` and the simulation `power_did_sim`, which shows how serial correlation erodes power). Good and bad controls are taught with `dag.py`: draw the graph, let `adjustment_report` classify each variable, then simulate the linear model and show OLS with a minimal set recovering the effect while a collider or mediator biases it. The heterogeneity lesson uses `hte` (a linear CATE vs a forest on a symmetric effect).
 
 Write them in a few lines of numpy with a fixed seed; repeat 500–1000 times; show the distribution of the estimate against the truth (histogram or a table of mean, bias, SD, coverage).
 
@@ -46,6 +46,9 @@ Write them in a few lines of numpy with a fixed seed; repeat 500–1000 times; s
 | Few clusters | Clustered SEs with 8 clusters | Over-rejection; `estimation.wild_cluster_bootstrap` fixes it |
 | Staggered DiD | TWFE with growing effects and staggered dates | TWFE wrong (even the sign); `causal.att_gt` right |
 | Heterogeneity | Effect larger at both extremes of x | A linear CATE sees nothing; a forest finds it (`hte`) |
+| Good and bad controls | Butterfly or M-bias graph (`dag.py`), linear SEM | A minimal set recovers the effect; adding a collider or using an incomplete set biases it |
+| Power and serial correlation | `simulation.power_did_sim` with AR(1) ρ = 0 vs 0.8 | Same analytic power, much lower simulated power |
+| Fat tails | `risk.gpd_fit` on Student-t returns | Normal 99.9% VaR far too small; EVT close to the truth |
 | Look-ahead | Scale with full-sample statistics in a backtest | Spectacular Sharpe that vanishes out of sample |
 
 ## 4. Curriculum order
