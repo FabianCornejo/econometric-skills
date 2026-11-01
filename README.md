@@ -38,7 +38,7 @@ The mode changes the form of the answer, never the computations: every number co
 
 ### How it is validated
 
-- **370 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels and scipy, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
+- **373 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels and scipy, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
 - **Continuous integration** runs every test suite and worked example on the minimum and the latest supported dependency versions, and checks that `dist/econometrics.skill` matches the source.
 - **Blind evals** (`evals/`): plain-language prompts with objective must / must-not criteria, run in a fresh conversation before each release.
 - **Look-ahead discipline**: every rolling estimate uses only data available at the time; the usual traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, signal/return misalignment) are avoided in code and documented.

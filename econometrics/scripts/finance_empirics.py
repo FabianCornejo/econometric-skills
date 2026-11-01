@@ -15,6 +15,7 @@ Betas and cost of equity
     factor_model(r_i, factors, rf)                Fama-French 3/5, Carhart, NEFIN (Brazil) loadings and alpha
 
 Events and performance
+    car_regression(es, events, formula)          CARs on deal characteristics, skipped events dropped, clustered
     event_study(r, r_m, events, ...)              abnormal returns, CAR/CAAR, cross-sectional t, Patell,
                                                   BMP (robust to event-induced variance) and Corrado rank tests
     performance_ratios(r_p, r_b, rf)              Sharpe (with Lo SE), Sortino, Treynor, information ratio,
@@ -242,8 +243,12 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
     """Short-run event study (MacKinlay 1997; Campbell, Lo & MacKinlay ch. 4; Ang 5.5).
 
     r: returns, one column per firm, indexed by trading date; r_m: market returns (None for the
-    constant-mean model); events: dict {firm: date} or DataFrame with columns firm, date (the event
-    day is the first trading day on or after the date). Windows are in trading days relative to
+    constant-mean model); events: dict {firm: date} or DataFrame with columns firm, date and
+    optionally event_id (needed when a firm has several events; built as firm_date otherwise). The
+    event day is the first trading day on or after the date: shift announcements made after the
+    close to the next day before calling. Results (ar, car) are indexed by event_id; events that
+    cannot be evaluated are listed in "skipped". For a cross-sectional regression of CARs on deal
+    characteristics use car_regression, which aligns events, drops skipped ones and clusters. Windows are in trading days relative to
     day 0; the estimation window must end before the event window starts.
     model "market" (alpha + beta r_m), "market_adjusted" (r - r_m, no estimation) or "mean".
 
@@ -259,8 +264,14 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
     if isinstance(events, dict):
         ev = pd.DataFrame({"firm": list(events), "date": pd.to_datetime(list(events.values()))})
     else:
-        ev = events.rename(columns=str.lower)[["firm", "date"]].copy()
+        ev = events.rename(columns=str.lower).copy()
         ev["date"] = pd.to_datetime(ev["date"])
+    if "event_id" not in ev.columns:
+        dup = ev["firm"].duplicated(keep=False)
+        ev["event_id"] = np.where(dup, ev["firm"].astype(str) + "_" + ev["date"].dt.strftime("%Y-%m-%d"),
+                                  ev["firm"].astype(str))
+    if ev["event_id"].duplicated().any():
+        raise ValueError("event_id must be unique (one row per event)")
     if est_win[1] >= evt_win[0]:
         raise ValueError("the estimation window must end before the event window starts")
     idx = r.index
@@ -268,16 +279,16 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
     L1 = est_win[1] - est_win[0] + 1
     rows, ar_mat, sar_mat, rank_day0, skipped = [], [], [], [], []
     for _, e in ev.iterrows():
-        f = e["firm"]
+        f, eid = e["firm"], e["event_id"]
         pos = idx.searchsorted(e["date"])
         if f not in r.columns or pos + evt_win[1] >= len(idx) or pos + est_win[0] < 0:
-            skipped.append(f)
+            skipped.append(eid)
             continue
         est = slice(pos + est_win[0], pos + est_win[1] + 1)
         evw = slice(pos + evt_win[0], pos + evt_win[1] + 1)
         ye, yv = r[f].iloc[est].to_numpy(float), r[f].iloc[evw].to_numpy(float)
         if np.isnan(ye).mean() > 0.2 or np.isnan(yv).any():
-            skipped.append(f)
+            skipped.append(eid)
             continue
         if model == "market":
             xe, xv = r_m.iloc[est].to_numpy(float), r_m.iloc[evw].to_numpy(float)
@@ -310,10 +321,10 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
         rk = stats.rankdata(allar)
         rank_day0.append((rk[len(allar) - len(ar) + list(days).index(0)] - (len(allar) + 1) / 2,
                           rk - (len(allar) + 1) / 2, len(ar)))
-        rows.append({"firm": f, "event_date": idx[pos], "s2": s2, "L1": int(np.sum(~np.isnan(ar_est)))})
+        rows.append({"event_id": eid, "firm": f, "event_date": idx[pos], "s2": s2, "L1": int(np.sum(~np.isnan(ar_est)))})
     if not ar_mat:
         raise ValueError("no event could be evaluated (check dates, windows and data coverage)")
-    AR = pd.DataFrame(ar_mat, columns=days, index=[x["firm"] for x in rows])
+    AR = pd.DataFrame(ar_mat, columns=days, index=pd.Index([x["event_id"] for x in rows], name="event_id"))
     SAR = pd.DataFrame(sar_mat, columns=days, index=AR.index)
     N = len(AR)
     aar = AR.mean()
@@ -349,6 +360,47 @@ def event_study(r: pd.DataFrame, r_m: pd.Series | None, events, est_win=(-250, -
     return {"method": f"event study ({model} model)", "caar": pd.DataFrame(caar_rows).set_index("window"),
             "aar": aar_tab, "ar": AR, "car": pd.DataFrame(cars), "corrado_day0_z": float(corrado),
             "p_corrado_day0": float(2 * stats.norm.sf(abs(corrado))), "n_events": N, "skipped": skipped}
+
+
+def car_regression(es: dict, events: pd.DataFrame, formula: str, window: str = "(-1, 1)",
+                   cluster: str | None = None, id_col: str = "event_id") -> dict:
+    """Cross-sectional regression of CARs on event characteristics (deal size, payment, target
+    listed, same industry...), e.g. formula = "CAR ~ np.log(rel_size) + C(payment) + listed_target".
+    events: the same events table passed to event_study plus the characteristics (with event_id,
+    or firm/date from which event_study built it). CARs are matched by event_id, events skipped
+    by event_study are dropped, and the clustered covariance uses the groups of the rows actually
+    used (cluster by acquirer when firms announce several deals). HC3 when cluster is None."""
+    import statsmodels.formula.api as smf
+    ev = events.rename(columns=str.lower).copy()
+    if id_col not in ev.columns:
+        ev["date"] = pd.to_datetime(ev["date"])
+        dup = ev["firm"].duplicated(keep=False)
+        ev[id_col] = np.where(dup, ev["firm"].astype(str) + "_" + ev["date"].dt.strftime("%Y-%m-%d"),
+                              ev["firm"].astype(str))
+    if window not in es["car"].columns:
+        raise KeyError(f"window {window!r} not in event_study output {list(es['car'].columns)}")
+    car = es["car"][window].rename("CAR")
+    d = ev.merge(car, left_on=id_col, right_index=True, how="inner")
+    import patsy
+    y, X = patsy.dmatrices(formula, d, return_type="dataframe", NA_action="drop")
+    used = d.loc[X.index]
+    if cluster:
+        fit = smf.ols(formula, used).fit(cov_type="cluster", cov_kwds={"groups": used[cluster]})
+        n_cl = int(used[cluster].nunique())
+    else:
+        fit = smf.ols(formula, used).fit(cov_type="HC3")
+        n_cl = None
+    ci = fit.conf_int(ALPHA)
+    tab = pd.DataFrame({"estimate": fit.params, "se": fit.bse, "z": fit.tvalues, "p": fit.pvalues,
+                        "ci_low": ci[0], "ci_high": ci[1]})
+    warn = []
+    if n_cl is not None and n_cl < 40:
+        warn.append(f"only {n_cl} clusters: consider estimation.wild_cluster_bootstrap")
+    dropped = len(ev) - len(used)
+    if dropped:
+        warn.append(f"{dropped} events not used (skipped by event_study or missing characteristics)")
+    return {"method": f"cross-sectional regression of CAR{window}", "table": tab, "n": int(fit.nobs),
+            "n_clusters": n_cl, "r2": float(fit.rsquared), "warnings": warn, "model": fit}
 
 
 # =============================================================================

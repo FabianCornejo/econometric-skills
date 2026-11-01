@@ -158,6 +158,36 @@ except ValueError:
     check("overlapping estimation and event windows raise", True)
 
 # ---------------------------------------------------------------------------------------------
+# Repeated acquirers, skipped events and the cross-sectional CAR regression
+# ---------------------------------------------------------------------------------------------
+r_ = np.random.default_rng(31)
+rm2 = pd.Series(r_.normal(0.0003, 0.01, 900), index=dates[:900])
+R2, rows_ev = {}, []
+for j in range(30):
+    e = r_.normal(0, 0.018, 900)
+    for k, d0 in enumerate((350, 650)):                      # every firm announces two deals
+        stock = int(r_.integers(0, 2))
+        e[d0] += 0.02 - 0.03 * stock                         # cash deals +2%, stock deals -1%
+        rows_ev.append({"firm": f"f{j}", "date": rm2.index[d0], "stock_paid": stock, "size": r_.uniform(0.1, 1)})
+    R2[f"f{j}"] = 0.0002 + r_.uniform(0.6, 1.4) * rm2 + e
+R2 = pd.DataFrame(R2)
+R2.loc[:R2.index[300], "f0"] = np.nan                         # f0 listed recently: first event cannot be evaluated
+evdf = pd.DataFrame(rows_ev)
+es2 = fe.event_study(R2, rm2, evdf, est_win=(-250, -30), evt_win=(-5, 5), car_windows=((0, 0),))
+check("repeated acquirers: one event_id per deal, the unevaluable one listed as skipped",
+      es2["n_events"] == 59 and es2["skipped"] == ["f0_" + str(rm2.index[350].date())] and es2["ar"].index.is_unique)
+cr = fe.car_regression(es2, evdf, "CAR ~ stock_paid + size", window="(0, 0)", cluster="firm")
+check("car_regression: stock-paid deals ~3 p.p. lower (CI covers -0.03), skipped event dropped, clusters by acquirer",
+      cr["table"].loc["stock_paid", "ci_low"] < -0.03 < cr["table"].loc["stock_paid", "ci_high"] and cr["n"] == 59
+      and cr["n_clusters"] == 30 and any("not used" in w for w in cr["warnings"]),
+      f"{cr['table'].loc['stock_paid', 'estimate']:.4f}")
+try:
+    fe.event_study(R2, rm2, evdf.assign(event_id="same"), est_win=(-250, -30), evt_win=(-5, 5))
+    check("duplicated event_id raises", False)
+except ValueError:
+    check("duplicated event_id raises", True)
+
+# ---------------------------------------------------------------------------------------------
 # Event study: Monte Carlo size, with and without event-induced variance
 # ---------------------------------------------------------------------------------------------
 rej = {k: [] for k in ("cs", "patell", "bmp", "corrado", "patell_var", "bmp_var")}

@@ -42,3 +42,4 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 - **Teaching simulations** use a fixed seed, show their code, and report the quantity the lesson is about (bias, coverage, rejection rate), not only a single draw.
 
 - **Betas for a valuation** come from comparables whose windows start after any break in their risk profile (change of control, privatization, new regulation); report the unlevering method (Hamada/Conine or Harris-Pringle, with or without debt beta), and use `finance_empirics.dimson_beta` or weekly returns for thinly traded stocks.
+- **Scripts must run on the user's machine and on real data**: a `SKILL_DIR` variable for this skill's `scripts/` folder (never a sandbox path), and a test on simulated data that include the cases real data bring (events without enough history, missing values, repeated units). In event studies, use `finance_empirics.car_regression` for the cross-section of CARs rather than hand-merging results.

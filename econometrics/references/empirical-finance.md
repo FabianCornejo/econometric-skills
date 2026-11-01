@@ -37,7 +37,7 @@ Use for the econometric inputs of valuation and transactions (the beta and the c
 
 `event_study(r, r_m, events, est_win=(-250, -30), evt_win=(-5, 5), model="market", car_windows=((-1, 1),))`.
 
-1. **Define the event date** precisely (first public announcement, including leaks and rumors); day 0 is the first trading day on or after it. Announcements after the close belong to the next day.
+1. **Define the event date** precisely (first public announcement, including leaks and rumors); day 0 is the first trading day on or after it. Announcements after the close belong to the next day: shift their date before calling `event_study`. A firm with several deals needs one row per deal; pass an `event_id` column (built as firm_date otherwise). Results are indexed by `event_id`, and events without enough history appear in `res["skipped"]`.
 2. **Estimation window** before the event window, with a gap (e.g. −250 to −30) so that run-up does not contaminate the normal-return model.
 3. **Normal-return model**: market model (default), market-adjusted (no estimation; for IPOs and thin histories) or constant mean.
 4. **Abnormal returns** AR = r − expected; **CAR** over the event window; **CAAR** across events. Use simple returns for CAARs (the cross-sectional mean of simple returns is a portfolio return; that of log returns is not), or state the convention; the difference is small for short windows.
@@ -50,7 +50,8 @@ Use for the econometric inputs of valuation and transactions (the beta and the c
 | BMP | Standardized CARs, cross-sectional variance | **Default for announcements** (stayed at ~4% in the same simulations) |
 | Corrado rank | Nonparametric | Non-normal returns, small samples; day-0 test |
 
-6. **Pitfalls**: event clustering (same date, same industry) correlates ARs and inflates every test: use a portfolio of the affected firms or calendar-time regressions; thin trading (zero returns) biases betas; confounding news on the same day (earnings) must be checked by reading the news; long-horizon BHARs need matched benchmarks and are another design.
+6. **Cross-section of CARs**: `car_regression(res, events, "CAR ~ np.log(rel_size) + C(payment) + listed_target", window="(-1, 1)", cluster="firm")` matches CARs to deal characteristics by `event_id`, drops skipped events and clusters on the rows actually used (by acquirer when firms repeat). A CAAR near zero can hide opposite effects (cash vs stock payment).
+7. **Pitfalls**: event clustering (same date, same industry) correlates ARs and inflates every test: use a portfolio of the affected firms or calendar-time regressions; thin trading (zero returns) biases betas; confounding news on the same day (earnings) must be checked by reading the news; long-horizon BHARs need matched benchmarks and are another design.
 
 ## 5. Performance
 
