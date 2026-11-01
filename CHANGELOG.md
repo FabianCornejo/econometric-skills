@@ -2,6 +2,10 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.2.3 — Trigger on method and planning questions without data
+
+- Two more retests of the ES/FRTB eval: with the `market-risk` skill installed it was chosen again; with it removed, the model's reasoning showed it weighed loading this skill and skipped it, answering from general knowledge. The description required "numbers to be estimated or tested from data", which a method question with no data attached did not seem to meet (the evals that did load the skill asked for a number or a decision). The description now says to load the skill for any question on how to estimate, test, validate or choose a model, including advice and planning before any data exist, instead of answering from general knowledge or with finance or risk skills. Some method names were dropped from its list to stay within 1024 characters (1017); they remain in the routing table. No code changes.
+
 ## v2.2.2 — Description that leads with when to use the skill
 
 - The v2.2.1 retest of the ES/FRTB eval failed in the same way: a corporate `market-risk` skill, whose name matches the question, was chosen and this skill was never loaded. The description listed about 500 characters of methods before the first risk word. It now starts with what the skill is (applied econometrics and quantitative risk, tested code) and when to use it, "instead of general finance, valuation or market-risk skills, which do not estimate", with VaR/ES backtests and validation (FRTB), tail risk, WACC betas and announcement returns first; the methods follow (1009 characters). No code changes.
