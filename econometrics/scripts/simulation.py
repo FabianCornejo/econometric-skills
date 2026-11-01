@@ -18,6 +18,11 @@ Demos (assumption that breaks -> what the student sees)
 
 Design
     power_mde(...)                 minimum detectable effect or sample size, two-sample or clustered
+    mde_did(...)                   analytic MDE / units for a DiD with m pre and r post periods
+                                   (McKenzie 2012, equicorrelated errors)
+    power_did_sim(...)             simulated power, size and coverage of a TWFE DiD with clustered SEs
+                                   under AR(1) errors, unit effects, simultaneous or staggered adoption
+    mde_did_sim(...)               smallest effect with the target simulated power (bisection)
 
 All functions take R (replications) and seed; defaults are small enough to run in seconds.
 Show the code with the result: the student should rerun it and change one number.
@@ -300,3 +305,133 @@ def power_mde(n: float | None = None, mde: float | None = None, sd: float = 1.0,
     nn = (k * sd / mde) ** 2 * de / (p * (1 - p))
     return {"n": float(np.ceil(nn)), "mde": mde, "design_effect": de, "alpha": alpha, "power": power,
             "n_clusters": float(np.ceil(nn / cluster_size)) if cluster_size > 1 else None}
+
+
+
+# =============================================================================
+# Power for difference-in-differences (v2.2)
+# =============================================================================
+def mde_did(n_units: float | None = None, mde: float | None = None, n_pre: int = 1, n_post: int = 1,
+            share_treated: float = 0.5, sd: float = 1.0, rho: float = 0.0, alpha: float = ALPHA,
+            power: float = 0.8) -> dict:
+    """Analytic MDE (given n_units) or number of units (given mde) for a DiD comparing the
+    average of n_pre pre-periods with n_post post-periods, two-sided test (McKenzie 2012):
+        Var(DiD) = sd^2 (1 - rho) (1/m + 1/r) / (P (1 - P) N),
+    where sd is the total SD of the outcome and rho its constant (equicorrelated) autocorrelation:
+    unit effects with an i.i.d. shock give exactly this structure, and more periods help.
+    With decaying (AR(1)) autocorrelation this formula overstates power (Burlig, Preonas &
+    Woerman 2020): use power_did_sim, which simulates the actual error process and the
+    clustered standard errors you will use."""
+    k = stats.norm.ppf(1 - alpha / 2) + stats.norm.ppf(power)
+    p = share_treated
+    f = sd ** 2 * (1 - rho) * (1 / n_pre + 1 / n_post) / (p * (1 - p))
+    if (n_units is None) == (mde is None):
+        raise ValueError("give exactly one of n_units or mde")
+    if n_units is not None:
+        v = k * np.sqrt(f / n_units)
+        return {"mde": float(v), "mde_in_sd": float(v / sd), "n_units": n_units, "n_pre": n_pre,
+                "n_post": n_post, "rho": rho, "alpha": alpha, "power": power}
+    return {"n_units": float(np.ceil(f * (k / mde) ** 2)), "mde": mde, "n_pre": n_pre, "n_post": n_post,
+            "rho": rho, "alpha": alpha, "power": power}
+
+
+def _did_panel(rng, n_units, T, treat_start, effect, sd_unit, sd_e, rho_ar, time_sd):
+    """Balanced panel: y = a_i + l_t + effect * D_it + e_it, e AR(1) with stationary SD sd_e."""
+    a = rng.normal(0, sd_unit, n_units)[:, None]
+    lam = rng.normal(0, time_sd, T)[None, :]
+    e = np.empty((n_units, T))
+    e[:, 0] = rng.normal(0, sd_e, n_units)
+    innov = sd_e * np.sqrt(1 - rho_ar ** 2)
+    for t in range(1, T):
+        e[:, t] = rho_ar * e[:, t - 1] + rng.normal(0, innov, n_units)
+    tt = np.arange(1, T + 1)[None, :]
+    D = ((treat_start[:, None] > 0) & (tt >= treat_start[:, None])).astype(float)
+    return a + lam + effect * D + e, D
+
+
+def _twfe_cluster(Y, D):
+    """TWFE coefficient on D with CR1 unit-clustered SE, by two-way demeaning (balanced panel)."""
+    def dm(M):
+        return M - M.mean(1, keepdims=True) - M.mean(0, keepdims=True) + M.mean()
+    y, d = dm(Y), dm(D)
+    G, T = Y.shape
+    sdd = np.sum(d * d)
+    b = np.sum(d * y) / sdd
+    u = y - b * d
+    sg = np.sum(d * u, axis=1)
+    k = 1 + (G - 1) + (T - 1) + 1          # intercept, unit and time dummies, D
+    c = G / (G - 1) * (G * T - 1) / (G * T - k)
+    se = np.sqrt(c * np.sum(sg ** 2)) / sdd
+    return b, se
+
+
+def power_did_sim(n_units: int = 100, T: int = 10, share_treated: float = 0.5, effect: float = 0.2,
+                  adoption=None, sd_unit: float = 1.0, sd_e: float = 1.0, rho_ar: float = 0.0,
+                  time_sd: float = 0.5, alpha: float = ALPHA, R: int = 1000, seed: int = 0,
+                  with_size: bool = True) -> dict:
+    """Simulated power of the static TWFE DiD with unit-clustered (CR1) SEs and t(G-1) critical
+    values, for the design you plan, with the same seeds for every effect size.
+
+    adoption: None = all treated units adopt at period T//2 + 1; an int = that period; a list
+    of periods = staggered adoption, assigned to treated units in turn. AR(1) errors with
+    autocorrelation rho_ar and stationary SD sd_e, unit effects (SD sd_unit), common time shocks.
+    The effect is constant, so TWFE is unbiased here; with staggered adoption and effects that
+    change over time, simulate att_gt with monte_carlo instead (demo_staggered_did shows why).
+    Returns power, size (effect 0, same draws) and CI coverage; with fewer than ~10 treated
+    units clustered SEs over-reject: plan inference by randomization_inference instead."""
+    rng0 = np.random.default_rng(seed)
+    n_t = int(round(share_treated * n_units))
+    if adoption is None:
+        adoption = [T // 2 + 1]
+    elif np.isscalar(adoption):
+        adoption = [int(adoption)]
+    adoption = list(adoption)
+    warn = []
+    if n_t < 10:
+        warn.append(f"{n_t} treated units: clustered SEs over-reject; plan randomization inference")
+    rej, rej0, cover, ests = [], [], [], []
+    crit = stats.t.ppf(1 - alpha / 2, n_units - 1)
+    for _ in range(R):
+        rng = np.random.default_rng(rng0.integers(2 ** 32))
+        start = np.zeros(n_units)
+        idx = rng.permutation(n_units)[:n_t]
+        start[idx] = [adoption[j % len(adoption)] for j in range(n_t)]
+        state = rng.bit_generator.state
+        Y, D = _did_panel(rng, n_units, T, start, effect, sd_unit, sd_e, rho_ar, time_sd)
+        b, se = _twfe_cluster(Y, D)
+        rej.append(abs(b / se) > crit)
+        cover.append(abs(b - effect) <= crit * se)
+        ests.append(b)
+        if with_size:
+            rng.bit_generator.state = state
+            Y0, _ = _did_panel(rng, n_units, T, start, 0.0, sd_unit, sd_e, rho_ar, time_sd)
+            b0, se0 = _twfe_cluster(Y0, D)
+            rej0.append(abs(b0 / se0) > crit)
+    ests = np.array(ests)
+    return {"power": float(np.mean(rej)), "size": float(np.mean(rej0)) if with_size else None,
+            "coverage": float(np.mean(cover)), "mean_estimate": float(ests.mean()), "sd_estimate": float(ests.std()),
+            "effect": effect, "n_units": n_units, "T": T, "n_treated": n_t, "rho_ar": rho_ar, "R": R,
+            "mc_se_power": float(np.sqrt(np.mean(rej) * (1 - np.mean(rej)) / R)), "warnings": warn}
+
+
+def mde_did_sim(target_power: float = 0.8, lo: float = 0.0, hi: float | None = None, tol: float = 0.005,
+                **kwargs) -> dict:
+    """Smallest constant effect whose simulated power (power_did_sim, same seeds) reaches
+    target_power, by bisection; kwargs are passed to power_did_sim (R, n_units, T, rho_ar, ...).
+    Start `hi` at a few times the analytic mde_did if known."""
+    kwargs = {**kwargs, "with_size": False}
+    if hi is None:
+        hi = 1.0
+        while power_did_sim(effect=hi, **kwargs)["power"] < target_power:
+            hi *= 2
+            if hi > 1e6:
+                raise RuntimeError("power never reaches the target")
+    while hi - lo > tol * max(hi, 1e-12):
+        mid = 0.5 * (lo + hi)
+        if power_did_sim(effect=mid, **kwargs)["power"] >= target_power:
+            hi = mid
+        else:
+            lo = mid
+    pw = power_did_sim(effect=hi, **{**kwargs, "with_size": True})
+    return {"mde": hi, "power_at_mde": pw["power"], "size": pw["size"], "target_power": target_power,
+            **{k: kwargs[k] for k in ("n_units", "T", "rho_ar") if k in kwargs}}

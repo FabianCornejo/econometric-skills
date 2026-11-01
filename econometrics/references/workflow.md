@@ -19,6 +19,8 @@ Five to ten lines, shown to the user and kept at the top of the report. It is a 
 
 Separating X from W (EconML's convention) prevents a common error: reading the coefficient of a control as if it were an effect. A control is in the model to clean the coefficient of interest, not to be interpreted.
 
+Choose W with a causal graph: write it from institutional knowledge and run `dag.adjustment_report(g, treatment, y, df)` (`causal-inference.md` §2.1). It returns the valid adjustment sets and flags mediators, colliders, post-treatment variables and instruments, which must not be in W. For a planned study, add the design's MDE to the card (`simulation.mde_did` / `power_did_sim`, `causal-inference.md` §6.2).
+
 Follow the steps in order; each exists because skipping it produces a specific kind of error. Explain to the user what is being done at each step and why.
 
 ## 1. Frame the question and the hypothesis
@@ -128,7 +130,7 @@ A conclusion is reliable only if it survives reasonable variations. Do at least 
 - subsample (without the pandemic; separate periods);
 - another estimator (OLS vs. IV; FE vs. RE; 2SLS vs. LIML; alternative Cholesky ordering);
 - another variable definition or aggregation level;
-- for causal claims resting on observed controls: sensitivity to unobserved confounders (`specification.oster` and/or `sensitivity`, `ols-regression.md` §14);
+- for causal claims resting on observed controls: sensitivity to unobserved confounders (`specification.oster` and/or `sensitivity`, `ols-regression.md` §14; for double ML, `causal.dml_sensitivity` benchmarked with `causal.dml_benchmark`, `causal-inference.md` §4.1);
 - for forecasting: rolling-origin evaluation against naive, seasonal naive and ETS, with a Diebold-Mariano test;
 - for strategies and risk models: out-of-sample period, realistic costs, number of variants tried, VaR backtests (see `forecasting-backtesting.md` §9 and `risk-var.md` §3).
 

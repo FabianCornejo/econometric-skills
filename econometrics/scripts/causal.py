@@ -9,6 +9,9 @@ Selection on observables
     aipw(df, y, treat, covs, ...)                 doubly robust ATE with influence-function SE (optional cross-fitting)
     nn_match(df, y, treat, ps, ...)               nearest-neighbour propensity matching (ATT) with caliper
     dml_plr(df, y, d, X, ...)                     double/debiased ML, partially linear model (Chernozhukov et al., 2018)
+    dml_sensitivity(res, cf_y, cf_d, rho)         omitted-confounder bounds and robustness values for DML-PLR
+                                                  (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022)
+    dml_benchmark(df, y, d, X, benchmarks)        implied cf_y, cf_d, rho of observed covariates (calibration)
 
 Regression discontinuity
     select_bandwidth(y, x, cutoff)                rdrobust MSE bandwidth if installed, else Imbens-Kalyanaraman (2012)
@@ -195,7 +198,7 @@ def dml_plr(df: pd.DataFrame, y: str, d: str, X: list[str], learner_y=None, lear
     D = df[d].astype(float).to_numpy()
     ly = learner_y or RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1, random_state=seed)
     ld = learner_d or RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1, random_state=seed)
-    thetas, ses = [], []
+    thetas, ses, resid = [], [], []
     for rep in range(n_rep):
         uy, vd = np.zeros_like(Y), np.zeros_like(D)
         for tr, te in KFold(n_folds, shuffle=True, random_state=seed + rep).split(Xm):
@@ -204,10 +207,126 @@ def dml_plr(df: pd.DataFrame, y: str, d: str, X: list[str], learner_y=None, lear
         th = np.sum(vd * uy) / np.sum(vd * vd)
         psi = (uy - th * vd) * vd
         se = np.sqrt(np.mean(psi ** 2) / np.mean(vd ** 2) ** 2 / len(Y))
-        thetas.append(th); ses.append(se)
+        thetas.append(th); ses.append(se); resid.append((uy, vd))
     th = float(np.median(thetas))
     se = float(np.median(np.sqrt(np.array(ses) ** 2 + (np.array(thetas) - th) ** 2)))
-    return _out("theta (DML-PLR)", th, se, len(Y), n_folds=n_folds, n_rep=n_rep)
+    return _out("theta (DML-PLR)", th, se, len(Y), n_folds=n_folds, n_rep=n_rep,
+                residuals=resid, var_y=float(np.var(Y)), thetas=thetas)
+
+
+def _dml_sens_rep(uy, vd, cf_y, cf_d, rho):
+    """Point estimates and influence functions of theta, S and the bounds for one sample split."""
+    n = len(uy)
+    Evv = np.mean(vd * vd)
+    th = np.sum(vd * uy) / np.sum(vd * vd)
+    eps = uy - th * vd
+    sig2 = np.mean(eps ** 2)
+    nu2 = 1 / Evv                                   # E[alpha^2], Riesz representer alpha = v / E[v^2]
+    S = np.sqrt(sig2 * nu2)
+    psi_th = eps * vd / Evv
+    psi_sig2 = eps ** 2 - sig2
+    psi_nu2 = -(vd * vd - Evv) / Evv ** 2
+    c = abs(rho) * np.sqrt(cf_y * cf_d / (1 - cf_d)) if cf_d < 1 else np.inf
+    bound = c * S
+    psi_S = (nu2 * psi_sig2 + sig2 * psi_nu2) / (2 * S)
+    psi_lo, psi_hi = psi_th - c * psi_S, psi_th + c * psi_S
+    return {"theta": th, "sigma2": sig2, "nu2": nu2, "S": S, "bound": bound,
+            "theta_lo": th - bound, "theta_hi": th + bound,
+            "se_theta": np.sqrt(np.mean(psi_th ** 2) / n),
+            "se_lo": np.sqrt(np.mean(psi_lo ** 2) / n), "se_hi": np.sqrt(np.mean(psi_hi ** 2) / n)}
+
+
+def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: float = 1.0,
+                    alpha: float = ALPHA, q: float = 1.0, show: bool = True) -> dict:
+    """Omitted-variable sensitivity for DML-PLR (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022,
+    "Long Story Short"), the machine-learning analogue of Cinelli-Hazlett (2020).
+
+    A latent confounder A, if added, would move theta by at most
+        |theta_short - theta_long| <= |rho| * S * sqrt( cf_y * cf_d / (1 - cf_d) ),
+    S^2 = E[(Y - theta D - l(X))^2] * E[alpha^2],  alpha = (D - m(X)) / E[(D - m(X))^2], where
+      cf_y = partial R^2 of A with the outcome residual, given D and X (share of the residual
+             variance of Y that A would explain),
+      cf_d = partial R^2 of A with the treatment residual, given X (1 - R^2 of alpha_s on alpha),
+      rho  = correlation of the two omitted pieces (1 = worst case, conservative).
+    Bounds [theta - B, theta + B] and confidence bounds that add sampling error (influence
+    functions of theta and S, median over the sample splits of dml_plr). Robustness values:
+    rv = strength (cf_y = cf_d) that drives theta to (1 - q) theta; rva = strength at which the
+    confidence bound reaches that value. Calibrate cf_y and cf_d with dml_benchmark: "a
+    confounder as strong as income" is a statement the reader can judge."""
+    if "residuals" not in res:
+        raise ValueError("pass the dict returned by causal.dml_plr")
+    z = stats.norm.ppf(1 - alpha / 2)
+    reps = [_dml_sens_rep(uy, vd, cf_y, cf_d, rho) for uy, vd in res["residuals"]]
+    med = {k: float(np.median([r_[k] for r_ in reps])) for k in reps[0]}
+    th, S, B = res["estimate"], med["S"], med["bound"]
+    lo, hi = th - B, th + B
+    ci_lo, ci_hi = lo - z * med["se_lo"], hi + z * med["se_hi"]
+
+    def rv_for(target_gap, with_se):
+        def gap(eta):
+            e2 = eta * eta
+            c = abs(rho) * e2 / np.sqrt(1 - e2)
+            if with_se:
+                rr = [_dml_sens_rep(uy, vd, e2, e2, rho) for uy, vd in res["residuals"]]
+                sel = np.median([x["se_lo"] if th > 0 else x["se_hi"] for x in rr])
+                return c * S + z * sel - target_gap
+            return c * S - target_gap
+        if gap(1e-9) >= 0:
+            return 0.0
+        if gap(1 - 1e-9) < 0:
+            return 1.0
+        return float(optimize.brentq(gap, 1e-9, 1 - 1e-9) ** 2)
+    rv = rv_for(q * abs(th), False)
+    rva = rv_for(q * abs(th), True)
+    grid = np.array([0.01, 0.02, 0.05, 0.10, 0.15, 0.20, 0.30])
+    tab = pd.DataFrame(index=pd.Index(grid, name="cf_y \\ cf_d"), columns=grid, dtype=float)
+    for cy in grid:
+        for cd in grid:
+            tab.loc[cy, cd] = th - np.sign(th) * abs(rho) * S * np.sqrt(cy * cd / (1 - cd))
+    out = {"estimand": "theta (DML-PLR) under omitted confounding", "estimate": th, "se": res["se"],
+           "ci_low": ci_lo, "ci_high": ci_hi, "p": res["p"], "n": res["n"],
+           "method": "Chernozhukov et al. (2022) OVB bounds for DML-PLR",
+           "cf_y": cf_y, "cf_d": cf_d, "rho": rho, "S": S, "bias_bound": B,
+           "theta_lower": lo, "theta_upper": hi, "rv": rv, "rva": rva, "q": q,
+           "bound_table": tab, "warnings": []}
+    if show:
+        print(f"\nDML-PLR sensitivity: theta = {th:.4f} (SE {res['se']:.4f}), S = {S:.4f}")
+        print(f"  confounder with cf_y = {cf_y:.1%}, cf_d = {cf_d:.1%}, rho = {rho}: bias <= {B:.4f}")
+        print(f"  bounds [{lo:.4f}, {hi:.4f}]; {100 * (1 - alpha):.0f}% confidence bounds [{ci_lo:.4f}, {ci_hi:.4f}]")
+        print(f"  RV = {rv:.2%}: a confounder explaining {rv:.1%} of the residual variance of both D and Y "
+              f"would move theta to {(1 - q) * th:.4f}; RVa = {rva:.2%} makes it no longer significant.")
+        print("  Benchmark these strengths against observed covariates with causal.dml_benchmark.")
+    return out
+
+
+def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: list[str],
+                  res: dict | None = None, **dml_kwargs) -> pd.DataFrame:
+    """Implied sensitivity parameters of observed covariates (Chernozhukov et al. 2022, sec. 6):
+    refit dml_plr without each benchmark covariate X_j and measure what it contributes.
+      cf_y   = (sigma2_short - sigma2_long) / sigma2_short   (gain in the outcome's explained residual variance)
+      cf_d   = (nu2_long - nu2_short) / nu2_long              (= R^2 of X_j with D residual, given the rest)
+      rho    = (theta_short - theta_long) / (S_short sqrt(cf_y cf_d / (1 - cf_d)))
+      delta_theta = theta_short - theta_long
+    Pass k * cf_y and k * cf_d to dml_sensitivity for "a confounder k times as strong as X_j".
+    Benchmarks are informative only if the latent confounder is comparable to the observed
+    ones; they also condition on the remaining covariates, so they are not exact."""
+    res = res or dml_plr(df, y, d, X, **dml_kwargs)
+    long = [_dml_sens_rep(uy, vd, 0, 0, 1) for uy, vd in res["residuals"]]
+    s2l = np.median([r_["sigma2"] for r_ in long]); n2l = np.median([r_["nu2"] for r_ in long])
+    rows = []
+    for b in benchmarks:
+        rs = dml_plr(df, y, d, [x for x in X if x != b], **dml_kwargs)
+        sh = [_dml_sens_rep(uy, vd, 0, 0, 1) for uy, vd in rs["residuals"]]
+        s2s = np.median([r_["sigma2"] for r_ in sh]); n2s = np.median([r_["nu2"] for r_ in sh])
+        Ss = np.median([r_["S"] for r_ in sh])
+        cy = max((s2s - s2l) / s2s, 0.0)
+        cd = float(np.clip((n2l - n2s) / n2l, 0.0, 0.999))
+        dth = rs["estimate"] - res["estimate"]
+        denom = Ss * np.sqrt(cy * cd / (1 - cd)) if cy > 0 and cd > 0 else np.nan
+        rows.append({"benchmark": b, "cf_y": cy, "cf_d": cd,
+                     "rho": float(np.clip(dth / denom, -1, 1)) if np.isfinite(denom) and denom > 0 else np.nan,
+                     "theta_without": rs["estimate"], "delta_theta": dth})
+    return pd.DataFrame(rows).set_index("benchmark")
 
 
 # =============================================================================

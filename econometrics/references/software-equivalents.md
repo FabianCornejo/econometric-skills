@@ -184,3 +184,14 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | R `tseries::portfolio.optim`, `PortfolioAnalytics` | `finance_empirics.efficient_frontier`, `shrink_cov` |
 | Stata `ritest`, R `ri2` | `causal.randomization_inference` |
 | Stata `simulate`, R `MonteCarlo`; `power twomeans`, R `pwr` | `simulation.monte_carlo`, `simulation.demo_*`, `simulation.power_mde` |
+
+## Causal graphs, DML sensitivity, DiD power and tail risk (v2.2)
+
+| Stata / R | Python (this skill) |
+|---|---|
+| R `dagitty::adjustmentSets`, `dseparated`, `impliedConditionalIndependencies`, `localTests`; DAGitty web | `dag.adjustment_sets`, `d_separated`, `implied_independencies`, `test_implications`, `adjustment_report` |
+| R `pcalg::optAdjSet` | `dag.optimal_adjustment_set` |
+| R/Python `DoubleML` `sensitivity_analysis`, `sensitivity_benchmark`; R `dml.sensemakr` | `causal.dml_sensitivity`, `causal.dml_benchmark` |
+| Stata `pc_simulate` (Burlig et al.), `power` with repeated measures; R `pwr`/simulation | `simulation.mde_did`, `power_did_sim`, `mde_did_sim` |
+| R `evir`, `POT`, `extRemes::fevd(type="GP")`, `ismev::gpd.fit`; MATLAB `gpfit` | `risk.mean_excess`, `risk.gpd_fit`, `risk.var_evt` |
+| R `esback::esr_backtest`, `cc_backtest`; `GAS`/`esreg` FZ loss | `risk.es_backtest`, `risk.fz_loss`, `risk.compare_es_models` |

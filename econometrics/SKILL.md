@@ -1,6 +1,6 @@
 ---
 name: econometrics
-description: Rigorous applied econometrics in Python, as consultant, teacher or reviewer - OLS with full diagnostics, ANOVA, robust/quantile regression, lasso, IV, panel data, logit/probit/tobit, causal designs (AIPW, double ML, RD, staggered DiD, synthetic control, randomization inference), heterogeneous effects and targeting policies (CATE, causal forests, BLP/GATES), MLE, delta method, wild bootstrap, survival, text and LLM coding, time series (ARIMA, VAR, cointegration), GARCH, betas/WACC, event studies, VaR/ES, copulas, Kalman, regimes, backtests, elasticities, Monte Carlo teaching demos. Use it to estimate, even alongside valuation or cost-of-capital skills, for any regression, effect of X on Y, for whom an effect is larger, policy or law evaluation, elasticity, forecast, time-to-event, coding documents, churn segments, beta (WACC) or cost of equity, market reaction to an announcement, tail risk, teaching a method, or reviewing someone else's empirical analysis, even without the word econometrics.
+description: Rigorous applied econometrics in Python, as consultant, teacher or reviewer - OLS with full diagnostics, ANOVA, robust/quantile regression, lasso, IV, panel data, logit/probit/tobit, causal designs (DAGs to choose controls, AIPW, double ML with sensitivity, RD, staggered DiD, synthetic control, randomization inference, power), heterogeneous effects (CATE, causal forests, BLP/GATES), MLE, delta method, wild bootstrap, survival, text and LLM coding, time series (ARIMA, VAR, cointegration), GARCH, betas/WACC, event studies, VaR/ES with EVT and backtests, copulas, Kalman, regimes, teaching simulations. Use it to estimate, even alongside valuation or cost-of-capital skills, for any regression, effect of X on Y, which controls to include, for whom an effect is larger, policy or law evaluation, elasticity, forecast, time-to-event, beta (WACC) or cost of equity, market reaction to an announcement, tail risk, teaching a method, or reviewing someone else's empirical analysis, even without the word econometrics.
 ---
 
 # Applied econometrics
@@ -31,6 +31,9 @@ Answer four questions, then read only the files they point to: (1) the **goal**:
 | Binary, count, censored, fractional or ordered y | `limited-dependent.md` | `diagnostics.tobit`, `count_diagnostics` |
 | Prices and quantities, elasticities, pass-through | `demand-elasticities.md` | IV recipes |
 | Effect of a policy, law, decision or program (non-random) | `causal-inference.md` | `causal.aipw`, `dml_plr`, `rdd`, `att_gt`, `synth` |
+| Which controls to include (bad controls, colliders, mediators) | `causal-inference.md` §2.1 | `dag.adjustment_report`, `test_implications` |
+| How robust is a causal estimate to a hidden confounder | `causal-inference.md` §4.1, `ols-regression.md` §14 | `causal.dml_sensitivity`, `dml_benchmark`, `specification.sensitivity` |
+| Sample size, power, minimum detectable effect (experiments, DiD) | `causal-inference.md` §6.2 | `simulation.power_mde`, `mde_did`, `power_did_sim` |
 | For whom the effect is larger; whom to treat | `heterogeneous-effects.md` | `hte.cate_fit`, `blp_test`, `gates`, `policy_tree` |
 | Custom likelihood, NLS, function of parameters, few clusters | `estimation-theory.md` | `estimation.mle`, `delta_method`, `wild_cluster_bootstrap` |
 | Groups/experiments, outliers, tails, small samples, many regressors | `ols-regression.md` §15 | `linear_models.anova_table`, `quantile_regression`, `post_double_selection` |
@@ -40,7 +43,7 @@ Answer four questions, then read only the files they point to: (1) the **goal**:
 | Binary y with segments whose drivers differ (prediction) | `limited-dependent.md` §9 | `segments.logit_leaf_model` |
 | Messy files, scraping, PDFs; fetching data | `data-collection-wrangling.md`, `data-sources.md` | `data_prep.*` |
 | Returns and volatility | `volatility.md` | `arch` recipes |
-| VaR and Expected Shortfall | `risk-var.md` | `risk.*` |
+| VaR and Expected Shortfall, far tails, ES backtests | `risk-var.md` | `risk.var_evt`, `gpd_fit`, `backtest_var`, `es_backtest` |
 | Joint extremes, contagion | `dependence-copulas.md` | `dependence.fit_copulas` |
 | Time-varying relations, regimes, pairs | `state-space-regimes.md` | `state_space.*`, `regimes.*` |
 | Forecasts and model-based strategies | `forecasting-backtesting.md` | `forecasting.*`, `backtest.*` |
@@ -63,7 +66,7 @@ Full detail, code and the diagnostic order are in `references/workflow.md`. Expl
 
 Full versions and reasons in `references/interpretation-rules.md`.
 
-- **Design before data**: choose the estimand, design, covariates, bandwidths and windows before looking at outcomes.
+- **Design before data**: choose the estimand, design, covariates, bandwidths and windows before looking at outcomes. Choose controls with a causal graph (`dag.adjustment_report`): never mediators, colliders, post-treatment variables or instruments. Plan power (`simulation.mde_did`/`power_did_sim`) and report the MDE next to an insignificant effect.
 - **DiD**: ask whether the adoption date is exact (and its source), announced in advance or gradual; run `causal.did_timing_sensitivity` next to `att_gt`; relay any timing WARNING in plain words.
 - **Robust SEs by default** (HC3; HAC for time series). **Cluster where the regressor of interest varies** (a judge's sex: by judge, not by court), the same level in text and code; report the number of clusters; with fewer than ~40, add `estimation.wild_cluster_bootstrap`; with very few **treated** clusters, also `causal.randomization_inference`.
 - **Association is not causation**: causal language only with an identification strategy; Granger causality is predictive precedence; say which way remaining bias probably goes.
@@ -73,7 +76,7 @@ Full versions and reasons in `references/interpretation-rules.md`.
 - **LLM-coded variables are measurements with error**: hand-code a random sample with known probabilities and use `text_data.dsl_regression`; report naive and corrected side by side.
 - **Segmented logit**: benchmarks must contain every regressor of the leaf model; report segments only if they recur across seeds.
 - **Heterogeneous effects only with evidence**: `hte.blp_test` rejects and `hte.gates` separates groups, on out-of-fold predictions; compare a linear and a flexible model; value policies on held-out units.
-- **Run more than one model** for causal claims (simple structural and flexible); disagreement is a finding.
+- **Run more than one model** for causal claims (simple structural and flexible); disagreement is a finding. Claims from observed controls carry a sensitivity analysis benchmarked on observed covariates (`specification.sensitivity`; `causal.dml_sensitivity` + `dml_benchmark`).
 - **Advice must match the tools**: never recommend a step and show code that does something else; if no function exists, say so and write the code.
 - **Deliver code, not only a plan.** Every answer that recommends an analysis names the skill's function for each step (Stata/R only as a complement) and ends with a runnable script that calls those functions: run it on the user's data, or, with no data yet, on simulated data with the same structure (same units, variables and N), so the user only swaps the file. Show the code or deliver it as a downloadable file; never point to an internal sandbox path. Put a `SKILL_DIR` variable at the top of the script (where the user keeps this skill's `scripts/` folder, e.g. from github.com/FabianCornejo/econometric-skills) instead of a sandbox path, and test it on data that include the awkward cases (skipped events, missing values, repeated units).
 - **No invented numbers**: every figure comes from a computation run in the session or a cited source.
@@ -91,13 +94,14 @@ Import with `sys.path.insert(0, '<skill>/scripts')`. They are tested starting po
 | `diagnostics.py` | OLS battery, influence, Chow, ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Mundlak/CRE, Tobit with three margins, count overdispersion, Diebold-Mariano |
 | `specification.py` | FGLS, CI vs prediction intervals with smearing, long-run effects, standardized coefficients, exact OVB, Oster delta, Cinelli-Hazlett robustness value |
 | `estimation.py` | Generic MLE (Newton/BFGS; Hessian, OPG, sandwich, cluster SEs), LR/Wald/LM trinity, NLS, delta method, pairs/cluster bootstrap, wild cluster bootstrap-t with CI |
-| `causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD with robustness, TWFE event study, Callaway-Sant'Anna, DiD timing sensitivity, randomization inference for few treated units, synthetic control |
+| `causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML with omitted-confounder bounds and benchmarks, RD with robustness, TWFE event study, Callaway-Sant'Anna, DiD timing sensitivity, randomization inference for few treated units, synthetic control |
+| `dag.py` | Causal graphs: d-separation, minimal and optimal adjustment sets, role of each control (confounder, mediator, collider, instrument), tests of the graph's implications, Mermaid export |
 | `linear_models.py` | ANOVA (types I-III) and pairwise tests, ANCOVA, robust and quantile regression, Freedman-Lane permutation test, lack of fit, Box-Cox, partial residuals, shrinkage by nested CV, post-double-selection lasso, best subsets |
 | `finance_empirics.py` | Total/log returns, market model and CAPM, rolling and adjusted (Blume/Vasicek) betas, Hamada/Harris-Pringle unlever/relever, Dimson beta, factor models (FF, NEFIN), event studies (cross-sectional t, Patell, BMP, Corrado) and CAR regressions, performance ratios, Markowitz with Ledoit-Wolf |
-| `simulation.py` | Teacher-mode Monte Carlo demos (omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD), generic `monte_carlo`, `power_mde` |
+| `simulation.py` | Teacher-mode Monte Carlo demos (omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD), generic `monte_carlo`, `power_mde`, DiD power (analytic and simulated with AR(1) errors and clustered SEs) |
 | `hte.py` | CATE (DR-learner, linear DML, forest, T/S/X-learners), BLP calibration test, GATES, CLAN, TOC/AUTOC/Qini, R-score, policy trees and policy value |
 | `forecasting.py`, `backtest.py` | Auto-ARIMA, ARIMAX, VAR forecasts, walk-forward, benchmarks, DM/PT tests; look-ahead-free backtests, momentum, Sharpe CI |
-| `risk.py`, `dependence.py` | VaR/ES (historical, parametric, EWMA, FHS, GARCH) and backtests; copulas, tail dependence, mutual information |
+| `risk.py`, `dependence.py` | VaR/ES (historical, parametric, EWMA, FHS, GARCH, EVT/POT and conditional EVT), VaR and ES backtests (Kupiec, Christoffersen, McNeil-Frey, Acerbi-Szekely, FZ0 loss); copulas, tail dependence, mutual information |
 | `state_space.py`, `regimes.py` | Kalman time-varying coefficients, half-life, pairs; Markov switching, HMM, K-means regimes |
 | `survival.py` | Kaplan-Meier, log-rank, Cox with clustered SEs, PH test, person-period data |
 | `text_data.py` | Regex coding, TF-IDF, LDA, classifiers, validation, LLM coding with probabilities and uncertainty, DSL regression |

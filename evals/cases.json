@@ -1,5 +1,5 @@
 {
-  "version": "2.1",
+  "version": "2.2",
   "how_to_run": "See evals/README.md. Paste each prompt, alone, in a fresh conversation with the current econometrics skill installed. Grade the answer against every criterion; a case passes only if all 'must' criteria hold and no 'must_not' criterion is triggered.",
   "cases": [
     {
@@ -125,6 +125,55 @@
         "Uses an estimation window that overlaps the event window.",
         "Reports only the Patell test.",
         "Draws causal conclusions about deal value creation without discussing anticipation and confounding events."
+      ]
+    },
+    {
+      "id": "dag-controls-advisor-premium",
+      "language": "pt-BR",
+      "prompt": "Quero estimar se contratar um assessor financeiro (banco de investimento) pelo comprador muda o prêmio pago em aquisições no Brasil. Tenho, para 300 deals, o tamanho do alvo, o setor, se o alvo é listado, se houve leilão competitivo, o tempo entre o anúncio e o fechamento e o retorno anormal do comprador no anúncio. Quais variáveis devo usar como controle?",
+      "must": [
+        "Writes the causal graph of the problem and runs dag.adjustment_report (or adjustment_sets / classify_controls) instead of controlling for every available variable.",
+        "Flags post-treatment variables as bad controls: time to closing and the announcement abnormal return are outcomes or descendants of the advisor choice and the premium, so they must not be controls.",
+        "Treats target size, sector and listed status as candidate confounders, and discusses competitive auction as a possible mediator (the advisor may run the auction) whose inclusion changes the estimand.",
+        "Says the choice of advisor is not random (selection on deal complexity, acquirer sophistication) and adds a sensitivity analysis (specification.sensitivity or causal.dml_sensitivity) benchmarked on an observed covariate.",
+        "Delivers a runnable script with a SKILL_DIR variable that calls the skill's functions, on simulated data with the same structure if no data are attached."
+      ],
+      "must_not": [
+        "Recommends including all available variables as controls.",
+        "Controls for time to closing or the announcement return.",
+        "Reads the coefficients of the controls as causal effects."
+      ]
+    },
+    {
+      "id": "es-backtest-frtb",
+      "language": "pt-BR",
+      "prompt": "Nosso VaR de 99% para a carteira de ações é calculado pela normal com janela de 1 ano. A área de risco quer migrar para Expected Shortfall de 97,5% (FRTB). Como avaliamos se o modelo atual serve e qual modelo usar para o ES? Temos 8 anos de retornos diários.",
+      "must": [
+        "Backtests the current VaR with risk.backtest_var (Kupiec coverage and Christoffersen independence, Basel traffic light) on a common sample, using only past data.",
+        "Backtests ES with risk.es_backtest (McNeil-Frey exceedance residuals and Acerbi-Szekely Z2) and explains that ES is not elicitable alone, so models are ranked jointly with VaR by the FZ0 loss (risk.compare_es_models).",
+        "Compares at least a static model, a filtered model (EWMA-FHS or GARCH-t) and conditional EVT (risk.var_evt with filter='ewma'), and explains why the normal understates the tail (risk.gpd_fit: tail index xi with CI).",
+        "Delivers a runnable script calling those functions (SKILL_DIR variable), on simulated fat-tailed returns if no data are attached."
+      ],
+      "must_not": [
+        "Judges the ES model only by the number of VaR violations or by a chart.",
+        "Uses full-sample statistics to compute past VaR/ES (look-ahead).",
+        "Scales a daily ES to 10 days by the square root of time without stating the i.i.d. assumption."
+      ]
+    },
+    {
+      "id": "did-power-credit-policy",
+      "language": "pt-BR",
+      "prompt": "Vamos testar uma nova política de crédito em 20 das 120 agências de um banco, todas ao mesmo tempo, e comparar a inadimplência mensal com as outras agências. Quantos meses de dados antes e depois precisamos para detectar uma queda de 0,3 ponto percentual na inadimplência? O desvio-padrão mensal por agência é de cerca de 1 ponto.",
+      "must": [
+        "Gives an analytic first pass with simulation.mde_did or power_mde and explains its assumptions (equicorrelated errors).",
+        "Uses simulation.power_did_sim (or mde_did_sim) with serially correlated (AR(1)) errors, agency effects and SEs clustered by agency, and explains that serial correlation lowers power relative to the formula.",
+        "Reports power or MDE for a few combinations of pre and post months and recommends a design, with the effect in the same units as the question.",
+        "Notes that 20 treated agencies is enough for clustered SEs but suggests randomization inference (causal.randomization_inference) as a check, and that random choice of the 20 agencies would turn the DiD into an experiment.",
+        "Delivers a runnable script with a SKILL_DIR variable."
+      ],
+      "must_not": [
+        "Ignores serial correlation and clustering when computing power.",
+        "Gives a number of months without showing how it was computed."
       ]
     }
   ]
