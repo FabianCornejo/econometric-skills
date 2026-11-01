@@ -52,13 +52,14 @@ rep = dag.adjustment_report(g, "discount", "purchase", df=data)   # sets {income
                                                                   # optimal {price_sensitivity, season}
 ```
 
-It returns the **minimal adjustment sets** (backdoor criterion), the **optimal set** (Henckel, Perković & Maathuis 2022: among valid sets, the one with the smallest variance; it adds outcome predictors and drops pure treatment predictors), the **role of every variable** and, with data, **tests of the graph's implications**.
+Always include the edge x -> y being estimated: a graph without it claims the effect is zero (the report warns). It returns the **minimal adjustment sets** (backdoor criterion), the **optimal set** (Henckel, Perković & Maathuis 2022: among valid sets, the one with the smallest variance; it adds outcome predictors and drops pure treatment predictors), the **role of every variable** and, with data, **tests of the graph's implications**.
 
 | Role (`classify_controls`) | Example | Control? |
 |---|---|---|
 | Confounder (causes x and y) | income for a discount's effect on purchases | Yes (or a set that blocks its path) |
 | Mediator (x → v → y) | site visits caused by the discount | No: removes part of the effect (unless the question is the direct effect) |
-| Descendant of x / collider | a review written after the purchase | No: post-treatment, can open a path |
+| Descendant of x / collider | a delivery delay caused by the discount campaign | No: post-treatment, can open a path |
+| Descendant of y (consequence of the outcome) | a review written after the purchase; the market reaction to a premium paid | No: conditioning on it biases the effect, even though it raises R² |
 | Collider of two causes, not a descendant of x (M-bias) | a variable caused by two independent causes of x and y | No: controlling opens a path |
 | Instrument-like (affects y only through x) | region of a randomized rollout | No: raises variance and amplifies any remaining bias; use it as an instrument |
 | Outcome predictor (not a cause of x) | season for purchases | Optional: improves precision |
