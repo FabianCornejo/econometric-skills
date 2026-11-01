@@ -35,6 +35,7 @@ Decide the design before looking at outcomes: choose covariates, bandwidths, com
 | Single treated unit (a state, a country, a court), many untreated, long pre-period | Synthetic control | Treated unit's counterfactual = convex combination of donors | `synth` |
 | An instrument shifts treatment but not the outcome directly | IV / 2SLS | Relevance, exclusion, monotonicity | `panel-iv.md` |
 | Random assignment of cases to decision makers (judges, examiners) | Judge/examiner IV ("leniency") | As-good-as-random assignment, exclusion, monotonicity | `panel-iv.md` + §8 |
+| Any of the above, and the question is for whom the effect is larger or whom to treat | CATE + policy learning | Same as the design, plus overlap within subgroups | `heterogeneous-effects.md` (`hte.py`) |
 
 When several designs are possible, run more than one; agreement across designs with different assumptions is the strongest evidence available.
 
@@ -60,6 +61,8 @@ Workflow:
 3. Repeat over several splits and take the median (`n_rep`).
 
 Use it when there are many controls or nonlinear confounding. It does **not** solve unobserved confounding: DML is selection on observables with better functional form. Prediction-oriented ML (lazy comparisons of 30 classifiers, maximizing accuracy) answers a different question: good prediction of Y is not an effect of D.
+
+When the effect may vary with characteristics X, the same cross-fitting machinery estimates tau(x) instead of a single theta (`hte.cate_fit(..., method="linear_dml")`, the R-learner); see `heterogeneous-effects.md`.
 
 ## 5. Regression discontinuity
 
@@ -99,7 +102,7 @@ A law phased in court by court, a policy with imprecise records, an announcement
 Read the shift table as mechanical, not as a test: shifting a correct date also moves the ATT, because treated periods enter the base. The verdict is the date-robust or window-robust estimate. It estimates the effect from the latest plausible date onward (a later-exposure ATT when effects grow over time) and drops cohorts whose earlier base falls outside the panel, so the CI is wider. If it does not exclude zero, report the result as dependent on the date and say what records would settle it.
 
 Not covered: treatment intensity that varies continuously within a unit (dose; de Chaisemartin & D'Haultfœuille, 2024; Callaway, Goodman-Bacon & Sant'Anna, 2024) and formal HonestDiD bounds (Rambachan & Roth, 2023); use R's `did`, `DIDmultiplegtDYN` and `HonestDiD` for those.
-- **Clustering**: at the level of treatment assignment (state, court, municipality); with fewer than ~30 clusters, use wild cluster bootstrap.
+- **Clustering**: at the level of treatment assignment (state, court, municipality); with fewer than ~30 clusters, use wild cluster bootstrap (`estimation.wild_cluster_bootstrap`).
 
 ## 7. Synthetic control
 

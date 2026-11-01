@@ -35,6 +35,31 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Crump, Hotz, Imbens and Mitnik (2009) — trimming for overlap; Austin (2011) — calipers; Oster (2019); Cinelli and Hazlett (2020) — sensitivity to unobserved confounding.
 - Kling (2006); Dobbie, Goldin and Yang (2018) — judge/examiner leniency designs.
 
+## Heterogeneous treatment effects and policy learning
+- Battocchi, Dillon, Hei, Lewis, Oka, Oprescu and Syrgkanis, *EconML: A Python Package for ML-Based Heterogeneous Treatment Effects Estimation* (Microsoft Research / PyWhy; https://www.pywhy.org/EconML/) — estimator comparison, flowchart for choosing an estimator, validation (DRTester, RScorer), policy trees.
+- Chernozhukov, Demirer, Duflo and Fernández-Val (2018, rev. 2023), "Generic machine learning inference on heterogeneous treatment effects in randomized experiments", NBER w24678 — BLP, GATES, CLAN.
+- Wager and Athey (2018), "Estimation and inference of heterogeneous treatment effects using random forests", *JASA*; Athey, Tibshirani and Wager (2019), "Generalized random forests", *Annals of Statistics* — causal forests, grf.
+- Nie and Wager (2021), "Quasi-oracle estimation of heterogeneous treatment effects", *Biometrika* — R-learner, R-loss.
+- Kennedy (2023), "Towards optimal doubly robust estimation of heterogeneous causal effects", *Electronic Journal of Statistics* — DR-learner.
+- Künzel, Sekhon, Bickel and Yu (2019), "Metalearners for estimating heterogeneous treatment effects using machine learning", *PNAS* — T-, S- and X-learners.
+- Yadlowsky, Fleming, Shah, Brunskill and Wager (2025), "Evaluating treatment prioritization rules via rank-weighted average treatment effects", *JASA* — TOC, AUTOC, Qini.
+- Athey and Wager (2021), "Policy learning with observational data", *Econometrica*; Sverdrup, Kanodia, Zhou, Athey and Wager (2020), "policytree: policy learning via doubly robust empirical welfare maximization over trees", *JOSS*.
+- Chernozhukov, Cinelli, Newey, Sharma and Syrgkanis (2022), "Long story short: omitted variable bias in causal machine learning", NBER w30302 — sensitivity analysis for DML (EconML's `robustness_value`).
+
+## Estimation, inference and the bootstrap
+- Greene, *Econometric Analysis*, chs. 7 (nonlinear least squares), 14 (maximum likelihood); Cameron and Trivedi (2005), chs. 5, 7 and 11 — M-estimation, the LR/Wald/LM trinity, the bootstrap.
+- White (1982), "Maximum likelihood estimation of misspecified models", *Econometrica* — sandwich covariance.
+- Cameron, Gelbach and Miller (2008), "Bootstrap-based improvements for inference with clustered errors", *REStat*; MacKinnon and Webb (2017), "Wild bootstrap inference for wildly different cluster sizes", *JAE*; Webb (2023), "Reworking wild bootstrap-based inference for clustered errors", *Canadian Journal of Economics*; Roodman, MacKinnon, Nielsen and Webb (2019), "Fast and wild: bootstrap inference in Stata using boottest", *Stata Journal*; MacKinnon, Nielsen and Webb (2023), "Cluster-robust inference: a guide to empirical practice", *Journal of Econometrics*.
+
+## Textbooks with code (used for the Teacher mode and the tests)
+- Sargent and Stachurski, *Intermediate Quantitative Economics with Python* (QuantEcon, 2025) — linear algebra, LLN/CLT, Kalman filter, Bayesian AR(1), likelihood-ratio processes; replications of Acemoglu-Johnson-Robinson (2001) by IV and of Treisman (2016) by Poisson MLE.
+- Colonescu, *Principles of Econometrics with R* (2016) — companion to Hill, Griffiths and Lim; repeated-sample and Monte Carlo teaching of sampling distributions and CI coverage.
+- Dalpiaz, *Applied Statistics with R* — regression taught through simulation; ANOVA, model building, logistic regression.
+- Faraway, *Linear Models with R* (Chapman & Hall/CRC; 2nd ed. 2014) — diagnostics, permutation tests, lack of fit, robust regression, shrinkage, model uncertainty, missing data, ANOVA and block designs.
+- Tsay, *An Introduction to Analysis of Financial Data with R* (Wiley, 2013) — linear time series, GARCH family, stochastic volatility, high-frequency data, VaR with EVT and quantile regression.
+- Ang, *Analyzing Financial Data and Implementing Financial Models Using R* (Springer, 2015) — returns, CAPM and market model, Fama-French, event studies, performance ratios, Markowitz.
+- Gallic, *Python for Economists* (2019) — introduction to the language for economists.
+
 ## Empirical legal studies and text as data
 - Machado (org.), *Pesquisar empiricamente o Direito* (Rede de Estudos Empíricos em Direito, 2017) — empirical legal research in Brazil.
 - Epstein and Martin, *An Introduction to Empirical Legal Research* (2014).
