@@ -2,6 +2,13 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.2.1 — Fixes from the v2.2 blind evals
+
+- **Control choice (eval passed with one gap):** the eval's graph omitted the edge treatment -> outcome, so the optimal set was silently unavailable. `dag.adjustment_report` now warns that such a graph assumes a zero effect (`warnings` key); `classify_controls` gives descendants of the outcome their own role (the bad control that raises R²); `specification.sensitivity` groups the dummies of a categorical or fixed effect into one joint partial R² benchmark (equal to the refit identity) instead of listing each year separately.
+- **ES backtesting for FRTB (eval failed on delivery):** a corporate `market-risk` skill answered and this skill was not loaded, so no function or script appeared. The description and the coexistence rule now name market-risk skills, VaR/ES model validation and FRTB (description 1020 characters; Kalman, regimes, delta method and cointegration remain in the routing table). New `risk.dq_test` (Engle-Manganelli dynamic quantile), reported by `backtest_var` as `p_dq` (size 6%, power 97% against a static historical VaR on GARCH returns, where Christoffersen's independence test reaches 22%); `risk-var.md` §3.2 on FRTB model validation (hypothetical P&L, VaR tests at 97.5% and 99%, candidates, ES ≈ VaR 99% under normality, regulatory open points).
+- **Power for a DiD (eval passed):** numbers reproduced exactly; the script's `SKILL_DIR` pointed at the repository root, so the delivery rule now says it must point to the folder containing `scripts/`. New `simulation.did_power_inputs` estimates `sd_unit`, `time_sd`, `sd_e` and a Nickell-corrected `rho_ar` from the historical panel (raw 0.55 → corrected 0.60 for a true 0.6); `causal-inference.md` §6.2 adds flow vs stock outcomes.
+- 7 new checks (438 in total).
+
 ## v2.2 — Causal graphs, sensitivity for double ML, power for DiD, extreme value theory and ES backtests
 
 - **New module `dag.py`** (Pearl; Cinelli, Forney & Pearl 2022): write the causal graph as a string (`"Z -> X; X -> Y; X <-> Y"`), get every minimal adjustment set by the backdoor criterion, the optimal set of Henckel, Perković & Maathuis (2022) (adds outcome predictors, drops instruments), the role of every variable with a recommendation (confounder, mediator, descendant/collider, M-bias collider, instrument-like, outcome predictor), the conditional independences the graph implies with partial-correlation tests on data (Holm), and a Mermaid diagram. A graph with an open unobserved confounder is reported as not identified by adjustment.

@@ -145,8 +145,10 @@ Not covered: treatment intensity that varies continuously within a unit (dose; d
 
 A DiD with an insignificant result is uninformative unless it could have detected a relevant effect. Before collecting data or choosing the sample, compute the minimum detectable effect:
 - `simulation.mde_did(n_units=..., n_pre=m, n_post=r, sd=..., rho=...)`: analytic MDE (McKenzie 2012) with equicorrelated errors: Var = σ²(1 − ρ)(1/m + 1/r) / (P(1 − P)N). More periods and higher ρ lower the MDE.
+- `simulation.did_power_inputs(history, unit, time, y)`: estimates the simulation inputs from the pre-period panel (SD of the two-way FE residuals, which is usually much smaller than the total SD a user quotes, and their AR(1) coefficient with the Nickell correction). Feed them to:
 - `simulation.power_did_sim(n_units, T, share_treated, effect, adoption, rho_ar, ...)`: simulates the panel you will have (unit effects, common shocks, **AR(1) errors**, simultaneous or staggered adoption) and the inference you will use (TWFE with unit-clustered SEs, t(G−1) critical values); reports power, size and coverage. `mde_did_sim` searches the effect with 80% power.
 - With decaying serial correlation the analytic formula overstates power (Burlig, Preonas & Woerman 2020): in the skill's tests, a design with 80% analytic power has 51% simulated power at AR(1) ρ = 0.8, and the MDE rises by 40%. Use the simulation for the final number; with fewer than ~10 treated units, plan randomization inference (the clustered SE over-rejects: 10% size with 3 treated of 12).
+- When the outcome is a stock that responds slowly (portfolio default rate, inventory), persistence is high and power low: prefer a flow measure that only the new policy touches (default by origination cohort), and count the months it needs to mature.
 - After the study, report the MDE next to an insignificant estimate ("the design could detect effects above X; the CI excludes effects above Y").
 
 ## 7. Synthetic control

@@ -63,5 +63,19 @@ check("mde_did: more pre/post periods and higher rho lower the MDE",
       sim.mde_did(n_units=100, n_pre=10, n_post=10, rho=0.5)["mde"] < sim.mde_did(n_units=100, n_pre=5, n_post=5, rho=0.5)["mde"]
       < sim.mde_did(n_units=100, n_pre=5, n_post=5, rho=0.2)["mde"])
 
+# v2.2 eval: estimate the simulation inputs from a historical panel
+est = []
+for s_ in range(20):
+    rg = np.random.default_rng(300 + s_)
+    Yh, _ = sim._did_panel(rg, 120, 36, np.zeros(120), 0.0, 1.0, 0.7, 0.6, 0.5)
+    hist = pd.DataFrame({"ag": np.repeat(np.arange(120), 36), "m": np.tile(np.arange(36), 120), "y": Yh.ravel()})
+    est.append(sim.did_power_inputs(hist, "ag", "m", "y"))
+mr = np.mean([e["rho_ar"] for e in est]); mu = np.mean([e["rho_ar_uncorrected"] for e in est])
+ms = np.mean([e["sd_e"] for e in est])
+check("did_power_inputs: Nickell-corrected AR(1) recovers 0.6 (within 0.03) where the raw estimate is biased down",
+      abs(mr - 0.6) < 0.03 and mu < mr - 0.02, f"corrected {mr:.3f}, raw {mu:.3f}")
+check("did_power_inputs: residual SD near the stationary SD 0.7 (within 0.05), total SD larger",
+      abs(ms - 0.7) < 0.05 and est[0]["sd_total"] > est[0]["sd_e"], f"sd_e {ms:.3f}, total {est[0]['sd_total']:.3f}")
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

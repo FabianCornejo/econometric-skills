@@ -23,6 +23,8 @@ Design
     power_did_sim(...)             simulated power, size and coverage of a TWFE DiD with clustered SEs
                                    under AR(1) errors, unit effects, simultaneous or staggered adoption
     mde_did_sim(...)               smallest effect with the target simulated power (bisection)
+    did_power_inputs(df, unit, time, y)  sd_unit, sd_e, rho_ar, time_sd for power_did_sim, estimated from
+                                   the pre-period panel (two-way FE residuals, Nickell-corrected AR(1))
 
 All functions take R (replications) and seed; defaults are small enough to run in seconds.
 Show the code with the result: the student should rerun it and change one number.
@@ -435,3 +437,32 @@ def mde_did_sim(target_power: float = 0.8, lo: float = 0.0, hi: float | None = N
     pw = power_did_sim(effect=hi, **{**kwargs, "with_size": True})
     return {"mde": hi, "power_at_mde": pw["power"], "size": pw["size"], "target_power": target_power,
             **{k: kwargs[k] for k in ("n_units", "T", "rho_ar") if k in kwargs}}
+
+
+
+def did_power_inputs(df: pd.DataFrame, unit: str, time: str, y: str) -> dict:
+    """Estimate the inputs of power_did_sim from historical (pre-treatment) panel data:
+      sd_unit : SD of the unit means (permanent differences, absorbed by unit FE)
+      time_sd : SD of the time means (common shocks, absorbed by time FE)
+      sd_e    : SD of the two-way FE residuals (the noise the DiD must see through)
+      rho_ar  : AR(1) coefficient of those residuals, corrected for the Nickell (1981) bias of
+                demeaned panels: plim(rho_hat) - rho ~ -(1 + rho) / (T - 1), so
+                rho = (rho_hat (T - 1) + 1) / (T - 2).
+    Uses a balanced panel (units missing periods are dropped). The SD a user quotes is often the
+    total SD across units; the relevant one is sd_e, usually much smaller."""
+    w = df.pivot_table(index=unit, columns=time, values=y, aggfunc="mean").dropna()
+    Y = w.to_numpy(float)
+    G, T = Y.shape
+    if T < 4 or G < 3:
+        raise ValueError("need at least 3 units and 4 periods of balanced data")
+    um, tm = Y.mean(1), Y.mean(0)
+    E = Y - um[:, None] - tm[None, :] + Y.mean()
+    k = (G - 1) + (T - 1) + 1
+    sd_e = float(np.sqrt(np.sum(E ** 2) / (G * T - k)))
+    a, b = E[:, :-1].ravel(), E[:, 1:].ravel()
+    rho_hat = float(a @ b / (a @ a))
+    rho = float(np.clip((rho_hat * (T - 1) + 1) / (T - 2), -0.99, 0.99))
+    warn = [] if T >= 10 else [f"only {T} periods: the AR(1) estimate is imprecise; check power for a range of rho_ar"]
+    return {"sd_unit": float(um.std(ddof=1)), "time_sd": float(tm.std(ddof=1)), "sd_e": sd_e,
+            "rho_ar": rho, "rho_ar_uncorrected": rho_hat, "n_units": G, "T": T,
+            "sd_total": float(Y.std(ddof=1)), "warnings": warn}
