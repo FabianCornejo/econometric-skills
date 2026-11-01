@@ -102,7 +102,7 @@ A law phased in court by court, a policy with imprecise records, an announcement
 Read the shift table as mechanical, not as a test: shifting a correct date also moves the ATT, because treated periods enter the base. The verdict is the date-robust or window-robust estimate. It estimates the effect from the latest plausible date onward (a later-exposure ATT when effects grow over time) and drops cohorts whose earlier base falls outside the panel, so the CI is wider. If it does not exclude zero, report the result as dependent on the date and say what records would settle it.
 
 Not covered: treatment intensity that varies continuously within a unit (dose; de Chaisemartin & D'Haultfœuille, 2024; Callaway, Goodman-Bacon & Sant'Anna, 2024) and formal HonestDiD bounds (Rambachan & Roth, 2023); use R's `did`, `DIDmultiplegtDYN` and `HonestDiD` for those.
-- **Clustering**: at the level of treatment assignment (state, court, municipality); with fewer than ~30 clusters, use wild cluster bootstrap (`estimation.wild_cluster_bootstrap`).
+- **Clustering**: at the level of treatment assignment (state, court, municipality); with fewer than ~30 clusters, use wild cluster bootstrap (`estimation.wild_cluster_bootstrap`); with few **treated** clusters (about 1–5 adopting states), add randomization inference (reassign adoption across states and rank the actual estimate), because the wild bootstrap also degrades there.
 
 ## 7. Synthetic control
 

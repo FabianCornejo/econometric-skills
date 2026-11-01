@@ -23,6 +23,8 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 
 ## Rules added in v2.0
 
+- **Tie every recommendation to a tool.** Each step you recommend names the function of this skill that performs it (e.g. `estimation.wild_cluster_bootstrap`, `causal.att_gt`, `hte.blp_test`); Stata or R commands may follow as equivalents, never replace it. When the user has not sent data yet, deliver the plan together with a runnable script that calls those functions, preferably executed on simulated data with the same structure (same unit, treatment, outcome and N), so the plan and the code cannot diverge and the user can run it on the real file. Show the code in the answer or deliver the script as a file the user can download; a path inside the sandbox is not a deliverable.
+
 - **Run more than one model and compare** (EconML FAQ). For any causal estimate, report a simple structural model (OLS, LinearDML, linear DR-learner) next to a flexible one (forest, gradient boosting nuisances). Agreement is reassuring; a large gap means misspecification or fragile identification, and the gap itself is a finding.
 - **Heterogeneous effects need evidence before they are reported.** Report subgroup or individual effects only when `hte.blp_test` rejects "no heterogeneity" (one-sided p < 0.05) and `hte.gates` shows separated groups; otherwise report the ATE and say that the data do not support differences. Effect modifiers X are chosen before looking at outcomes. `hte.clan` describes who is most affected; it does not explain why.
 - **CATE models without pointwise CIs** (forest, meta-learners) are judged by BLP, GATES, TOC/AUTOC and R-score on out-of-fold predictions, never by in-sample fit or by the spread of tau(x).
