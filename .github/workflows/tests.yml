@@ -58,3 +58,12 @@ jobs:
           unzip -q dist/econometrics.skill -d "$RUNNER_TEMP/pkg"
           diff -r -x __pycache__ "$RUNNER_TEMP/pkg/econometrics" econometrics \
             || { echo "dist/econometrics.skill is stale: rebuild it with 'zip -qrD dist/econometrics.skill econometrics -x \"*__pycache__*\"'"; exit 1; }
+      - name: Plugin version matches the latest CHANGELOG version
+        run: |
+          python - <<'PY'
+          import json, re, sys
+          v = json.load(open(".claude-plugin/marketplace.json"))["plugins"][0]["version"]
+          c = re.search(r"^## v(\S+)", open("CHANGELOG.md", encoding="utf-8").read(), re.M).group(1)
+          print(f"plugin {v}, CHANGELOG {c}")
+          sys.exit(0 if v == c else "bump the plugin version in .claude-plugin/marketplace.json to match CHANGELOG.md")
+          PY

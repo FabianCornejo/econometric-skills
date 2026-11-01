@@ -1,0 +1,39 @@
+{
+  "name": "econometric-skills",
+  "description": "Agent skills for applied econometrics and quantitative risk in Python, with tested code.",
+  "owner": {
+    "name": "Fabian Cornejo",
+    "url": "https://github.com/FabianCornejo"
+  },
+  "plugins": [
+    {
+      "name": "econometrics",
+      "source": "./econometrics",
+      "skills": [
+        "."
+      ],
+      "version": "2.2.4",
+      "description": "Econometric agent (consultant, teacher, reviewer): regression diagnostics, causal inference with DAGs and double ML sensitivity, heterogeneous effects, power analysis, MLE and wild bootstrap, WACC betas and event studies, time series, VaR/ES with EVT and backtests (FRTB). 438 tested checks.",
+      "author": {
+        "name": "Fabian Cornejo",
+        "url": "https://github.com/FabianCornejo"
+      },
+      "homepage": "https://github.com/FabianCornejo/econometric-skills",
+      "repository": "https://github.com/FabianCornejo/econometric-skills",
+      "license": "MIT",
+      "keywords": [
+        "econometrics",
+        "causal-inference",
+        "statistics",
+        "risk",
+        "var",
+        "expected-shortfall",
+        "wacc",
+        "event-study",
+        "time-series",
+        "python"
+      ],
+      "category": "data"
+    }
+  ]
+}

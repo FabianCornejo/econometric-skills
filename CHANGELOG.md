@@ -2,6 +2,10 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.2.4 — Claude Code plugin
+
+- The repository is now a Claude Code plugin marketplace: `.claude-plugin/marketplace.json` lists the plugin `econometrics`, whose source is the existing `econometrics/` folder (the entry is the manifest and declares the folder itself as the skill), so nothing moved and `dist/econometrics.skill` is unchanged. Install with `/plugin install econometrics --marketplace FabianCornejo/econometric-skills`; `/plugin update` follows the version in the entry. Validated with `claude plugin validate` and an install on Claude Code 2.1.316: one skill, only the skill folder copied to the plugin cache. CI now fails if the plugin version differs from the latest CHANGELOG version, and the README documents the plugin install. This replaces the October `claude/plugin-packaging` branch, which moved the skill folder and is superseded.
+
 ## v2.2.3 — Trigger on method and planning questions without data
 
 - Two more retests of the ES/FRTB eval: with the `market-risk` skill installed it was chosen again; with it removed, the model's reasoning showed it weighed loading this skill and skipped it, answering from general knowledge. The description required "numbers to be estimated or tested from data", which a method question with no data attached did not seem to meet (the evals that did load the skill asked for a number or a decision). The description now says to load the skill for any question on how to estimate, test, validate or choose a model, including advice and planning before any data exist, instead of answering from general knowledge or with finance or risk skills. Some method names were dropped from its list to stay within 1024 characters (1017); they remain in the routing table. No code changes.
