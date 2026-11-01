@@ -77,6 +77,7 @@ dist/         econometrics.skill, the packaged skill
 
 - **Claude app (web or desktop):** download [`econometrics.skill`](https://github.com/FabianCornejo/econometric-skills/raw/main/dist/econometrics.skill) (also attached to the [latest release](../../releases/latest)) and upload it under **Customize → Skills**. Under **Settings → Capabilities**, keep **Run code in the cloud** on (required for skills) and allow network egress so missing Python packages can be installed.
 - **Claude Code:** copy the `econometrics` folder into `~/.claude/skills/`.
+- **Recommended:** Claude decides from the descriptions whether to load a skill, and may answer conceptual questions without data ("how should we validate our VaR model?") from general knowledge, without the skill's tested functions and script. Add a standing instruction under **Settings → Account → Instructions for Claude**, for example: *"For any econometrics, statistics or quantitative-risk question (VaR/ES, backtests, betas and WACC, event studies, causal effects, choice of controls, power, forecasting, reviewing empirical work), always load the econometrics skill before answering, even for conceptual questions without data."* See [evals/README.md](evals/README.md#known-limitation-skill-loading-on-conceptual-questions).
 
 Python dependencies: `pip install -r requirements.txt` (optional extras are listed in that file); `pip install -r requirements-dev.txt` adds what the tests and examples need.
 
