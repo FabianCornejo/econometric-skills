@@ -164,3 +164,23 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | R `grf::rank_average_treatment_effect` (AUTOC, Qini) | `hte.toc` |
 | EconML `RScorer` | `hte.rscore`, `hte.compare_cate_models` |
 | EconML `DRPolicyTree`, R `policytree::policy_tree` | `hte.policy_tree`, `hte.policy_value` |
+
+## Linear models, empirical finance, randomization inference and simulation (v2.1)
+
+| Stata / R | Python (this skill) |
+|---|---|
+| `anova`, R `aov`, `car::Anova(type=2)` | `linear_models.anova_table` |
+| `pwcompare, mcompare(tukey)`, R `TukeyHSD`, `pairwise.t.test` | `linear_models.pairwise` |
+| R `MASS::rlm`, Stata `rreg` | `linear_models.robust_regression` |
+| `qreg`, `sqreg`, R `quantreg::rq` | `linear_models.quantile_regression` |
+| `permute`, R `lmPerm` | `linear_models.permutation_test` |
+| R `MASS::boxcox`, Stata `boxcox` | `linear_models.boxcox_response` |
+| R `glmnet`, `pls::pcr`, `pls::plsr`, Stata `lasso` | `linear_models.shrinkage_compare` |
+| Stata `pdslasso`, R `hdm::rlassoEffect` | `linear_models.post_double_selection` |
+| R `leaps::regsubsets` | `linear_models.select_subsets` |
+| R `PerformanceAnalytics::CAPM.beta`, Stata `regress` on market | `finance_empirics.market_model`, `rolling_beta`, `adjusted_beta` |
+| Stata `estudy`, `eventstudy2`; R `estudy2` | `finance_empirics.event_study` |
+| R `PerformanceAnalytics` (Sharpe, Sortino, Treynor, InformationRatio) | `finance_empirics.performance_ratios` |
+| R `tseries::portfolio.optim`, `PortfolioAnalytics` | `finance_empirics.efficient_frontier`, `shrink_cov` |
+| Stata `ritest`, R `ri2` | `causal.randomization_inference` |
+| Stata `simulate`, R `MonteCarlo`; `power twomeans`, R `pwr` | `simulation.monte_carlo`, `simulation.demo_*`, `simulation.power_mde` |

@@ -32,3 +32,11 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 - **Few clusters**: with fewer than ~40 clusters, report the wild cluster bootstrap p-value and CI (`estimation.wild_cluster_bootstrap`) next to the clustered SE.
 - **Hand-written likelihoods**: use `estimation.mle` and report the sandwich SEs when the density is a convenient approximation (QMLE); check `converged` and `grad_max`; test restrictions with `estimation.trinity_test` (LR preferred when the three disagree).
 - **Functions of parameters** (elasticity at a point, long-run multiplier, ratio of coefficients, turning point) get a delta-method SE (`estimation.delta_method`); bootstrap ratios whose denominator is imprecise.
+
+## Rules added in v2.1
+
+- **Betas come with their choices and their uncertainty**: market proxy, frequency, window, adjustment, and the CI; check stability with `finance_empirics.rolling_beta`. For a valuation, prefer the relevered median asset beta of comparables to a single company regression.
+- **Event studies**: report the event-date source, windows and normal-return model, and the CAAR with the cross-sectional t, BMP and Corrado tests; BMP is the default when the announcement may raise volatility (Patell then over-rejects).
+- **Few treated units in a DiD**: report `causal.randomization_inference` next to the clustered and wild-bootstrap results, and say whether treated and control units are plausibly exchangeable.
+- **After many pairwise comparisons, adjust** (Tukey, Holm or BH); after variable selection, do not read the selected model's p-values as if it had been pre-specified (use `post_double_selection` for one effect).
+- **Teaching simulations** use a fixed seed, show their code, and report the quantity the lesson is about (bias, coverage, rejection rate), not only a single draw.

@@ -109,6 +109,9 @@ Response in `json["value"]`, fields `VALDATA` and `VALVALOR`. Package: `ipeadata
 | Stooq | `pandas_datareader.data.DataReader("^SPX", "stooq")` | Free daily history, no key |
 | FRED | yields, spreads, VIX (`VIXCLS`), exchange rates | Official, stable codes |
 | B3 / CVM | files provided by the user | Official Brazilian market data |
+| NEFIN-USP | nefin.com.br, "Risk factors" (CSV downloads) | Brazilian Market, SMB, HML, WML, IML factors and risk-free rate, daily and monthly (`finance_empirics.factor_model`) |
+| Kenneth French data library | mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html; `pandas_datareader.famafrench` | Fama-French 3/5 factors, momentum, for the US, developed and emerging markets |
+| BCB SGS series 12 | `python-bcb` (`sgs.get({"cdi": 12})`) | Daily CDI rate in % per day: the usual risk-free rate for Brazilian betas and Sharpe ratios |
 
 Care with free market data: prices are adjusted retroactively for dividends and splits (a backtest run today and a year ago can differ), constituents of today's index suffer from survivorship bias, and there are gaps and stale prices on holidays. Use adjusted prices for returns and unadjusted prices for anything quoted in currency (levels, stop prices).
 

@@ -30,6 +30,8 @@ Every method is explained with the same eleven blocks, in this order. Skip a blo
 
 ## 3. Simulations that teach
 
+Ready-made demos are in `scripts/simulation.py` (each returns a table and a one-line lesson; show their code and let the student change one parameter): `demo_omitted_variable`, `demo_bad_control`, `demo_measurement_error`, `demo_heteroskedasticity`, `demo_spurious_regression`, `demo_weak_iv`, `demo_few_clusters`, `demo_staggered_did`; `monte_carlo(dgp, estimators, R, truth)` builds any other one, and `power_mde` answers "how large a sample?" or "how small an effect can we detect?". The heterogeneity lesson uses `hte` (a linear CATE vs a forest on a symmetric effect).
+
 Write them in a few lines of numpy with a fixed seed; repeat 500–1000 times; show the distribution of the estimate against the truth (histogram or a table of mean, bias, SD, coverage).
 
 | Lesson | Simulation | What the student sees |

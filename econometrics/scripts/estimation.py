@@ -395,7 +395,7 @@ def wild_cluster_bootstrap(df: pd.DataFrame, formula: str, coef: str, cluster: s
     Caveat: what matters for a binary treatment that varies at the cluster level is the number of
     TREATED clusters. With very few treated clusters (roughly 1-5) every cluster-based method,
     WCR included, can over- or under-reject (MacKinnon & Webb 2017, 2018): add randomization
-    inference (permute the treatment across clusters) or Conley-Taber / Ferman-Pinto."""
+    inference (causal.randomization_inference) or Conley-Taber / Ferman-Pinto."""
     import statsmodels.formula.api as smf
     base = smf.ols(formula, df).fit()
     names = list(base.model.exog_names)
