@@ -1,6 +1,6 @@
 ---
 name: econometrics
-description: Rigorous applied econometrics in Python, as consultant, teacher or reviewer - regression with full diagnostics, IV, panel data, logit/probit/tobit, causal designs (matching/AIPW, double ML, RD, staggered DiD, synthetic control), heterogeneous effects (CATE, causal forests, meta-learners, BLP/GATES, targeting policies), custom maximum likelihood, delta method, wild cluster bootstrap, survival, text as data and LLM coding with valid inference, time series (ARIMA, VAR, cointegration), GARCH, VaR/ES, copulas, Kalman, regimes, backtests, demand elasticities, Brazilian data, publication tables. Use for any regression, effect of X on Y, for whom an effect is larger or whom to target, policy or law evaluation, elasticity, forecast, time-to-event, coding documents into variables, churn segments, tail risk, strategy backtest, teaching or explaining an econometric method, or reviewing someone else's empirical analysis, even without the word econometrics.
+description: Rigorous applied econometrics in Python, as consultant, teacher or reviewer - OLS with full diagnostics, ANOVA, robust/quantile regression, lasso, IV, panel data, logit/probit/tobit, causal designs (AIPW, double ML, RD, staggered DiD, synthetic control, randomization inference), heterogeneous effects and targeting policies (CATE, causal forests, BLP/GATES), custom MLE, delta method, wild cluster bootstrap, survival, text and LLM coding with valid inference, time series (ARIMA, VAR, cointegration), GARCH, betas/WACC, event studies, VaR/ES, copulas, Kalman, regimes, backtests, elasticities, Monte Carlo teaching demos, Brazilian data. Use for any regression, effect of X on Y, for whom an effect is larger, policy or law evaluation, elasticity, forecast, time-to-event, coding documents, churn segments, beta or cost of equity, market reaction to an announcement, tail risk, teaching an econometric method, or reviewing someone else's empirical analysis, even without the word econometrics.
 ---
 
 # Applied econometrics
@@ -14,7 +14,7 @@ Answer in the user's language; these instructions are in English.
 | Mode | When | Deliverable | Read |
 |---|---|---|---|
 | **Consultant** (default) | Estimate, test, forecast, evaluate a policy | Study card, analysis, report + reproducible script | `references/workflow.md`, `references/interpretation-rules.md` |
-| **Teacher** | "Explain", "teach", "why does...", a class, exam or exercises | Method card: intuition, model, assumptions, estimator, derivation, simulation, code, diagnostics, interpretation, pitfalls, exercise | `references/teaching.md` |
+| **Teacher** | "Explain", "teach", "why does...", a class, exam or exercises | Method card: intuition, model, assumptions, estimator, derivation, simulation (`simulation.py`), code, diagnostics, interpretation, pitfalls, exercise with solution | `references/teaching.md` |
 | **Reviewer** | Review, audit or referee a paper, report, expert opinion or model | Opinion: claim, verdict, findings by severity, what would change the verdict | `references/review-checklist.md` |
 
 Modes change the form of the answer, never the computations: every number comes from the same scripts and rules.
@@ -33,6 +33,8 @@ Answer four questions, then read only the files they point to: (1) the **goal**:
 | Effect of a policy, law, decision or program (non-random) | `causal-inference.md` | `causal.aipw`, `dml_plr`, `rdd`, `att_gt`, `synth` |
 | For whom the effect is larger; whom to treat | `heterogeneous-effects.md` | `hte.cate_fit`, `blp_test`, `gates`, `policy_tree` |
 | Custom likelihood, NLS, function of parameters, few clusters | `estimation-theory.md` | `estimation.mle`, `delta_method`, `wild_cluster_bootstrap` |
+| Groups/experiments, outliers, tails, small samples, many regressors | `ols-regression.md` §15 | `linear_models.anova_table`, `quantile_regression`, `post_double_selection` |
+| Beta, cost of equity, factors, event study, performance, portfolios | `empirical-finance.md` | `finance_empirics.market_model`, `event_study`, `unlever_beta` |
 | Time until an event, with censoring | `survival.md` | `survival.cox`, `ph_test` |
 | Documents into variables (incl. LLM coding) | `text-as-data.md` | `text_data.llm_classify`, `dsl_regression` |
 | Binary y with segments whose drivers differ (prediction) | `limited-dependent.md` §9 | `segments.logit_leaf_model` |
@@ -63,7 +65,7 @@ Full versions and reasons in `references/interpretation-rules.md`.
 
 - **Design before data**: choose the estimand, design, covariates, bandwidths and windows before looking at outcomes.
 - **DiD**: ask whether the adoption date is exact (and its source), announced in advance or gradual; run `causal.did_timing_sensitivity` next to `att_gt`; relay any timing WARNING in plain words.
-- **Robust SEs by default** (HC3; HAC for time series). **Cluster where the regressor of interest varies** (a judge's sex: by judge, not by court), the same level in text and code; report the number of clusters; with fewer than ~40, add `estimation.wild_cluster_bootstrap`.
+- **Robust SEs by default** (HC3; HAC for time series). **Cluster where the regressor of interest varies** (a judge's sex: by judge, not by court), the same level in text and code; report the number of clusters; with fewer than ~40, add `estimation.wild_cluster_bootstrap`; with very few **treated** clusters, also `causal.randomization_inference`.
 - **Association is not causation**: causal language only with an identification strategy; Granger causality is predictive precedence; say which way remaining bias probably goes.
 - **Statistical is not economic significance**: magnitude and interval, 2-3 significant digits, forecasts with intervals.
 - **Interpret by functional form** (log-log elasticity, log-lin 100*(e^b - 1)%); **average marginal effects** in nonlinear models (Tobit: say which margin); **long-run effects** with delta-method SEs for lags; **prediction vs confidence intervals**, with smearing for log-y.
@@ -89,7 +91,10 @@ Import with `sys.path.insert(0, '<skill>/scripts')`. They are tested starting po
 | `diagnostics.py` | OLS battery, influence, Chow, ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Mundlak/CRE, Tobit with three margins, count overdispersion, Diebold-Mariano |
 | `specification.py` | FGLS, CI vs prediction intervals with smearing, long-run effects, standardized coefficients, exact OVB, Oster delta, Cinelli-Hazlett robustness value |
 | `estimation.py` | Generic MLE (Newton/BFGS; Hessian, OPG, sandwich, cluster SEs), LR/Wald/LM trinity, NLS, delta method, pairs/cluster bootstrap, wild cluster bootstrap-t with CI |
-| `causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD with robustness, TWFE event study, Callaway-Sant'Anna, DiD timing sensitivity, synthetic control |
+| `causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML, RD with robustness, TWFE event study, Callaway-Sant'Anna, DiD timing sensitivity, randomization inference for few treated units, synthetic control |
+| `linear_models.py` | ANOVA (types I-III) and pairwise tests, ANCOVA, robust and quantile regression, Freedman-Lane permutation test, lack of fit, Box-Cox, partial residuals, shrinkage by nested CV, post-double-selection lasso, best subsets |
+| `finance_empirics.py` | Total/log returns, market model and CAPM, rolling and adjusted (Blume/Vasicek) betas, Hamada unlever/relever, factor models (FF, NEFIN), event studies (cross-sectional t, Patell, BMP, Corrado), performance ratios, Markowitz with Ledoit-Wolf |
+| `simulation.py` | Teacher-mode Monte Carlo demos (omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD), generic `monte_carlo`, `power_mde` |
 | `hte.py` | CATE (DR-learner, linear DML, forest, T/S/X-learners), BLP calibration test, GATES, CLAN, TOC/AUTOC/Qini, R-score, policy trees and policy value |
 | `forecasting.py`, `backtest.py` | Auto-ARIMA, ARIMAX, VAR forecasts, walk-forward, benchmarks, DM/PT tests; look-ahead-free backtests, momentum, Sharpe CI |
 | `risk.py`, `dependence.py` | VaR/ES (historical, parametric, EWMA, FHS, GARCH) and backtests; copulas, tail dependence, mutual information |

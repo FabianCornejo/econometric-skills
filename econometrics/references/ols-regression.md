@@ -123,6 +123,7 @@ R² is not affected by heteroskedasticity.
 - General-to-specific: start with the broadest justifiable model and simplify with joint F tests, checking diagnostics at each step.
 - Adjusted R², AIC, BIC (BIC penalizes more and picks smaller models; preferable for identifying the model; AIC tends to be better for forecasting).
 - Never use isolated significance as the only inclusion criterion; report how many specifications were tried.
+- Tools: `linear_models.select_subsets` (best subsets by BIC/AIC/adjusted R²/Cp, descriptive), `linear_models.shrinkage_compare` (ridge, lasso, elastic net, PCR, PLS by nested CV, for prediction) and `linear_models.post_double_selection` (valid CI for one effect with many candidate controls). See §15.
 - **Bad controls** (Angrist-Pischke): do not control for variables that are themselves outcomes of the treatment (e.g., when measuring a promotion's effect on revenue, do not control for the number of customers, which the promotion affects).
 
 ## 12. Prediction: confidence vs. prediction intervals
@@ -148,3 +149,22 @@ Two different questions, two different intervals:
 - **Cinelli and Hazlett (2020)**, `specification.sensitivity(res, "d")`: partial R² of the treatment and the **robustness value** RV — the share of residual variance a confounder would need to explain in *both* treatment and outcome to remove the effect (RV_q,α: to make it insignificant). Compare RV with the partial R² of the strongest observed covariates (`benchmarks`): if a confounder would need to be several times stronger than, say, income, the result is robust. Uses the classical t. Reproduces the paper's Darfur example (RV = 13.9%, RV_α = 7.6%). For formal "k times as strong as covariate X" bounds use `sensemakr` (R/Stata; the Python port PySensemakr is early-stage).
 
 Report one of the two whenever the causal claim rests on selection on observables.
+
+## 15. Classical linear-model toolkit (`linear_models.py`)
+
+From Faraway (*Linear Models with R*) and Dalpiaz (*Applied Statistics with R*). Each function returns the usual tables plus a plain-language verdict.
+
+| Question | Function | Notes |
+|---|---|---|
+| Do group means differ (experiment, A/B/n test)? | `anova_table(model, typ=2)` | Type II by default; type I depends on term order when the design is unbalanced (warned); partial eta-squared as effect size |
+| Which groups differ? | `pairwise(df, y, group, method="tukey"/"holm"/"fdr_bh")` | Never read unadjusted pairwise p-values after an ANOVA |
+| Group difference holding a covariate fixed | `ancova(df, y, group, covariate)` | Tests parallel slopes first; adjusted means at the covariate mean |
+| Do a few observations drive the fit? | `robust_regression(df, formula, norm="huber"/"bisquare")` | Compare with OLS and inspect the down-weighted rows; protects against outliers in y, not leverage in x |
+| Does x shift the spread or the tails, not only the mean? | `quantile_regression(df, formula, taus)` | Bootstrap test of equal slopes at the lowest and highest tau; tail SEs slightly optimistic, bootstrap them for headline results |
+| Small sample or heavy-tailed errors | `permutation_test(df, formula, coef)` | Freedman-Lane; exact for exchangeable errors (not for clustered or time-series data) |
+| Is the mean function right? | `lack_of_fit_test(model, df, x_cols)` | Needs repeated x values; otherwise RESET and `partial_residuals` |
+| Which transformation of y? | `boxcox_response(df, formula)` | Profile-likelihood CI for lambda (exact bounds): 0 → log, 0.5 → sqrt, 1 → none |
+| Is one regressor's effect linear? | `partial_residuals(model, df, var)` | Component-plus-residual data and a curvature test |
+| Many regressors, goal = prediction | `shrinkage_compare(df, y, X)` | Nested CV: tuning chosen inside each fold; coefficients have no valid SEs |
+| Many candidate controls, goal = one effect | `post_double_selection(df, y, d, X)` | Lasso on y and on d, OLS on the union; valid CI (Belloni, Chernozhukov & Hansen 2014); or `causal.dml_plr` |
+| Which subset of regressors? | `select_subsets(df, y, X, criterion)` | Descriptive; p-values after selection are too small |

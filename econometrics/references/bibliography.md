@@ -51,6 +51,28 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - White (1982), "Maximum likelihood estimation of misspecified models", *Econometrica* — sandwich covariance.
 - Cameron, Gelbach and Miller (2008), "Bootstrap-based improvements for inference with clustered errors", *REStat*; MacKinnon and Webb (2017), "Wild bootstrap inference for wildly different cluster sizes", *JAE*; Webb (2023), "Reworking wild bootstrap-based inference for clustered errors", *Canadian Journal of Economics*; Roodman, MacKinnon, Nielsen and Webb (2019), "Fast and wild: bootstrap inference in Stata using boottest", *Stata Journal*; MacKinnon, Nielsen and Webb (2023), "Cluster-robust inference: a guide to empirical practice", *Journal of Econometrics*.
 
+## Classical linear models, robust and quantile regression, selection
+- Faraway, *Linear Models with R* — diagnostics, permutation tests, lack of fit, robust regression, shrinkage, model uncertainty, ANOVA and ANCOVA.
+- Huber (1964), "Robust estimation of a location parameter", *Annals of Mathematical Statistics*; Koenker and Bassett (1978), "Regression quantiles", *Econometrica*; Koenker, *Quantile Regression* (2005).
+- Box and Cox (1964), "An analysis of transformations", *JRSS-B*.
+- Freedman and Lane (1983), "A nonstochastic interpretation of reported significance levels", *Journal of Business & Economic Statistics* — permutation of reduced-model residuals.
+- Tibshirani (1996), "Regression shrinkage and selection via the lasso", *JRSS-B*; Hastie, Tibshirani and Friedman, *The Elements of Statistical Learning*.
+- Belloni, Chernozhukov and Hansen (2014), "Inference on treatment effects after selection among high-dimensional controls", *Review of Economic Studies* — post-double-selection.
+
+## Randomization inference and simulation
+- Fisher (1935), *The Design of Experiments*; Imbens and Rubin (2015), ch. 5 — Fisher exact p-values.
+- Conley and Taber (2011), "Inference with 'difference in differences' with a small number of policy changes", *REStat*; Ferman and Pinto (2019), "Inference in differences-in-differences with few treated groups and heteroskedasticity", *REStat*; MacKinnon and Webb (2020), "Randomization inference for difference-in-differences with few treated clusters", *Journal of Econometrics*.
+- Granger and Newbold (1974), "Spurious regressions in econometrics", *Journal of Econometrics*; Staiger and Stock (1997); Stock and Yogo (2005) — weak instruments.
+
+## Empirical finance
+- Campbell, Lo and MacKinlay, *The Econometrics of Financial Markets* (1997), ch. 4 (event studies) and 5 (CAPM).
+- MacKinlay (1997), "Event studies in economics and finance", *Journal of Economic Literature*; Patell (1976), *Journal of Accounting Research*; Boehmer, Musumeci and Poulsen (1991), "Event-study methodology under conditions of event-induced variance", *Journal of Financial Economics*; Corrado (1989), "A nonparametric test for abnormal security-price performance in event studies", *Journal of Financial Economics*.
+- Blume (1975), "Betas and their regression tendencies", *Journal of Finance*; Vasicek (1973), "A note on using cross-sectional information in Bayesian estimation of security betas", *Journal of Finance*; Hamada (1972), *Journal of Finance*; Dimson (1979) and Scholes and Williams (1977) on non-synchronous trading.
+- Fama and French (1993, 2015); Carhart (1997) — factor models; NEFIN (Brazilian Center for Research in Financial Economics, FEA-USP) — Brazilian risk factors.
+- Lo (2002), "The statistics of Sharpe ratios", *Financial Analysts Journal*.
+- Markowitz (1952); Merton (1972), "An analytic derivation of the efficient portfolio frontier", *JFQA*; Ledoit and Wolf (2004), "Honey, I shrunk the sample covariance matrix", *Journal of Portfolio Management*; Michaud (1989) on error maximization.
+- Damodaran, *Investment Valuation* and his cost-of-capital datasets — betas from comparables, country risk premiums.
+
 ## Textbooks with code (used for the Teacher mode and the tests)
 - Sargent and Stachurski, *Intermediate Quantitative Economics with Python* (QuantEcon, 2025) — linear algebra, LLN/CLT, Kalman filter, Bayesian AR(1), likelihood-ratio processes; replications of Acemoglu-Johnson-Robinson (2001) by IV and of Treisman (2016) by Poisson MLE.
 - Colonescu, *Principles of Econometrics with R* (2016) — companion to Hill, Griffiths and Lim; repeated-sample and Monte Carlo teaching of sampling distributions and CI coverage.

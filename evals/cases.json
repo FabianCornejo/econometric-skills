@@ -1,5 +1,5 @@
 {
-  "version": "2.0",
+  "version": "2.1",
   "how_to_run": "See evals/README.md. Paste each prompt, alone, in a fresh conversation with the current econometrics skill installed. Grade the answer against every criterion; a case passes only if all 'must' criteria hold and no 'must_not' criterion is triggered.",
   "cases": [
     {
@@ -90,6 +90,41 @@
       "must_not": [
         "Accepts p = 0.01 at face value without discussing the number of treated clusters.",
         "Invents numbers from the opinion that the user did not provide."
+      ]
+    },
+    {
+      "id": "wacc-beta-comparables",
+      "language": "pt-BR",
+      "prompt": "Preciso do beta para o WACC de uma empresa brasileira de capital fechado do setor de saneamento. Tenho as cotações das listadas comparáveis (SBSP3, CSMG3, SAPR11) e o Ibovespa. Como estimo o beta de forma defensável?",
+      "must": [
+        "Explains that a closed company has no beta of its own and uses the comparables: estimate each comparable's levered beta, unlever with its own market D/E and marginal tax rate (34% under lucro real) using finance_empirics.unlever_beta, aggregate (median or mean) and relever at the target capital structure with finance_empirics.relever_beta.",
+        "Specifies the regression choices (market proxy, weekly or monthly total returns, 2 to 5 year window) and estimates with finance_empirics.market_model, reporting each beta with its CI.",
+        "Checks stability with finance_empirics.rolling_beta and mentions breaks (regulatory changes, privatization) that make older data unrepresentative.",
+        "Discusses adjustment (Blume or Vasicek via finance_empirics.adjusted_beta) and why raw betas are noisy.",
+        "Separates the econometric input (beta) from inputs that come from sources (risk-free rate, equity risk premium, country risk), without estimating the ERP from a short return sample.",
+        "Gives a runnable script calling the skill's functions (data not attached), per the v2.0 rule."
+      ],
+      "must_not": [
+        "Uses daily returns of illiquid stocks without warning about the bias toward zero.",
+        "Averages levered betas of comparables without unlevering them.",
+        "Presents a single regression beta without a confidence interval as the answer."
+      ]
+    },
+    {
+      "id": "ma-announcement-event-study",
+      "language": "pt-BR",
+      "prompt": "Quero medir se os anúncios de aquisição feitos por empresas brasileiras listadas entre 2015 e 2024 geraram retorno anormal para os acionistas da compradora. Tenho a lista de 85 anúncios com data e as cotações diárias. Como faço?",
+      "must": [
+        "Uses finance_empirics.event_study with an estimation window before and separated from the event window, and a normal-return model (market model by default).",
+        "Defines day 0 carefully (first public announcement, leaks, after-close announcements move to the next trading day).",
+        "Reports CAAR for short windows such as (-1, 1) and (-5, 5) with the cross-sectional t, BMP and Corrado tests, and explains why BMP is preferred when the announcement raises volatility (Patell over-rejects).",
+        "Flags event clustering (several announcements on the same dates or industries) and confounding news, with remedies (portfolio or calendar-time approach, checking news).",
+        "Discusses cross-sectional analysis of CARs (deal size, payment method, target listed or private) as a second step, with robust SEs."
+      ],
+      "must_not": [
+        "Uses an estimation window that overlaps the event window.",
+        "Reports only the Patell test.",
+        "Draws causal conclusions about deal value creation without discussing anticipation and confounding events."
       ]
     }
   ]

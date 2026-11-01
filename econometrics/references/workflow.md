@@ -47,6 +47,8 @@ Classify the goal, because it changes the right model:
 | Binary y with segments that behave differently | Churn drivers by customer type | `limited-dependent.md` §9 |
 | Effect that varies across units; whom to treat | Which customers respond to a discount; policy rule with a cost | `heterogeneous-effects.md` |
 | Likelihood or nonlinear model not packaged; functions of parameters; few clusters | Custom count model, elasticity at a point, 8 states | `estimation-theory.md` |
+| Groups and experiments; robust, quantile or permutation inference; many regressors | A/B/n test, outliers, effect on the tails of demand | `ols-regression.md` §15 |
+| Beta, cost of equity, factor model, event study, fund performance, portfolio | WACC beta from comparables, CAR around an M&A announcement | `empirical-finance.md` |
 | Raw files, web pages, PDFs | TSE CSVs, court websites | `data-collection-wrangling.md` |
 | Returns, volatility | Daily stock index | `volatility.md` |
 | Market risk | VaR/ES of a position or portfolio | `risk-var.md` |

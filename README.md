@@ -63,6 +63,13 @@ A rigorous applied-econometrics workflow in Python (statsmodels, linearmodels, a
 - **New module `hte.py`** (after EconML and grf, numpy/scikit-learn only): CATE by DR-learner and linear DML with valid CIs, a forest DR-learner and T/S/X meta-learners, all with cross-fitted nuisances and out-of-fold predictions; validation by the BLP/calibration test, GATES, CLAN (Holm-adjusted), TOC/AUTOC/Qini with bootstrap SEs and the R-score; exhaustive depth-1/2 policy trees on doubly robust scores, learned on one half and valued on the other, with the cost of treatment. `references/heterogeneous-effects.md` covers estimands, identification, choosing an estimator, reading each tool, policy learning and using EconML/grf predictions with these validation tools.
 - **Validated** in `tests/test_estimation.py` (28 checks: Wooldridge Examples 17.1 probit and 17.3 Poisson by hand-written likelihood, equality with statsmodels for coefficients, Hessian and sandwich SEs, LR and Wald statistics; NLS = OLS for a linear f; delta method vs simulation; with 8 clusters, clustered SEs reject a true null ~20% of the time and the wild cluster bootstrap ~5–7%) and `tests/test_hte.py` (40 checks: recovery of tau(x) = 1 + x for binary and continuous treatments, ATE CI coverage 94% and BLP size 3.5% in Monte Carlo, no false heterogeneity under a constant effect, a linear CATE missing symmetric heterogeneity that the forest detects, a policy tree recovering "treat if x1 > 0"), on both the minimum and the latest dependency versions.
 
+**Classical linear models, empirical finance, randomization inference and a simulation lab (v2.1):**
+- **New module `linear_models.py`** (Faraway; Dalpiaz): ANOVA types I–III with partial eta-squared, Tukey/Holm/BH pairwise comparisons, ANCOVA with a parallel-slopes test, Huber/bisquare robust regression, quantile regression with a bootstrap test of equal slopes, Freedman-Lane permutation test, pure-error lack-of-fit test, Box-Cox with exact profile-likelihood bounds, partial residuals, ridge/lasso/elastic net/PCR/PLS compared by nested CV, post-double-selection lasso (Belloni-Chernozhukov-Hansen) and best subsets.
+- **New module `finance_empirics.py`** (Ang 2015; Tsay 2013; Campbell-Lo-MacKinlay): total and log returns, market model and CAPM with HAC SEs, rolling betas, Blume and Vasicek adjustments, Hamada unlever/relever with debt beta, factor models (Fama-French, NEFIN for Brazil), event studies with cross-sectional t, Patell, BMP and Corrado tests, performance ratios (Sharpe with Lo SE, Sortino, Treynor, IR, Jensen), Markowitz frontier with Ledoit-Wolf covariance. `references/empirical-finance.md` covers WACC betas from comparables, event-study design and Brazilian data (B3, CDI, NEFIN).
+- **`causal.randomization_inference`**: Fisher randomization p-value and test-inversion CI for a DiD with few treated units (exact enumeration when assignments are few), for the TWFE statistic or any user statistic — the check that the v2.0 reviewer eval asked for.
+- **New module `simulation.py`** for Teacher mode: seeded demos of omitted-variable bias, bad controls, measurement error, heteroskedasticity, spurious regression, weak instruments, few clusters and staggered DiD, a generic `monte_carlo` engine and `power_mde`.
+- **Validated** in `tests/test_linear_models.py` (29 checks), `tests/test_finance_empirics.py` (32) and `tests/test_simulation_ri.py` (19): agreement with scipy/statsmodels, recovery of known parameters, Monte Carlo sizes and coverage (permutation test 6%, Box-Cox CI 97%, post-double-selection 95%, randomization inference 5.5% with 6 of 27 units treated), and the classic event-study result that Patell over-rejects under event-induced variance (31%) while BMP does not (4%). Along the way, the Box-Cox CI was fixed to use exact bounds instead of grid points, and the documented wild-bootstrap size with 8 clusters was corrected to ~7% from 1,000 replications.
+
 Every rolling estimate uses only data available at the time. Look-ahead traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, filtered Kalman residuals, signal/return misalignment) are avoided in code and documented in the references.
 
 The skill's instructions are in English; Claude answers in the user's language.
@@ -74,13 +81,16 @@ econometrics/
 │   ├── diagnostics.py               test batteries with plain-language conclusions
 │   ├── specification.py             FGLS, prediction intervals, long-run effects, OVB and sensitivity
 │   ├── estimation.py                MLE, LR/Wald/LM, NLS, delta method, bootstrap, wild cluster bootstrap
+│   ├── linear_models.py             ANOVA, ANCOVA, robust/quantile regression, permutation, Box-Cox, shrinkage, PDS lasso
+│   ├── finance_empirics.py          returns, betas (rolling, adjusted, Hamada), factor models, event studies, performance, Markowitz
+│   ├── simulation.py                Teacher-mode Monte Carlo demos, power and MDE
 │   ├── forecasting.py               auto-ARIMA, ARIMAX, VAR forecasts, walk-forward evaluation
 │   ├── backtest.py                  look-ahead-free backtests, performance, momentum
 │   ├── risk.py                      VaR/ES estimators and backtests
 │   ├── dependence.py                copulas, tail dependence, mutual information
 │   ├── state_space.py               Kalman filter, half-life, pairs trading
 │   ├── regimes.py                   Markov switching, HMM, K-means regimes
-│   ├── causal.py                    matching/IPW/AIPW, double ML, RD, event study, CS-DiD + timing checks, synthetic control
+│   ├── causal.py                    matching/IPW/AIPW, double ML, RD, event study, CS-DiD + timing checks, randomization inference, synthetic control
 │   ├── hte.py                       CATE learners, BLP, GATES, CLAN, TOC/Qini, R-score, policy trees
 │   ├── survival.py                  Kaplan-Meier, Cox, PH test
 │   ├── text_data.py                 regex, TF-IDF, topics, classifiers, validation, LLM coding, DSL regression
@@ -98,6 +108,7 @@ econometrics/
     ├── limited-dependent.md
     ├── demand-elasticities.md
     ├── volatility.md
+    ├── empirical-finance.md
     ├── risk-var.md
     ├── forecasting-backtesting.md
     ├── dependence-copulas.md
@@ -111,7 +122,7 @@ econometrics/
     ├── data-sources.md
     ├── software-equivalents.md      Stata/EViews/R → Python
     └── bibliography.md
-tests/                               284 checks: textbook replications, known-truth simulations, Monte Carlo size and coverage
+tests/                               364 checks: textbook replications, known-truth simulations, Monte Carlo size and coverage
 ```
 
 ### Installation
@@ -134,6 +145,9 @@ python3 tests/test_specification_tools.py    # needs: pip install wooldridge
 python3 tests/test_missing_data.py
 python3 tests/test_estimation.py          # needs: pip install wooldridge
 python3 tests/test_hte.py
+python3 tests/test_linear_models.py
+python3 tests/test_finance_empirics.py
+python3 tests/test_simulation_ri.py
 ```
 
 ## Feedback and contributions

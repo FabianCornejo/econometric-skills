@@ -23,6 +23,8 @@ Panel designs
     did_timing_sensitivity(df, ..., gvar)         ATT with dates shifted ±k + date-robust estimate (true date within ±k)
     did_uncertain_dates(df, ..., g_low, g_high)   adoption known only within a window per unit (phased rollouts)
     synth(df, unit, time, y, treated, t0)         synthetic control (Abadie et al., 2010) + placebo-in-space inference
+    randomization_inference(df, unit, time, y, gvar)  Fisher randomization p-value and CI for a DiD with few
+                                                  treated units (permutes which units adopt), any statistic
 
 Notes: for production RD use `rdrobust` (robust bias-corrected CIs) if installed;
 for staggered DiD the `csdid`/`differences` packages offer more options. The
@@ -698,3 +700,109 @@ def synth(df: pd.DataFrame, unit: str, time: str, y: str, treated, t0, donors: l
         if placebo and len(rr) < 20:
             print("  With fewer than 20 donors the smallest attainable p-value is 1/(donors+1).")
     return res
+
+
+# =============================================================================
+# Randomization inference for DiD with few treated units
+# =============================================================================
+def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, n_perm: int = 999,
+                            stat=None, ci: bool = True, ci_points: int = 61, seed: int = 0, alpha: float = ALPHA) -> dict:
+    """Fisher randomization inference for a difference-in-differences when only a few units are
+    treated (a law adopted by 6 of 27 states): clustered SEs and even the wild cluster bootstrap
+    become unreliable with very few treated clusters (MacKinnon & Webb 2017, 2018).
+
+    gvar: first treated period of each unit (0 or NaN = never treated); D_it = 1{t >= g_i}.
+    Under the sharp null of no effect for anyone, which units adopted is (as if) random, so the
+    statistic is recomputed after reassigning the observed adoption dates to random sets of the
+    same number of units (all sets when there are no more than n_perm of them). p = share of
+    |stat*| >= |stat| (with the observed assignment counted).
+    stat=None uses the static TWFE DiD coefficient (unit and time fixed effects), computed fast by
+    residualizing on the fixed effects once; pass a function stat(df_perm) -> float for any other
+    statistic (e.g. lambda d: att_gt(d, unit, time, y, gvar, n_boot=0, show=False)["overall"]["estimate"]); the CI is then skipped.
+    The CI inverts the test for a constant additive effect tau: y - tau*D is permuted for a grid of tau.
+
+    Validity rests on exchangeability: the treated units must be comparable to the others in
+    their error variance and dynamics. If the adopters are systematically more volatile (e.g.
+    small states), randomization inference over-rejects too; use Ferman & Pinto (2019) or
+    Conley & Taber (2011). The smallest attainable p-value is 1 / (number of possible assignments)."""
+    from itertools import combinations
+    from math import comb
+    d = df[[unit, time, y, gvar]].dropna(subset=[unit, time, y]).copy()
+    d[gvar] = d[gvar].fillna(0)
+    units = pd.Index(sorted(d[unit].unique(), key=str))
+    g_unit = d.groupby(unit)[gvar].first().reindex(units)
+    treated = list(g_unit[g_unit > 0].index)
+    N, N1 = len(units), len(treated)
+    if N1 == 0 or N1 == N:
+        raise ValueError("need both treated and never-treated units")
+    dates_obs = g_unit[treated].to_numpy()
+    u_idx = units.get_indexer(d[unit])
+    tt = d[time].to_numpy()
+    n_assign = comb(N, N1)
+    rng = np.random.default_rng(seed)
+    if n_assign - 1 <= n_perm:
+        sets = [list(c) for c in combinations(range(N), N1)]
+        exact = True
+    else:
+        sets = [list(rng.choice(N, N1, replace=False)) for _ in range(n_perm)]
+        exact = False
+    obs_set = [units.get_loc(u) for u in treated]
+
+    def D_for(idx_set, dates):
+        g = np.zeros(N)
+        g[idx_set] = dates
+        gi = g[u_idx]
+        return ((gi > 0) & (tt >= gi)).astype(float)
+
+    D_obs = D_for(obs_set, dates_obs)
+    perms_D = [D_for(sset, rng.permutation(dates_obs)) for sset in sets]
+    Y = d[y].to_numpy(float)
+    if stat is None:
+        U = pd.get_dummies(d[unit]).to_numpy(float)
+        Tm = pd.get_dummies(d[time]).to_numpy(float)[:, 1:]
+        F = np.column_stack([U, Tm])
+        Fp = np.linalg.pinv(F)
+        resid = lambda v: v - F @ (Fp @ v)
+        y_t = resid(Y)
+        Dt_obs = resid(D_obs)
+        Dt = np.column_stack([resid(Dp) for Dp in perms_D])
+        est = float(Dt_obs @ y_t / (Dt_obs @ Dt_obs))
+
+        def pval(tau):
+            yt0 = y_t - tau * Dt_obs
+            s0 = Dt_obs @ yt0 / (Dt_obs @ Dt_obs)
+            sp = (Dt * yt0[:, None]).sum(0) / (Dt ** 2).sum(0)
+            return (1 + np.sum(np.abs(sp) >= abs(s0) - 1e-12)) / (len(sets) + 1)
+
+        p = float(pval(0.0))
+        lo = hi = np.nan
+        if ci:
+            sd_perm = float(np.std((Dt * y_t[:, None]).sum(0) / (Dt ** 2).sum(0)))
+            grid = est + sd_perm * np.linspace(-5, 5, ci_points)
+            keep = np.array([pval(tv) > alpha for tv in grid])
+            if keep.any():
+                lo, hi = float(grid[keep].min()), float(grid[keep].max())
+                if keep[0] or keep[-1]:
+                    warnings.warn("randomization CI reaches the edge of its grid: widen ci_points")
+        method = "randomization inference (TWFE DiD statistic)"
+    else:
+        est = float(stat(d.copy()))
+        draws = []
+        for sset in sets:
+            g = np.zeros(N)
+            g[sset] = rng.permutation(dates_obs)
+            dp = d.copy()
+            dp[gvar] = g[u_idx]
+            draws.append(stat(dp))
+        draws = np.asarray(draws, float)
+        p = float((1 + np.sum(np.abs(draws) >= abs(est) - 1e-12)) / (len(draws) + 1))
+        lo = hi = np.nan
+        method = "randomization inference (user statistic)"
+    warn = []
+    if n_assign < 1 / alpha * 2:
+        warn.append(f"only {n_assign} possible assignments: the smallest attainable p-value is {1 / n_assign:.3f}")
+    for w in warn:
+        warnings.warn(w)
+    return {"estimand": "ATT (DiD)", "method": method, "estimate": est, "p": p, "ci_low": lo, "ci_high": hi,
+            "n_units": N, "n_treated": N1, "possible_assignments": n_assign, "exact": exact,
+            "n_perm": len(sets), "n": len(d), "warnings": warn}

@@ -30,7 +30,7 @@ Every check you request names the function of this skill that runs it (`estimati
 - [ ] IV: first-stage F (effective F), exclusion argued, LATE interpreted for compliers?
 
 **Inference**
-- [ ] SEs robust to heteroskedasticity; clustered at the level where the regressor of interest varies; number of clusters reported; wild bootstrap with few clusters? With few **treated** clusters (a policy adopted by a handful of states), also randomization inference: the wild bootstrap itself becomes unreliable when treated clusters are very few.
+- [ ] SEs robust to heteroskedasticity; clustered at the level where the regressor of interest varies; number of clusters reported; wild bootstrap with few clusters? With few **treated** clusters (a policy adopted by a handful of states), also randomization inference (`causal.randomization_inference`): the wild bootstrap itself becomes unreliable when treated clusters are very few.
 - [ ] Time series: HAC SEs, stationarity, spurious regression (R² > DW)?
 - [ ] Multiple testing: how many outcomes, subgroups, specifications were tried?
 - [ ] Heterogeneity claims backed by a test (BLP/GATES or pre-specified interactions), not by picking subgroups?
