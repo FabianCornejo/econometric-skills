@@ -154,5 +154,35 @@ pert = [risk.fz_loss(x, pd.Series(v * kv, index=x.index), pd.Series(e * ke, inde
 check("FZ0: true (VaR, ES) has lower mean loss than six perturbations", true < min(pert),
       f"{true:.4f} vs min {min(pert):.4f}")
 
+# ---------------------------------------------------------------------------------------------
+# Engle-Manganelli dynamic quantile test (v2.2 eval): size and power against a static model
+# ---------------------------------------------------------------------------------------------
+rej = []
+for s_ in range(300):
+    x = pd.Series(np.random.default_rng(s_).standard_normal(1500))
+    rej.append(risk.dq_test(x, pd.Series(-stats.norm.ppf(0.01), index=x.index), 0.01)["p_dq"] < 0.05)
+check("DQ test size with the true VaR: 2%-9% at 5%", 0.02 <= np.mean(rej) <= 0.09, f"{np.mean(rej):.3f}")
+
+
+def garch_n(T, seed):
+    rng = np.random.default_rng(seed)
+    h = 0.02 / (1 - 0.98)
+    out = np.zeros(T)
+    for t in range(T):
+        out[t] = np.sqrt(h) * rng.standard_normal()
+        h = 0.02 + 0.08 * out[t] ** 2 + 0.9 * h
+    return pd.Series(out)
+
+
+pdq, pind = [], []
+for s_ in range(60):
+    rr = garch_n(2250, s_)
+    vh = risk.var_historical(rr, 0.01, 250)
+    pdq.append(risk.dq_test(rr, vh, 0.01)["p_dq"] < 0.05)
+    pind.append(risk.christoffersen(rr, vh, 0.01)["p_ind"] < 0.05)
+check("DQ test detects a static historical VaR on GARCH data (> 85%) far more often than Christoffersen",
+      np.mean(pdq) > 0.85 and np.mean(pdq) > np.mean(pind) + 0.4, f"DQ {np.mean(pdq):.2f}, LR_ind {np.mean(pind):.2f}")
+check("backtest_var reports the DQ p-value", "p_dq" in bt.columns)
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

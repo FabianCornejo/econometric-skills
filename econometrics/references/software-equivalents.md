@@ -195,3 +195,4 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | Stata `pc_simulate` (Burlig et al.), `power` with repeated measures; R `pwr`/simulation | `simulation.mde_did`, `power_did_sim`, `mde_did_sim` |
 | R `evir`, `POT`, `extRemes::fevd(type="GP")`, `ismev::gpd.fit`; MATLAB `gpfit` | `risk.mean_excess`, `risk.gpd_fit`, `risk.var_evt` |
 | R `esback::esr_backtest`, `cc_backtest`; `GAS`/`esreg` FZ loss | `risk.es_backtest`, `risk.fz_loss`, `risk.compare_es_models` |
+| R `GAS::BacktestVaR` (DQ), `rugarch::VaRTest`, MATLAB `varbacktest` | `risk.dq_test`, `risk.backtest_var` |
