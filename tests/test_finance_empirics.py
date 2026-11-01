@@ -88,6 +88,28 @@ check("with a debt beta, round trip still exact",
 comps = np.array([1.1, 1.4, 0.9])
 check("vectorized over comparables", fe.unlever_beta(comps, np.array([0.2, 0.8, 0.5]), 0.34).shape == (3,))
 
+hp = fe.unlever_beta(1.3, 0.6, 0.34, method="harris_pringle")
+check("Harris-Pringle: 1.3 / (1 + 0.6) = 0.8125 and round trip exact",
+      abs(float(hp) - 1.3 / 1.6) < 1e-12 and abs(fe.relever_beta(hp, 0.6, method="harris_pringle") - 1.3) < 1e-12)
+check("Harris-Pringle asset beta < Hamada asset beta when t > 0 (no tax shield credited to equity)", float(hp) < float(bu))
+check("Harris-Pringle with debt beta: (1.3 + 0.2*0.6) / 1.6",
+      abs(float(fe.unlever_beta(1.3, 0.6, debt_beta=0.2, method="harris_pringle")) - (1.3 + 0.12) / 1.6) < 1e-12)
+try:
+    fe.unlever_beta(1.3, 0.6, 0.34, method="mm")
+    check("unknown levering method raises", False)
+except ValueError:
+    check("unknown levering method raises", True)
+
+# Dimson beta: a thinly traded stock absorbs half of the market move with a one-day delay
+rmd = pd.Series(rng.normal(0.0004, 0.012, 1500), index=dates)
+thin = 0.5 * rmd + 0.5 * rmd.shift(1).fillna(0) + pd.Series(rng.normal(0, 0.012, 1500), index=dates)
+dm = fe.dimson_beta(thin, rmd, lags=1, leads=1)
+check("non-synchronous trading: OLS beta biased to ~0.5, Dimson beta CI covers the true 1.0",
+      abs(dm["ols_beta"] - 0.5) < 0.1 and dm["ci_low"] < 1.0 < dm["ci_high"], f"OLS {dm['ols_beta']:.2f}, Dimson {dm['beta']:.2f}")
+sync = 1.0 * rmd + pd.Series(rng.normal(0, 0.012, 1500), index=dates)
+ds = fe.dimson_beta(sync, rmd)
+check("synchronous stock: Dimson ~ OLS beta (difference < 2 SE)", abs(ds["beta"] - ds["ols_beta"]) < 2 * ds["se"])
+
 # ---------------------------------------------------------------------------------------------
 # Factor model (monthly, FF3-style)
 # ---------------------------------------------------------------------------------------------

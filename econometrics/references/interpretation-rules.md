@@ -40,3 +40,5 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 - **Few treated units in a DiD**: report `causal.randomization_inference` next to the clustered and wild-bootstrap results, and say whether treated and control units are plausibly exchangeable.
 - **After many pairwise comparisons, adjust** (Tukey, Holm or BH); after variable selection, do not read the selected model's p-values as if it had been pre-specified (use `post_double_selection` for one effect).
 - **Teaching simulations** use a fixed seed, show their code, and report the quantity the lesson is about (bias, coverage, rejection rate), not only a single draw.
+
+- **Betas for a valuation** come from comparables whose windows start after any break in their risk profile (change of control, privatization, new regulation); report the unlevering method (Hamada/Conine or Harris-Pringle, with or without debt beta), and use `finance_empirics.dimson_beta` or weekly returns for thinly traded stocks.

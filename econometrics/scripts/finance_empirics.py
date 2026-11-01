@@ -10,7 +10,8 @@ Betas and cost of equity
     market_model(r_i, r_m, rf)                    alpha, beta (CAPM if rf is given), HAC SEs, R2, idiosyncratic vol
     rolling_beta(r_i, r_m, window, rf)            beta over a moving window with a 95% band
     adjusted_beta(beta, method, ...)              Blume (0.67 b + 0.33) or Vasicek (Bayesian shrinkage by SE)
-    unlever_beta / relever_beta                   Hamada (with optional debt beta): comparable-company betas
+    unlever_beta / relever_beta                   Hamada/Conine or Harris-Pringle (optional debt beta): comparables
+    dimson_beta(r_i, r_m, lags, leads)            beta for thinly traded stocks (sum of lead/lag coefficients)
     factor_model(r_i, factors, rf)                Fama-French 3/5, Carhart, NEFIN (Brazil) loadings and alpha
 
 Events and performance
@@ -148,19 +149,68 @@ def adjusted_beta(beta: float, method: str = "blume", se: float | None = None, p
     return {"method": method, "raw_beta": float(beta), "adjusted_beta": float(adj), "weight_on_raw": float(w)}
 
 
-def unlever_beta(beta_levered, debt_to_equity, tax_rate, debt_beta: float = 0.0):
-    """Asset (unlevered) beta from an equity beta, Hamada with optional debt beta:
-    beta_U = (beta_L + beta_D (1 - t) D/E) / (1 + (1 - t) D/E). Use market values of D and E,
-    and each comparable's own D/E and marginal tax rate (34% for Brazilian companies under
-    lucro real: 25% IRPJ + 9% CSLL)."""
-    k = (1 - tax_rate) * np.asarray(debt_to_equity, float)
+def _lever_factor(debt_to_equity, tax_rate, method):
+    de = np.asarray(debt_to_equity, float)
+    if method == "hamada":
+        return (1 - tax_rate) * de
+    if method == "harris_pringle":
+        return de
+    raise ValueError("method must be 'hamada' or 'harris_pringle'")
+
+
+def unlever_beta(beta_levered, debt_to_equity, tax_rate: float = 0.0, debt_beta: float = 0.0,
+                 method: str = "hamada"):
+    """Asset (unlevered) beta from an equity beta.
+
+    method "hamada" (fixed amount of debt, tax shield as risky as the debt; with debt_beta > 0 this
+    is Conine's 1980 extension): beta_U = (beta_L + beta_D (1 - t) D/E) / (1 + (1 - t) D/E).
+    method "harris_pringle" (debt rebalanced to a constant D/E, tax shield as risky as the assets;
+    tax_rate is ignored): beta_U = (beta_L + beta_D D/E) / (1 + D/E).
+    Use market values of D and E averaged over the beta's estimation window, and each comparable's
+    own D/E and marginal tax rate (34% for Brazilian companies under lucro real: 25% IRPJ + 9% CSLL).
+    Use the same method to unlever and to relever."""
+    k = _lever_factor(debt_to_equity, tax_rate, method)
     return (np.asarray(beta_levered, float) + debt_beta * k) / (1 + k)
 
 
-def relever_beta(beta_unlevered, debt_to_equity, tax_rate, debt_beta: float = 0.0):
-    """Equity beta at a target capital structure: beta_L = beta_U + (beta_U - beta_D)(1 - t) D/E."""
-    k = (1 - tax_rate) * np.asarray(debt_to_equity, float)
+def relever_beta(beta_unlevered, debt_to_equity, tax_rate: float = 0.0, debt_beta: float = 0.0,
+                 method: str = "hamada"):
+    """Equity beta at a target capital structure (same methods as unlever_beta):
+    beta_L = beta_U + (beta_U - beta_D) k, with k = (1 - t) D/E (Hamada/Conine) or D/E (Harris-Pringle)."""
+    k = _lever_factor(debt_to_equity, tax_rate, method)
     return np.asarray(beta_unlevered, float) + (np.asarray(beta_unlevered, float) - debt_beta) * k
+
+
+def dimson_beta(r_i, r_m, lags: int = 1, leads: int = 1, rf=None, hac_lags: int | None = None) -> dict:
+    """Dimson (1979) beta for thinly traded stocks: regress r_i on the market return at t and its
+    lags and leads; beta = sum of the coefficients (SE of the sum from the HAC covariance).
+    When a stock does not trade every day (many zero returns, common among Brazilian small caps),
+    its price reacts to market news with a delay and the plain OLS beta is biased toward zero.
+    Compare with market_model: a Dimson beta well above the OLS beta signals that bias; weekly or
+    monthly returns are the other remedy."""
+    import statsmodels.api as sm
+    if rf is not None:
+        ri, rm, f = _align(r_i, r_m, rf if isinstance(rf, pd.Series) else pd.Series(rf, index=r_i.index))
+        y, x = ri - f, rm - f
+    else:
+        y, x = _align(r_i, r_m)
+    cols = {"m(t)": x}
+    for k in range(1, lags + 1):
+        cols[f"m(t-{k})"] = x.shift(k)
+    for k in range(1, leads + 1):
+        cols[f"m(t+{k})"] = x.shift(-k)
+    X = pd.DataFrame(cols)
+    d = pd.concat([y.rename("_y"), X], axis=1).dropna()
+    n = len(d)
+    hl = _nw_lags(n) if hac_lags is None else hac_lags
+    fit = sm.OLS(d["_y"], sm.add_constant(d[list(cols)])).fit(cov_type="HAC", cov_kwds={"maxlags": hl})
+    a = np.array([0.0] + [1.0] * len(cols))
+    b = float(a @ fit.params.to_numpy())
+    se = float(np.sqrt(a @ fit.cov_params().to_numpy() @ a))
+    ols = market_model(y, x, hac_lags=hl)
+    return {"method": f"Dimson beta ({lags} lag(s), {leads} lead(s))", "beta": b, "se": se,
+            "ci_low": b - 1.96 * se, "ci_high": b + 1.96 * se, "coefficients": fit.params.drop("const"),
+            "ols_beta": ols["beta"], "share_zero_returns": float((y == 0).mean()), "n": n}
 
 
 def factor_model(r_i, factors: pd.DataFrame, rf=None, hac_lags: int | None = None,

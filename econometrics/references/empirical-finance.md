@@ -17,14 +17,16 @@ Use for the econometric inputs of valuation and transactions (the beta and the c
 | Choice | Common practice | Why it matters |
 |---|---|---|
 | Market proxy | Ibovespa or IBrX-100 for Brazilian stocks; a global index for a global investor | Beta is relative to the proxy |
-| Frequency | Weekly (2 years) or monthly (5 years) | Daily betas of illiquid stocks are biased toward zero (non-synchronous trading); use weekly/monthly, or the Dimson/Scholes-Williams adjustment |
+| Frequency | Weekly (2 years) or monthly (5 years) | Daily betas of illiquid stocks are biased toward zero (non-synchronous trading); use weekly/monthly, or `dimson_beta` (sum of lead/lag coefficients; compare with the OLS beta) |
 | Window | 2–5 years | Long windows mix old capital structures; short windows are noisy |
 | Adjustment | Blume or Vasicek | Raw betas mean-revert toward 1 |
 
-1. **Stability first**: `rolling_beta(r_i, r_m, window)`. A trend or a break (merger, new leverage, new business) means older data describe another company.
+1. **Stability first**: `rolling_beta(r_i, r_m, window)`. A trend or a break means older data describe another company. Typical breaks: a merger or spin-off, a new capital structure, a new business line, a **change of control** (privatization of a state-owned company, entry of a strategic shareholder) or a new regulatory regime. Start each comparable's window after its break; when the post-break window is too short, use dummies for the event weeks of the process (approvals, auction, offering), give that comparable less weight, and say so. Months dominated by deal news have returns driven by idiosyncratic events, which bias the beta toward zero.
 2. **Precision**: report the beta's CI. A beta of 1.1 with SE 0.3 is consistent with anything from 0.5 to 1.7. That is why practitioners prefer **industry betas from comparables** to a single regression.
-3. **Comparables**: estimate each comparable's levered beta, unlever it with its own market D/E and marginal tax rate (`unlever_beta`, Hamada, optionally with a debt beta), take the median or mean asset beta, and relever it at the target's target capital structure (`relever_beta`). For Brazilian companies under lucro real the marginal rate is 34% (25% IRPJ + 9% CSLL).
-4. **Adjustment**: `adjusted_beta(beta, "blume")` (0.67 β + 0.33) or `"vasicek"` (shrinks imprecise betas more, toward the industry mean).
+3. **Comparables**: estimate each comparable's levered beta, unlever it with its own market D/E (averaged over the estimation window, not at the valuation date) and marginal tax rate, take the median or a quality-weighted mean of the asset betas, and relever at the target's long-run capital structure. `unlever_beta`/`relever_beta` offer `method="hamada"` (fixed debt; with a debt beta this is Conine 1980) and `method="harris_pringle"` (debt rebalanced to a constant D/E, no tax term); use the same method both ways and state it. Highly levered sectors (utilities, sanitation, infrastructure) need a debt beta (often 0.1–0.3): ignoring it understates the asset beta. For Brazilian companies under lucro real the marginal rate is 34% (25% IRPJ + 9% CSLL); a target without taxable profit cannot use the full tax shield.
+   - **Few or unstable local comparables**: triangulate with an international peer set or an industry table (e.g. Damodaran's), but keep the CAPM coherent: a beta from US peers belongs in a global CAPM (US risk-free rate, US equity risk premium, country risk premium, inflation differential to convert to BRL); a beta from Brazilian peers belongs in a local CAPM with a Brazilian market premium. Do not mix them.
+4. **Adjustment**: `adjusted_beta(beta, "blume")` (0.67 β + 0.33, the Bloomberg convention) or `"vasicek"` (shrinks each beta toward the industry mean in proportion to its imprecision: the statistically grounded choice when you have the beta's SE and the cross-sectional SD of industry betas). In regulated, defensive sectors Blume pulls betas up mechanically; show it as a sensitivity rather than the base case.
+   - **Deliver a range**: betas across specifications (proxy, frequency, window, method) and propagate the range to the cost of equity. Premiums for size, illiquidity or company-specific risk go on separate lines of the cost of equity, never inside the beta.
 5. **Cost of equity**: k_e = r_f + β × ERP (+ country risk premium when the inputs are in USD). The beta is the econometric part; the risk-free rate, the equity risk premium and the country risk come from sources, not regressions. Never estimate an ERP from a short sample of realized returns.
 
 ## 3. Factor models
@@ -38,7 +40,7 @@ Use for the econometric inputs of valuation and transactions (the beta and the c
 1. **Define the event date** precisely (first public announcement, including leaks and rumors); day 0 is the first trading day on or after it. Announcements after the close belong to the next day.
 2. **Estimation window** before the event window, with a gap (e.g. −250 to −30) so that run-up does not contaminate the normal-return model.
 3. **Normal-return model**: market model (default), market-adjusted (no estimation; for IPOs and thin histories) or constant mean.
-4. **Abnormal returns** AR = r − expected; **CAR** over the event window; **CAAR** across events.
+4. **Abnormal returns** AR = r − expected; **CAR** over the event window; **CAAR** across events. Use simple returns for CAARs (the cross-sectional mean of simple returns is a portfolio return; that of log returns is not), or state the convention; the difference is small for short windows.
 5. **Tests** (all reported):
 
 | Test | Assumption | Use |
