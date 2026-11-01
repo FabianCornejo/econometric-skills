@@ -73,6 +73,7 @@ Full versions and reasons in `references/interpretation-rules.md`.
 - **Heterogeneous effects only with evidence**: `hte.blp_test` rejects and `hte.gates` separates groups, on out-of-fold predictions; compare a linear and a flexible model; value policies on held-out units.
 - **Run more than one model** for causal claims (simple structural and flexible); disagreement is a finding.
 - **Advice must match the tools**: never recommend a step and show code that does something else; if no function exists, say so and write the code.
+- **Name the skill's function for every step you recommend** (Stata/R equivalents only as a complement). **Without data yet**: give the plan and a runnable script that calls those functions, ideally run on simulated data with the same structure. Show code in the answer or deliver it as a file; never point to an internal sandbox path.
 - **No invented numbers**: every figure comes from a computation run in the session or a cited source.
 
 ## 5. Output contract

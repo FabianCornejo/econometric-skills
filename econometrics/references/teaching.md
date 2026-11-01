@@ -22,11 +22,11 @@ Every method is explained with the same eleven blocks, in this order. Skip a blo
 4. **Estimator**: the formula (display LaTeX) and what it computes in words.
 5. **Short derivation**: the two or three steps that show why the estimator works under the assumptions (e.g. OLS unbiasedness from E[u|X] = 0; the IV estimator as a ratio of two reduced forms; the DR score's double robustness).
 6. **Simulation**: a small Monte Carlo that shows the method working and then failing when one assumption is broken (§3). Seeing the bias appear is what makes the assumption stick.
-7. **Code**: the skill's function on real or simulated data, with the output.
+7. **Code**: the skill's function on real or simulated data, with the output. The code itself appears in the answer (or is delivered as a downloadable file): the student must be able to rerun the simulation and change its parameters. Never cite a path inside the sandbox.
 8. **Diagnostics**: the tests that check the assumptions that can be checked, and what to do when they fail.
 9. **Interpretation**: one sentence for each number that matters, with units and the interval.
 10. **Pitfalls**: the three most common mistakes.
-11. **Exercise**: one problem with data or a scenario, and a worked solution hidden below a separator ("Solution").
+11. **Exercise**: one problem with data or a scenario, and **always** its complete worked solution below a separator ("Solution"). A closing comprehension question does not replace the solved exercise.
 
 ## 3. Simulations that teach
 

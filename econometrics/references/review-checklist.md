@@ -13,7 +13,9 @@ Use when the user asks to review, audit or referee someone else's empirical work
    Each finding states where it is (table, page, cell), why it matters, and the concrete check or fix.
 4. **What would change my mind**: the analyses whose results would move the verdict.
 
-Reproduce numbers when data are available (the scripts of this skill); otherwise say which claims could not be checked.
+Order the findings as the logic of the work: estimand → identification → estimator → inference → robustness. A perfect standard error on a biased estimand does not save the conclusion, so identification findings come before inference findings.
+
+Every check you request names the function of this skill that runs it (`estimation.wild_cluster_bootstrap`, `causal.att_gt`, `causal.did_timing_sensitivity`, `causal.event_study`, `causal.synth`, `specification.sensitivity`, ...), with the Stata/R command as a complement, so the user can run the review. Reproduce numbers when data are available; otherwise say which claims could not be checked.
 
 ## 2. Checklist
 
@@ -28,7 +30,7 @@ Reproduce numbers when data are available (the scripts of this skill); otherwise
 - [ ] IV: first-stage F (effective F), exclusion argued, LATE interpreted for compliers?
 
 **Inference**
-- [ ] SEs robust to heteroskedasticity; clustered at the level where the regressor of interest varies; number of clusters reported; wild bootstrap with few clusters?
+- [ ] SEs robust to heteroskedasticity; clustered at the level where the regressor of interest varies; number of clusters reported; wild bootstrap with few clusters? With few **treated** clusters (a policy adopted by a handful of states), also randomization inference: the wild bootstrap itself becomes unreliable when treated clusters are very few.
 - [ ] Time series: HAC SEs, stationarity, spurious regression (R² > DW)?
 - [ ] Multiple testing: how many outcomes, subgroups, specifications were tried?
 - [ ] Heterogeneity claims backed by a test (BLP/GATES or pre-specified interactions), not by picking subgroups?
