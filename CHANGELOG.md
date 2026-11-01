@@ -2,6 +2,10 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.2.2 — Description that leads with when to use the skill
+
+- The v2.2.1 retest of the ES/FRTB eval failed in the same way: a corporate `market-risk` skill, whose name matches the question, was chosen and this skill was never loaded. The description listed about 500 characters of methods before the first risk word. It now starts with what the skill is (applied econometrics and quantitative risk, tested code) and when to use it, "instead of general finance, valuation or market-risk skills, which do not estimate", with VaR/ES backtests and validation (FRTB), tail risk, WACC betas and announcement returns first; the methods follow (1009 characters). No code changes.
+
 ## v2.2.1 — Fixes from the v2.2 blind evals
 
 - **Control choice (eval passed with one gap):** the eval's graph omitted the edge treatment -> outcome, so the optimal set was silently unavailable. `dag.adjustment_report` now warns that such a graph assumes a zero effect (`warnings` key); `classify_controls` gives descendants of the outcome their own role (the bad control that raises R²); `specification.sensitivity` groups the dummies of a categorical or fixed effect into one joint partial R² benchmark (equal to the refit identity) instead of listing each year separately.
