@@ -21,6 +21,7 @@ All numbers come from the fitted models passed in; nothing is assumed.
 """
 from __future__ import annotations
 
+import re
 import warnings
 
 import numpy as np
@@ -258,15 +259,31 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
     """Cinelli-Hazlett statistics for `treatment` in a fitted OLS, with informal benchmarks.
 
     Uses the classical (non-robust) t, as the formulas are partial-R² identities. `benchmarks`
-    lists each observed covariate's partial R² with the outcome: a confounder would need to be
+    lists each observed covariate's partial R² with the outcome (the dummies of a categorical
+    variable or fixed effect are grouped into one joint partial R²): a confounder would need to be
     stronger than these to reach RV. For formal bounds (k times as strong as a covariate) use the
     authors' sensemakr (R/Stata; Python port PySensemakr, still early-stage).
     """
     base = res if getattr(res, "cov_type", "nonrobust") == "nonrobust" else res.model.fit()
     out = robustness_value(base.tvalues[treatment], base.df_resid, q=q, alpha=alpha)
     others = [c for c in base.params.index if c not in _INTERCEPT and c != treatment]
-    out["benchmarks"] = pd.Series({c: base.tvalues[c] ** 2 / (base.tvalues[c] ** 2 + base.df_resid)
-                                   for c in others}, name="partial R² with outcome").sort_values(ascending=False)
+    groups: dict[str, list[str]] = {}
+    for c in others:                              # dummies of one categorical -> one benchmark
+        m = re.match(r"^(C\(.+?\))\[", c) or re.match(r"^(.+?)\[T\.", c)
+        groups.setdefault(m.group(1) if m else c, []).append(c)
+    bench = {}
+    for gname, terms in groups.items():
+        if len(terms) == 1:
+            t_ = base.tvalues[terms[0]]
+            bench[gname] = t_ ** 2 / (t_ ** 2 + base.df_resid)
+        else:                                     # joint partial R² = qF / (qF + df) (exact for OLS)
+            R = np.zeros((len(terms), len(base.params)))
+            for i, t_ in enumerate(terms):
+                R[i, list(base.params.index).index(t_)] = 1
+            F = float(np.squeeze(base.f_test(R).fvalue))
+            q = len(terms)
+            bench[f"{gname} ({q} dummies, jointly)"] = q * F / (q * F + base.df_resid)
+    out["benchmarks"] = pd.Series(bench, name="partial R² with outcome").sort_values(ascending=False)
     if show:
         print(f"\nSensitivity of {treatment} (Cinelli-Hazlett): partial R² = {out['partial_r2']:.3%}, "
               f"RV(q={q}) = {out['rv_q']:.2%}, RV(q={q}, α={alpha}) = {out['rv_qa']:.2%}")

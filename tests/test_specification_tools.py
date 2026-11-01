@@ -219,5 +219,18 @@ for yv, label, want_reject in [(y_nb, "negative binomial data", True), (y_po, "P
     p = out["tests"].loc["NB2 (Var = μ + αμ²)", "p"]
     check(f"Cameron-Trivedi NB2 test on {label}", (p < 0.01) if want_reject else (p > 0.05), f"p = {p:.3g}")
 
+# v2.2 eval: the dummies of a fixed effect are one benchmark (joint partial R² = refit identity)
+rg = np.random.default_rng(7)
+nb = 400
+db = pd.DataFrame({"t": rg.normal(size=nb), "x": rg.normal(size=nb), "yr": rg.integers(2010, 2020, nb)})
+db["y"] = 0.5 * db.t + 0.3 * db.x + 0.15 * (db.yr - 2015) + rg.normal(size=nb)
+full = smf.ols("y ~ t + x + C(yr)", db).fit()
+sb = sp.sensitivity(full, "t")["benchmarks"]
+key = [k for k in sb.index if k.startswith("C(yr)")]
+pr2 = 1 - full.ssr / smf.ols("y ~ t + x", db).fit().ssr
+check("sensitivity: year dummies grouped into one benchmark equal to the refit partial R²",
+      len(key) == 1 and "9 dummies" in key[0] and abs(sb[key[0]] - pr2) < 1e-10 and "x" in sb.index,
+      f"{sb[key[0]]:.5f} vs {pr2:.5f}" if key else str(list(sb.index)))
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

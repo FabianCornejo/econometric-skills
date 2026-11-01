@@ -62,7 +62,8 @@ check("unobserved confounder: no valid adjustment set; Z flagged instrument-like
 gmed = "X->M->Y; X->Y; C->X; C->Y; X->K; Y->K"
 rmed = dag.classify_controls(gmed, "X", "Y")
 check("mediator M and post-treatment K: do not control; C confounder",
-      rmed.loc["M", "role"].startswith("mediator") and rmed.loc["K", "recommendation"] == "do not control"
+      rmed.loc["M", "role"].startswith("mediator") and rmed.loc["K", "recommendation"].startswith("do not control")
+      and rmed.loc["K", "role"].startswith("descendant of the outcome")
       and rmed.loc["C", "role"].startswith("confounder") and not dag.is_valid_adjustment(gmed, "X", "Y", {"C", "M"}))
 go = "X->Y; W->Y; Z->X; C->X; C->Y"
 ro = dag.classify_controls(go, "X", "Y")
@@ -119,6 +120,13 @@ rep = dag.adjustment_report(gtrue, "X", "Y", df=d, show=False)
 check("adjustment_report bundles sets, O-set, roles, tests and mermaid",
       rep["adjustment_sets"] == [["M", "Z1"], ["M", "Z2"]] and rep["optimal_set"] == ["M", "Z2"]
       and len(rep["roles"]) == 4 and rep["mermaid"].startswith("graph LR"))
+
+# v2.2 eval: a graph without the edge x -> y assumes a zero effect and must say so
+noedge = "S -> A; S -> P; A -> T; P -> T"
+r_no = dag.adjustment_report(noedge, "A", "P", show=False)
+r_ok = dag.adjustment_report(noedge + "; A -> P", "A", "P", show=False)
+check("missing edge x -> y: warning raised and optimal set unavailable; with the edge, no warning and O-set {S}",
+      len(r_no["warnings"]) == 1 and r_no["optimal_set"] is None and not r_ok["warnings"] and r_ok["optimal_set"] == ["S"])
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

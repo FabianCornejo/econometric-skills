@@ -248,6 +248,8 @@ def classify_controls(g, x: str, y: str) -> pd.DataFrame:
     for v in sorted(g.nodes - {x, y}):
         if v in cn:
             role, rec = "mediator (x -> v -> y)", "do not control: removes part of the effect"
+        elif v in g.descendants(y) - {y}:
+            role, rec = "descendant of the outcome (consequence of y)", "do not control: conditioning on it biases the effect"
         elif v in desc_x:
             opens = sets and not d_separated(gx, x, y, base | {v})
             role = "descendant of x" + (" and collider (opens a path)" if opens else " (post-treatment)")
@@ -346,14 +348,21 @@ def adjustment_report(g, x: str, y: str, df: pd.DataFrame | None = None, show: b
     O = optimal_adjustment_set(g, x, y)
     roles = classify_controls(g, x, y)
     tests = test_implications(g, df, show=False) if df is not None else None
+    warns = []
+    if y not in g.descendants(x):
+        warns.append(f"the graph has no directed path from {x} to {y}: it assumes the effect is zero. "
+                     f"Add '{x} -> {y}' (the effect to be estimated) unless that is really the claim.")
     if show:
         print(f"\nCausal effect of {x} on {y}: {g}")
+        for w in warns:
+            print("  WARNING:", w)
         if sets:
             print("  Minimal adjustment sets: " + "; ".join("{" + ", ".join(s) + "}" if s else "{} (no controls needed)"
                                                           for s in sets))
             print("  Optimal set (smallest variance among valid sets): "
                   + ("{" + ", ".join(O) + "}" if O is not None
-                     else "not available (it would contain an unobserved variable, or there is no causal path)"))
+                     else "not available (no causal path from x to y)" if warns
+                     else "not available (it would contain an unobserved variable)"))
         else:
             print("  NOT identified by adjustment: an unobserved confounder is open on every set. "
                   "Use an instrument, a panel design (DiD/FE) or a front-door path.")
@@ -361,4 +370,5 @@ def adjustment_report(g, x: str, y: str, df: pd.DataFrame | None = None, show: b
         if tests is not None and len(tests):
             bad = tests.loc[~tests["consistent"], "implication"].tolist()
             print(f"  Data checks: {len(tests)} implications, " + (f"rejected: {bad}" if bad else "none rejected"))
-    return {"adjustment_sets": sets, "optimal_set": O, "roles": roles, "tests": tests, "mermaid": g.to_mermaid()}
+    return {"adjustment_sets": sets, "optimal_set": O, "roles": roles, "tests": tests, "mermaid": g.to_mermaid(),
+            "warnings": warns}

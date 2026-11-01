@@ -17,6 +17,7 @@ expected_shortfall_historical(...)           rolling empirical ES
 kupiec_pof(r, var, alpha)                    unconditional coverage (LR_uc)
 christoffersen(r, var, alpha)                independence (LR_ind) and conditional coverage (LR_cc)
 basel_traffic_light(n_viol, n=250)           green / yellow / red zone for 99% VaR
+dq_test(r, var, alpha, lags=4)               Engle-Manganelli (2004) dynamic quantile test (hits predictable?)
 backtest_var(r, var_dict, alpha)             one table for several VaR models
 
 Extreme value theory (v2.2)
@@ -211,6 +212,29 @@ def christoffersen(r: pd.Series, var: pd.Series, alpha: float = 0.01) -> dict:
             "P(viol | viol yesterday)": pi11}
 
 
+def dq_test(r: pd.Series, var: pd.Series, alpha: float = 0.01, lags: int = 4) -> dict:
+    """Engle & Manganelli (2004) dynamic quantile test, out-of-sample version.
+    Hit_t = 1{r_t < -VaR_t} - alpha is regressed on a constant, Hit_{t-1..t-lags} and VaR_t;
+    DQ = Hit'X (X'X)^-1 X'Hit / (alpha (1 - alpha)) ~ chi2(lags + 2) under a correct model.
+    It detects violations that are predictable from past violations or from the VaR level
+    itself (dependence of higher order than Christoffersen's first-order Markov test)."""
+    df = pd.concat([pd.Series(r).rename("r"), pd.Series(var).rename("v")], axis=1).dropna()
+    hit = (df["r"] < -df["v"]).astype(float).to_numpy() - alpha
+    v = df["v"].to_numpy()
+    T = len(hit)
+    rows = [np.ones(T - lags)] + [hit[lags - k:T - k] for k in range(1, lags + 1)] + [v[lags:]]
+    X = np.column_stack(rows)
+    h = hit[lags:]
+    XtX = X.T @ X
+    try:
+        b = np.linalg.solve(XtX, X.T @ h)
+    except np.linalg.LinAlgError:
+        b = np.linalg.lstsq(X, h, rcond=None)[0]
+    dq = float(h @ X @ b / (alpha * (1 - alpha)))
+    k = X.shape[1]
+    return {"DQ": dq, "df": k, "p_dq": float(stats.chi2.sf(dq, k)), "n": T - lags, "lags": lags}
+
+
 def basel_traffic_light(n_viol: int, n: int = 250, alpha: float = 0.01) -> str:
     """Basel zones from the binomial CDF: green < 95%, yellow < 99.99%, red otherwise."""
     c = stats.binom.cdf(n_viol, n, alpha)
@@ -224,12 +248,13 @@ def backtest_var(r: pd.Series, var_dict: dict[str, pd.Series], alpha: float = 0.
     rows = {}
     for k in var_dict:
         c = christoffersen(common["r"], common[k], alpha)
+        c["p_dq"] = dq_test(common["r"], common[k], alpha)["p_dq"]
         last = _hits(common["r"].iloc[-250:], common[k].iloc[-250:]).sum()
         c["avg_VaR"] = common[k].mean()
         c["traffic_light_last_250"] = basel_traffic_light(int(last), min(250, len(common)), alpha) \
             if abs(alpha - 0.01) < 1e-9 else "n/a"
         rows[k] = c
-    tab = pd.DataFrame(rows).T[["n", "violations", "expected", "rate", "p_uc", "p_ind", "p_cc",
+    tab = pd.DataFrame(rows).T[["n", "violations", "expected", "rate", "p_uc", "p_ind", "p_cc", "p_dq",
                                 "P(viol | viol yesterday)", "avg_VaR", "traffic_light_last_250"]]
     if show:
         print(f"\nVaR backtest at {100 * (1 - alpha):.1f}% ({len(common)} common days)")
@@ -240,7 +265,9 @@ def backtest_var(r: pd.Series, var_dict: dict[str, pd.Series], alpha: float = 0.
                 msgs.append("too many" if rows[k]["rate"] > alpha else "too few (over-conservative)")
             if rows[k]["p_ind"] < 0.05:
                 msgs.append("violations cluster in time")
-            print(f"  {k}: " + ("; ".join(msgs) if msgs else "passes coverage and independence at 5%"))
+            if rows[k]["p_dq"] < 0.05:
+                msgs.append("violations predictable (DQ)")
+            print(f"  {k}: " + ("; ".join(msgs) if msgs else "passes coverage, independence and DQ at 5%"))
         print("  Among models that pass, prefer the lower average VaR (less capital for the same coverage).")
     return tab
 

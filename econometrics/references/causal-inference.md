@@ -52,13 +52,14 @@ rep = dag.adjustment_report(g, "discount", "purchase", df=data)   # sets {income
                                                                   # optimal {price_sensitivity, season}
 ```
 
-It returns the **minimal adjustment sets** (backdoor criterion), the **optimal set** (Henckel, Perković & Maathuis 2022: among valid sets, the one with the smallest variance; it adds outcome predictors and drops pure treatment predictors), the **role of every variable** and, with data, **tests of the graph's implications**.
+Always include the edge x -> y being estimated: a graph without it claims the effect is zero (the report warns). It returns the **minimal adjustment sets** (backdoor criterion), the **optimal set** (Henckel, Perković & Maathuis 2022: among valid sets, the one with the smallest variance; it adds outcome predictors and drops pure treatment predictors), the **role of every variable** and, with data, **tests of the graph's implications**.
 
 | Role (`classify_controls`) | Example | Control? |
 |---|---|---|
 | Confounder (causes x and y) | income for a discount's effect on purchases | Yes (or a set that blocks its path) |
 | Mediator (x → v → y) | site visits caused by the discount | No: removes part of the effect (unless the question is the direct effect) |
-| Descendant of x / collider | a review written after the purchase | No: post-treatment, can open a path |
+| Descendant of x / collider | a delivery delay caused by the discount campaign | No: post-treatment, can open a path |
+| Descendant of y (consequence of the outcome) | a review written after the purchase; the market reaction to a premium paid | No: conditioning on it biases the effect, even though it raises R² |
 | Collider of two causes, not a descendant of x (M-bias) | a variable caused by two independent causes of x and y | No: controlling opens a path |
 | Instrument-like (affects y only through x) | region of a randomized rollout | No: raises variance and amplifies any remaining bias; use it as an instrument |
 | Outcome predictor (not a cause of x) | season for purchases | Optional: improves precision |
@@ -144,8 +145,10 @@ Not covered: treatment intensity that varies continuously within a unit (dose; d
 
 A DiD with an insignificant result is uninformative unless it could have detected a relevant effect. Before collecting data or choosing the sample, compute the minimum detectable effect:
 - `simulation.mde_did(n_units=..., n_pre=m, n_post=r, sd=..., rho=...)`: analytic MDE (McKenzie 2012) with equicorrelated errors: Var = σ²(1 − ρ)(1/m + 1/r) / (P(1 − P)N). More periods and higher ρ lower the MDE.
+- `simulation.did_power_inputs(history, unit, time, y)`: estimates the simulation inputs from the pre-period panel (SD of the two-way FE residuals, which is usually much smaller than the total SD a user quotes, and their AR(1) coefficient with the Nickell correction). Feed them to:
 - `simulation.power_did_sim(n_units, T, share_treated, effect, adoption, rho_ar, ...)`: simulates the panel you will have (unit effects, common shocks, **AR(1) errors**, simultaneous or staggered adoption) and the inference you will use (TWFE with unit-clustered SEs, t(G−1) critical values); reports power, size and coverage. `mde_did_sim` searches the effect with 80% power.
 - With decaying serial correlation the analytic formula overstates power (Burlig, Preonas & Woerman 2020): in the skill's tests, a design with 80% analytic power has 51% simulated power at AR(1) ρ = 0.8, and the MDE rises by 40%. Use the simulation for the final number; with fewer than ~10 treated units, plan randomization inference (the clustered SE over-rejects: 10% size with 3 treated of 12).
+- When the outcome is a stock that responds slowly (portfolio default rate, inventory), persistence is high and power low: prefer a flow measure that only the new policy touches (default by origination cohort), and count the months it needs to mature.
 - After the study, report the MDE next to an insignificant estimate ("the design could detect effects above X; the CI excludes effects above Y").
 
 ## 7. Synthetic control

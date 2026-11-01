@@ -47,6 +47,7 @@ For 99.5%–99.9% VaR, stress losses or "how bad is a 1-in-1000-days loss?", the
 | Kupiec POF (LR_uc ~ χ²₁) | violation rate = α | Too many violations: risk underestimated. Too few: capital wasted |
 | Christoffersen independence (LR_ind ~ χ²₁) | violations are not clustered | Rejection: the model reacts too slowly to volatility (typical of historical and static models) |
 | Conditional coverage (LR_cc ~ χ²₂) | both | Overall verdict |
+| Dynamic quantile, Engle-Manganelli (`dq_test`, column `p_dq`) | hits not predictable by past hits or by the VaR level | Much more power than LR_ind against slow models: in the skill's tests, 97% vs 23% for a static historical VaR on GARCH returns |
 | Basel traffic light (last 250 days, 99%) | — | Green 0–4 violations, yellow 5–9, red 10+ |
 
 Also reported: P(violation | violation yesterday), which should be close to α; values of 5–10% reveal clustering.
@@ -66,6 +67,15 @@ ES is the regulatory measure (FRTB, 97.5%) but it is not elicitable on its own: 
 | `fz_loss`, `compare_es_models(r, {"evt": df1, "garch": df2}, alpha)` | FZ0 loss (Fissler-Ziegel; Patton, Ziegel & Chen 2019), Diebold-Mariano vs the best | Lower mean loss is better; ranks (VaR, ES) pairs fairly on a common sample |
 
 Order of work: `backtest_var` (coverage and independence of the VaR) → `es_backtest` (tail magnitude) → `compare_es_models` among the survivors. In the skill's GARCH-t simulations, conditional EVT passes all four tests and ranks first by FZ0; EWMA-normal fails coverage and both ES tests.
+
+### 3.2 Model validation for FRTB (internal models)
+
+When the question is "does our VaR model serve, and which model for ES 97.5%?":
+1. **Series**: backtest the **hypothetical P&L** of today's portfolio (current weights on historical returns) as well as the actual P&L; changes in composition otherwise mix model error with position changes. Make sure the out-of-sample period contains a stress episode (e.g. March 2020).
+2. **Design**: rolling one-day forecasts, each model on the window it needs (250 days for the static models, ~1000 for GARCH/EVT), compared on their **common** out-of-sample dates.
+3. **VaR tests at 97.5% and 99%** (`backtest_var` at both levels: FRTB desk backtesting uses both), including `p_dq`; **ES tests** (`es_backtest`); **ranking** (`compare_es_models`).
+4. **Candidates**: the current model as benchmark, a filtered model (`var_ewma(..., method="fhs")`, `var_garch` with t errors) and conditional EVT (`var_evt`); report the tail index (`gpd_fit`) to show why the normal fails. Under normality ES 97.5% ≈ 2.338σ ≈ VaR 99% (2.326σ): with a normal model the switch to ES changes the name, not the number.
+5. **Regulatory items to confirm with the risk area and the local rules** (not estimated here): the stressed-period calibration (the most severe 12 months, which may require history longer than the data), liquidity horizons with the cascade scaling of the 10-day ES instead of √10, and the P&L attribution test. State them as open points of the validation report.
 
 ## 4. Typical results and how to read them
 
