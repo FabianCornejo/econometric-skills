@@ -92,6 +92,19 @@ with tempfile.TemporaryDirectory() as tmp:
           r.returncode == 0 and f"FOUND {plugin}" in r.stdout, (r.stdout + r.stderr).strip()[-120:])
     r = run(sys.executable, home, env_var=str(SKILL))
     check("ECONOMETRICS_SKILL_DIR takes precedence over the plugin", r.returncode == 0 and f"FOUND {SKILL}" in r.stdout)
+    synced_home = Path(tmp) / "synced_home"
+    synced = synced_home / ".claude" / "skills" / "synced" / "a1b2c3" / "econometrics"
+    synced.parent.mkdir(parents=True)
+    shutil.copytree(SKILL, synced, ignore=shutil.ignore_patterns("__pycache__"))
+    r = run(sys.executable, synced_home)
+    check("only the copy synced from the Claude app (~/.claude/skills/synced/...): the skeleton finds it",
+          r.returncode == 0 and f"FOUND {synced}" in r.stdout, (r.stdout + r.stderr).strip()[-120:])
+    both = Path(tmp) / "both_home"
+    shutil.copytree(home, both)
+    shutil.copytree(synced_home / ".claude" / "skills", both / ".claude" / "skills")
+    r = run(sys.executable, both)
+    check("plugin and synced copy both present: the plugin copy is used",
+          r.returncode == 0 and "plugins/marketplaces/econometric-skills" in r.stdout.replace("\\", "/"))
     empty = Path(tmp) / "empty_home"
     empty.mkdir()
     r = run(sys.executable, empty)

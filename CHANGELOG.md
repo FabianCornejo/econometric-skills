@@ -2,6 +2,13 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.3.3 — Scripts also find the copy synced from the Claude app
+
+The first real run of the v2.3.2 flow on Windows (Claude Code 2.1.316) worked: Claude loaded the skill, ran `setup_env.py --check`, listed the eight missing packages for Python 3.14 and 3.12, and asked before installing. It also showed where Claude Code keeps the skill synced from the Claude app: `~/.claude/skills/synced/<id>/econometrics`. The script locator did not search there. A user with only the app copy, and no plugin, would have seen "skill not found".
+
+- The locator block (`interpretation-rules.md`, referenced by the delivery rule) now looks for any `econometrics/scripts/causal.py` under `~/.claude/skills`, newest first. The order is: the variable, the plugin's stable copy, copies under `~/.claude/skills` (including the synced one), the clone. `SKILL.md` and the README say so.
+- `tests/test_setup_env.py` gains two checks: a home with only the synced copy is found, and when the plugin and the synced copy both exist, the plugin copy is used (522 checks in total).
+
 ## v2.3.2 — Zero-step setup for Claude Code users
 
 A clean install of the plugin, done as a new user would (fresh configuration, Claude Code 2.1.316), worked and showed version 2.3.1. It also showed that, after installing, a user still had to install Python packages by hand and edit or set paths before a delivered script would run. v2.3.2 removes those steps. The user runs one install command; Claude checks the environment, asks before installing anything, and delivered scripts run as received. No change to estimators or results.
