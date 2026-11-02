@@ -66,10 +66,14 @@ import os, sys
 from pathlib import Path
 
 def _skill_dir():
-    """Find the econometrics skill: ECONOMETRICS_SKILL_DIR, the Claude Code plugin, ~/.claude/skills, your clone."""
+    """Find the econometrics skill: ECONOMETRICS_SKILL_DIR, the Claude Code plugin, ~/.claude/skills
+    (including the copy synced from the Claude app), your clone."""
+    skills = Path.home() / ".claude" / "skills"
+    synced = sorted(skills.glob("**/econometrics/scripts/causal.py"), key=lambda f: f.stat().st_mtime,
+                    reverse=True) if skills.is_dir() else []
     for c in (os.environ.get("ECONOMETRICS_SKILL_DIR"),
               Path.home() / ".claude/plugins/marketplaces/econometric-skills/econometrics",
-              Path.home() / ".claude/skills/econometrics",
+              *[f.parents[1] for f in synced],
               r"<path to your clone>/econometric-skills/econometrics"):
         if c and Path(c, "scripts", "causal.py").exists():
             return str(c)
