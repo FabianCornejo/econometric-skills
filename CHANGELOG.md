@@ -2,6 +2,33 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.3.2 — Zero-step setup for Claude Code users
+
+A clean install of the plugin, done as a new user would (fresh configuration, Claude Code 2.1.316), worked and showed version 2.3.1. It also showed that, after installing, a user still had to install Python packages by hand and edit or set paths before a delivered script would run. v2.3.2 removes those steps. The user runs one install command; Claude checks the environment, asks before installing anything, and delivered scripts run as received. No change to estimators or results.
+
+- **New `scripts/setup_env.py`**, the same on Windows, macOS and Linux:
+  - `--check` reports the Python version (3.10 or later is needed), missing or outdated packages and the skill folder scripts should use.
+  - `--install` installs what is missing. It tries a plain pip first and adds `--break-system-packages` only where the system Python is externally managed; the old command used that flag unconditionally, which older pip versions, common on Windows, reject.
+  - `--skill-dir` prints the folder to use.
+
+  `SKILL.md` §7 tells Claude to run `--check` before the first script and to ask before `--install` on the user's machine. The plugin copies only `econometrics/`, without `requirements.txt`, so the README's `pip install -r requirements.txt` had been impossible for plugin users, and a clean Python failed at the first import with `ModuleNotFoundError: numpy`.
+- **Delivered scripts find the skill themselves.** The script skeleton (`interpretation-rules.md`, referenced in the delivery rule) now starts with a locator block that tries, in order:
+  1. `ECONOMETRICS_SKILL_DIR`;
+  2. the stable plugin copy, `~/.claude/plugins/marketplaces/econometric-skills/econometrics`;
+  3. `~/.claude/skills/econometrics`;
+  4. the user's clone.
+
+  The stable plugin copy is a git clone of `main` whose path stays the same across updates; the versioned `plugins/cache/.../<version>/` folder changes at every release, so it must never be written into a script. The block also turns a missing package into a one-line instruction to run `setup_env.py --install`. Users no longer set variables or edit paths.
+- **README.** Claude Code installation is one command plus "what happens the first time", updates by menu or terminal (`claude plugin marketplace update econometric-skills`, `claude plugin update econometrics@econometric-skills`), and the synced `anthropic-skills:econometrics` copy for users who also uploaded the skill to the app. A wrong claim was removed: `claude plugin list` shows the version, not the path.
+- **Validated** in `tests/test_setup_env.py`:
+  - in a fresh virtual environment without packages, `--check` exits 1 and names numpy, and the skeleton stops with the install instruction instead of a traceback;
+  - with a fake home holding only the plugin layout and no variable set, the skeleton finds the skill and imports it;
+  - the variable takes precedence;
+  - the package minimums equal `requirements.txt`;
+  - the versioned cache path resolves to the stable copy.
+
+  The version test now reads the CHANGELOG instead of a hard-coded number.
+
 ## v2.3.1 — Fixes from the v2.3.0 blind evals: cluster bootstrap, Goodman-Bacon, a diagnostic that cannot be misread
 
 Both v2.3.0 evals passed. The scripts they produced, run against the release, exposed three gaps in the skill itself, and v2.3.1 fixes them. v2.3.0 and v2.3.1 are published together in one release.

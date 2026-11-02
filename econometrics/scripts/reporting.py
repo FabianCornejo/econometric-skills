@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-SKILL_VERSION = "2.3.1"
+SKILL_VERSION = "2.3.2"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 

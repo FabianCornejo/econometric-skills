@@ -39,7 +39,7 @@ The mode changes the form of the answer, never the computations: every number co
 
 ### How it is validated
 
-- **507 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
+- **520 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
 - **Continuous integration** runs every test suite and worked example on the minimum and the latest supported dependency versions, and checks that `dist/econometrics.skill` matches the source.
 - **Blind evals** (`evals/`): plain-language prompts with objective must / must-not criteria, run in a fresh conversation before each release.
 - **Independent verification**: headline numbers are recomputed by a second route (DR vs outcome regression vs IPW inside `att_gt`, or `reporting.cross_check`), and deliverable scripts end with a run manifest, so a number can be traced and reproduced.
@@ -79,11 +79,17 @@ dist/         econometrics.skill, the packaged skill
 ### Installation
 
 - **Claude app (web or desktop):** download [`econometrics.skill`](https://github.com/FabianCornejo/econometric-skills/raw/main/dist/econometrics.skill) (also attached to the [latest release](../../releases/latest)) and upload it under **Customize → Skills**. Under **Settings → Capabilities**, keep **Run code in the cloud** on (required for skills) and allow network egress so missing Python packages can be installed.
-- **Claude Code (plugin, recommended):** the repository is its own plugin marketplace. In a session run
+- **Claude Code (plugin, recommended):** one command in a Claude Code session:
   ```
   /plugin install econometrics --marketplace FabianCornejo/econometric-skills
   ```
-  (one step on Claude Code 2.1.275 or later; on older versions run `/plugin marketplace add FabianCornejo/econometric-skills`, then `/plugin install econometrics@econometric-skills`). The plugin installs only the `econometrics/` folder; `/plugin update` brings new releases. Python scripts live in the plugin folder, so analysis scripts set `SKILL_DIR` to it (`claude plugin list` shows the path).
+  (Claude Code 2.1.275 or later; on older versions, or from a terminal: `claude plugin marketplace add FabianCornejo/econometric-skills`, then `claude plugin install econometrics@econometric-skills`). Restart Claude Code and that is all. You need Python 3.10 or later on the machine.
+
+  *What happens the first time.* Before running anything, Claude checks your Python with `setup_env.py --check`. If packages are missing (numpy, pandas, statsmodels, linearmodels, arch, scikit-learn), it tells you which and asks before installing them. The scripts it gives you find the skill by themselves (the plugin folder, `~/.claude/skills`, or a clone), so you run them as delivered, with no paths to edit. If a script ever reports a missing package, run the command it prints.
+
+  *Updates.* `/plugin` → Marketplaces → `econometric-skills` → `u`, then restart (or `claude plugin marketplace update econometric-skills` and `claude plugin update econometrics@econometric-skills`); `claude plugin list` shows the version. If you also uploaded the skill to the Claude app, Claude Code shows that copy too, synced from your account as `anthropic-skills:econometrics`: update both at every release, or keep the skill in only one place.
+
+  *Optional.* To use the skill's functions in your own code outside Claude, run `python ~/.claude/plugins/marketplaces/econometric-skills/econometrics/scripts/setup_env.py --check`: it confirms the packages and prints the folder to add to `sys.path` (or to `ECONOMETRICS_SKILL_DIR`). That folder is the stable copy of the plugin; the versioned cache folder changes at every release.
 - **Claude Code (manual):** copy the `econometrics` folder into `~/.claude/skills/`.
 - **Recommended:** Claude decides from the descriptions whether to load a skill, and may answer conceptual questions without data ("how should we validate our VaR model?") from general knowledge, without the skill's tested functions and script. Add a standing instruction under **Settings → Account → Instructions for Claude**, for example: *"For any econometrics, statistics or quantitative-risk question (VaR/ES, backtests, betas and WACC, event studies, causal effects, choice of controls, power, forecasting, reviewing empirical work), always load the econometrics skill before answering, even for conceptual questions without data."* See [evals/README.md](evals/README.md#known-limitation-skill-loading-on-conceptual-questions).
 
