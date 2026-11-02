@@ -67,3 +67,12 @@ jobs:
           print(f"plugin {v}, CHANGELOG {c}")
           sys.exit(0 if v == c else "bump the plugin version in .claude-plugin/marketplace.json to match CHANGELOG.md")
           PY
+      - name: Run manifests record the released version (reporting.SKILL_VERSION matches CHANGELOG)
+        run: |
+          python - <<'PY'
+          import re, sys
+          s = re.search(r'^SKILL_VERSION = "([^"]+)"', open("econometrics/scripts/reporting.py").read(), re.M).group(1)
+          c = re.search(r"^## v(\S+)", open("CHANGELOG.md", encoding="utf-8").read(), re.M).group(1)
+          print(f"reporting.SKILL_VERSION {s}, CHANGELOG {c}")
+          sys.exit(0 if s == c else "set SKILL_VERSION in econometrics/scripts/reporting.py to the CHANGELOG version")
+          PY

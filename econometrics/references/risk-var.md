@@ -54,7 +54,7 @@ Also reported: P(violation | violation yesterday), which should be close to α; 
 
 Choosing among models: discard those that fail coverage or independence; among the rest, prefer the one with the **lower average VaR** (same protection, less capital). For ES, see §3.1.
 
-With 250 observations at 1%, tests have very low power (2.5 expected violations). Use 2–4 years of daily data, or backtest at 2.5–5% as a complement.
+With 250 observations at 1% (99% VaR), tests have very low power (2.5 expected violations; at 97.5% the expectation is 6.25, and the traffic-light zones above apply to 99% only). Use 2–4 years of daily data, or backtest at 2.5–5% as a complement.
 
 ### 3.1 Backtesting Expected Shortfall
 

@@ -122,9 +122,44 @@ r_f = rdd(df, "y", "score", 50, fuzzy="treated")      # fuzzy RD: local IV, LATE
 The 2×2 DiD is in `panel-iv.md` §10. With **units treated at different dates and effects that change over time**, two-way fixed effects (TWFE) compares late-treated units with already-treated ones, giving "forbidden comparisons" and even sign reversals (Goodman-Bacon, 2021; de Chaisemartin & D'Haultfœuille, 2020).
 
 - `event_study(df, unit, time, y, event_time, leads=4, lags=4)`: TWFE leads and lags, reference period −1, endpoints binned, errors clustered by unit, joint test that pre-period coefficients are zero. Fine with a single adoption date or homogeneous effects; a visual check otherwise.
-- `att_gt(df, unit, time, y, gvar, control="never" | "notyet")`: Callaway & Sant'Anna (2021) group-time ATTs using only clean comparisons, aggregated to an overall ATT and to event time, with unit bootstrap SEs. Use this as the main estimate under staggered adoption; report the TWFE event study next to it.
+- `att_gt(df, unit, time, y, gvar, control="never" | "notyet")`: Callaway & Sant'Anna (2021) group-time ATTs using only clean comparisons, aggregated to an overall ATT and to event time, with unit bootstrap SEs. Use this as the main estimate under staggered adoption; report the TWFE event study next to it. With `covariates=[...]` it estimates under conditional parallel trends (§6.0).
 - **Pre-trends**: a non-significant pre-trend test is weak evidence (low power; Roth, 2022). Plot the leads with CIs; consider HonestDiD-style sensitivity (Rambachan & Roth, 2023): how large a violation of parallel trends would overturn the result?
 - **Anticipation**: if behaviour changes before the formal date (law announced before it takes effect), either shift the event date to the announcement or use `att_gt(..., anticipation=δ)`, which takes the base period δ+1 periods before the date. Both `att_gt` and `event_study` print a WARNING when the outcome already moves in one of the two periods right before the recorded date (`flags["effect_before_date"]`).
+
+### 6.0 Covariates: parallel trends that hold only conditional on X
+
+Often treated and comparison units differ in characteristics that drive outcome **trends** (income, firm size, urbanization, age structure), so parallel trends hold only among units with the same covariates. Adding the covariates to a TWFE regression does not fix this, and can make it worse (Caetano & Callaway, 2024; Karim & Webb, 2024):
+
+- **Hidden linearity bias.** Unit fixed effects difference the covariates too, so TWFE uses only their changes ΔX. If trends depend on covariate **levels**, that information is thrown away, and time-invariant covariates drop out completely. In the skill's simulation (covariate effect rising from 1 to 2, treated units with higher X, true ATT 1.0), the unadjusted DiD gave 1.98, TWFE with the covariate 1.99, and the regression adjustment on levels 1.00.
+- **Common causal covariates (CCC).** TWFE and Callaway-Sant'Anna with covariates also assume the covariate's effect is the same across groups and periods. If it differs across groups, every estimator below is biased.
+
+Workflow, in this order:
+
+1. **Choose covariates by design** (`dag.adjustment_report`): pre-treatment characteristics or time-varying ones that the treatment cannot affect. A covariate the treatment moves (employment after a hiring subsidy) is a bad control here too.
+2. **Test CCC** with `ccc_test(df, y, covariates, group, time, gvar=..., cluster=unit)`. It uses only untreated observations, so treatment cannot contaminate the slopes. `group` is the level of assignment (state, region, cohort), with several observations per group-period cell. The default inference is a **wild bootstrap imposed under each null**: with many restrictions and heteroskedastic errors the asymptotic χ² over-rejects (10–25% for a nominal 5% in the skill's tests, cells of 40–120 observations), and the bootstrap brings it to 4–7%. Read the selection:
+
+| `selected` | Meaning | Estimate with |
+|---|---|---|
+| `homogeneous` | Slopes look equal across groups and periods (not proof: power falls with small cells) | `att_gt(covariates=...)`; TWFE acceptable on this front |
+| `time` | Slopes change over time, common across groups | `att_gt(covariates=..., x_periods="both")`; TWFE with covariates is biased |
+| `group` / `twoway` | Slopes differ across groups | Intersection DiD (DID-INT; Karim & Webb: Julia `DiDInt.jl`, R `didintrjl`), not implemented here; or interact covariates with group and say the estimand changed |
+
+3. **Estimate** with `att_gt(df, unit, time, y, gvar, covariates=[...], est_method="dr")`. Covariates enter in **levels** in each group-time 2×2:
+   - `est_method="dr"` (default): doubly robust (Sant'Anna & Zhao, 2020), consistent if either the outcome regression or the propensity score is right.
+   - `"reg"`: outcome regression (Heckman, Ichimura & Todd, 1997).
+   - `"ipw"`: normalized inverse probability weighting (Abadie, 2005).
+
+   `x_periods="base"` uses the base-period values (safe when X could respond to treatment). `"both"` adds the change in X up to t (time-varying covariates not affected by treatment). The bootstrap re-estimates every nuisance model. Cell by cell, the estimates match the `csdid`/DRDID implementation to 10⁻¹¹ (tests).
+4. **Read the built-in independent check.** With `verify=True` (default), the other two estimators are recomputed and stored in `res["cross_check"]`; a WARNING fires when they differ by more than one SE. Outcome and propensity models that disagree mean at least one is misspecified: add flexibility (squares, interactions, logs) or check overlap. Comparison units with propensity ≥ 0.995 get zero weight (warned with the count): the treated units there have no comparable controls.
+5. **If a TWFE regression with covariates is on the table** (the client's, a paper's), run `twfe_covariate_diagnostic(df, unit, time, y, gvar, covariates)`. It reports:
+   - the joint test of covariate **levels** in untreated first-difference trends (the hidden linearity test);
+   - the share of treated observations with negative implicit TWFE weight (Frisch-Waugh);
+   - the gap to `att_gt` with covariates, in SE units.
+
+   The verdict is "unreliable" if any of the three fails; then report `att_gt`.
+6. **Pass the same covariates** to `did_timing_sensitivity` and `did_uncertain_dates` (both accept `covariates`, `est_method`, `x_periods`), so the date checks use the main specification.
+
+Covariates do not rescue a design whose parallel trends fail for unobserved reasons; the pre-period cells of `att_gt` (event time < 0) remain the check, now conditional on X.
 
 ### 6.1 When the treatment date itself is uncertain
 
@@ -138,7 +173,7 @@ A law phased in court by court, a policy with imprecise records, an announcement
 
 Read the shift table as mechanical, not as a test: shifting a correct date also moves the ATT, because treated periods enter the base. The verdict is the date-robust or window-robust estimate. It estimates the effect from the latest plausible date onward (a later-exposure ATT when effects grow over time) and drops cohorts whose earlier base falls outside the panel, so the CI is wider. If it does not exclude zero, report the result as dependent on the date and say what records would settle it.
 
-Not covered: treatment intensity that varies continuously within a unit (dose; de Chaisemartin & D'Haultfœuille, 2024; Callaway, Goodman-Bacon & Sant'Anna, 2024) and formal HonestDiD bounds (Rambachan & Roth, 2023); use R's `did`, `DIDmultiplegtDYN` and `HonestDiD` for those.
+Not covered: intersection DiD for covariate effects that differ across groups (DID-INT; use `DiDInt.jl` or R `didintrjl`, after `ccc_test` selects `group` or `twoway`), treatment intensity that varies continuously within a unit (dose; de Chaisemartin & D'Haultfœuille, 2024; Callaway, Goodman-Bacon & Sant'Anna, 2024) and formal HonestDiD bounds (Rambachan & Roth, 2023); use R's `did`, `DIDmultiplegtDYN` and `HonestDiD` for those.
 - **Clustering**: at the level of treatment assignment (state, court, municipality); with fewer than ~30 clusters, use wild cluster bootstrap (`estimation.wild_cluster_bootstrap`); with few **treated** clusters (about 1–5 adopting states), add randomization inference with `causal.randomization_inference(df, unit, time, y, gvar)` (reassigns the observed adoption dates to random sets of units and ranks the actual estimate; p-value and test-inversion CI), because the wild bootstrap also degrades there. It assumes the treated units are exchangeable with the others (similar error variance and dynamics); if adopters are systematically more volatile, use Ferman-Pinto or Conley-Taber.
 
 ### 6.2 Power before the study

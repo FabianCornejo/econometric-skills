@@ -13,11 +13,29 @@ coef_table(result)                       Series-friendly coef/se/p for one model
 regression_table(models, ...)            the side-by-side table (DataFrame of strings)
 export_table(tab, path)                  .md / .xlsx / .tex / .html by extension
 rescale_hint(result, X)                  flags coefficients that need unit rescaling (1e-06 etc.)
+
+Reproducibility and verification
+--------------------------------
+run_manifest(data, files, seed, ...)     data and file hashes, package and skill versions, seed, platform:
+                                         what another person needs to reproduce a number (JSON-ready dict)
+cross_check(estimates, se, ...)          the same quantity computed by independent routes: agreement table
+                                         and a warning when they differ by more than tol_se standard errors
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import platform
+import sys
+from datetime import datetime, timezone
+from importlib import metadata
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+
+SKILL_VERSION = "2.3.0"
+_PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
 def coef_table(res) -> pd.DataFrame:
@@ -135,3 +153,87 @@ def rescale_hint(res, X: pd.DataFrame | None = None) -> pd.DataFrame:
                          "suggest": f"express {nm} in units of 10^{k} (coefficient becomes coef × 10^{k})" if k > 0 else f"multiply {nm} by 10^{-k}",
                          "effect_of_1sd": r["coef"] * sd if np.isfinite(sd) else np.nan})
     return pd.DataFrame(rows)
+
+
+def _hash_frame(df: pd.DataFrame) -> str:
+    """Content hash of a DataFrame: values, index, column names and dtypes (row order matters)."""
+    h = hashlib.sha256()
+    h.update(pd.util.hash_pandas_object(df, index=True).to_numpy().tobytes())
+    h.update(json.dumps([str(c) for c in df.columns]).encode())
+    h.update(json.dumps([str(t) for t in df.dtypes]).encode())
+    return h.hexdigest()
+
+
+def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = None, seed=None,
+                 results: dict | None = None, notes: str = "", path: str | None = None, show: bool = True) -> dict:
+    """What another person needs to reproduce a number: sha256 of every data set used (DataFrames
+    by content, files byte by byte), the versions of Python, the numerical packages and this
+    skill, the random seed, the platform and the time, plus the headline results. Two runs that
+    print the same hashes and versions should give the same numbers; if a number changes,
+    compare manifests first. path='manifest.json' also writes it to disk."""
+    frames = {"data": data} if isinstance(data, pd.DataFrame) else (data or {})
+    man = {
+        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "skill_version": SKILL_VERSION,
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "packages": {},
+        "seed": seed,
+        "data": {k: {"sha256": _hash_frame(v), "rows": int(v.shape[0]), "cols": int(v.shape[1])}
+                 for k, v in frames.items()},
+        "files": {},
+        "results": {},
+        "notes": notes,
+    }
+    for p in _PACKAGES:
+        try:
+            man["packages"][p] = metadata.version(p)
+        except metadata.PackageNotFoundError:
+            man["packages"][p] = None
+    for f in files or []:
+        fp = Path(f)
+        man["files"][str(f)] = hashlib.sha256(fp.read_bytes()).hexdigest() if fp.is_file() else "missing"
+    for k, v in (results or {}).items():
+        if isinstance(v, dict):
+            v = {kk: vv for kk, vv in v.items() if kk in ("estimate", "se", "ci_low", "ci_high", "p", "n")}
+        man["results"][k] = json.loads(json.dumps(v, default=lambda o: float(o) if np.isscalar(o) else str(o)))
+    if path:
+        Path(path).write_text(json.dumps(man, indent=2))
+    if show:
+        print(f"\nRun manifest (skill {SKILL_VERSION}, Python {man['python']}, seed {seed})")
+        for k, v in man["data"].items():
+            print(f"  data {k}: {v['rows']}x{v['cols']}, sha256 {v['sha256'][:16]}…")
+        for k, v in man["files"].items():
+            print(f"  file {k}: sha256 {v[:16]}…")
+        print("  packages: " + ", ".join(f"{k} {v}" for k, v in man["packages"].items() if v))
+    return man
+
+
+def cross_check(estimates: dict, se: float | None = None, tol_se: float = 1.0, rel_tol: float = 1e-6,
+                label: str = "estimate", show: bool = True) -> dict:
+    """Independent verification of a headline number (the dynare-mcp idea of solving the same
+    model twice): pass the same quantity computed by different routes, e.g. {"DR": ..., "outcome
+    regression": ..., "IPW": ...}, {"statsmodels": ..., "linearmodels": ...} or {"formula": ...,
+    "simulation": ...}. With se, routes that estimate the same target under different modelling
+    assumptions agree if they are within tol_se standard errors; without se, they must agree to
+    rel_tol (two implementations of the same estimator). Disagreement is a finding: report it,
+    do not pick the most convenient number."""
+    s = pd.Series(estimates, dtype=float)
+    spread = float(s.max() - s.min())
+    if se is not None and np.isfinite(se) and se > 0:
+        agree = spread <= tol_se * se
+        crit = f"within {tol_se:g} SE ({se:.4g})"
+    else:
+        scale = max(1.0, float(s.abs().max()))
+        agree = spread <= rel_tol * scale
+        crit = f"to a relative tolerance of {rel_tol:g}"
+    warns = [] if agree else [f"Independent routes disagree on the {label}: " + ", ".join(
+        f"{k} {v:.6g}" for k, v in s.items()) + f" (spread {spread:.4g}, required {crit})."]
+    out = {"table": s.rename(label).to_frame(), "spread": spread, "agree": bool(agree), "criterion": crit,
+           "warnings": warns}
+    if show:
+        print(f"\nIndependent check of the {label}: " + ", ".join(f"{k} {v:.6g}" for k, v in s.items())
+              + f" → {'agree' if agree else 'DISAGREE'} ({crit})")
+        for w in warns:
+            print("  WARNING: " + w)
+    return out

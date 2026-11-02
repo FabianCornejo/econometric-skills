@@ -15,6 +15,8 @@ Demos (assumption that breaks -> what the student sees)
     demo_weak_iv()                 weak first stage -> 2SLS pulled toward OLS, bad coverage
     demo_few_clusters()            8 clusters -> CR1 over-rejects; wild cluster bootstrap does not
     demo_staggered_did()           staggered adoption with growing effects -> TWFE wrong; Callaway-Sant'Anna right
+    demo_did_covariates()          trends depend on covariate levels -> TWFE with covariates wrong (hidden linearity
+                                   bias); Callaway-Sant'Anna with covariates in levels right
 
 Design
     power_mde(...)                 minimum detectable effect or sample size, two-sample or clustered
@@ -287,6 +289,48 @@ def demo_staggered_did(R: int = 30, n_units: int = 60, T: int = 10, seed: int = 
     return {"table": tab, "truth_att": truth,
             "lesson": "With staggered adoption and effects that grow over time, the TWFE coefficient is a badly weighted "
                       "average (some weights negative); Callaway-Sant'Anna recovers the ATT."}
+
+
+def demo_did_covariates(R: int = 30, n_units: int = 400, T: int = 4, beta_drift: float = 0.5,
+                        seed: int = 0) -> dict:
+    """Parallel trends hold only conditional on X: the covariate's effect rises by beta_drift per
+    period, treated units (adopting at t = 3) have higher X, and X changes over time without being
+    affected by treatment. True ATT = 1. Unadjusted DiD and TWFE with the covariate are biased by
+    about the same amount (fixed effects keep only the changes of X, not its levels: hidden
+    linearity bias, Caetano & Callaway 2024); Callaway-Sant'Anna with X in levels is not.
+    Set beta_drift=0 to see every estimator agree."""
+    import causal
+    rng = np.random.default_rng(seed)
+    out = {"DiD, no covariates": [], "TWFE with X": [], "CS doubly robust, X in levels": []}
+    for _ in range(R):
+        g = np.where(rng.random(n_units) < 0.5, 3, 0)
+        a = rng.normal(0.5 * (g > 0), 1)
+        x = rng.normal(1.0 * (g > 0), 1)
+        rows = []
+        for t in range(1, T + 1):
+            x = x + rng.normal(0.2, 0.4, n_units)
+            yv = a + (1 + beta_drift * t) * x + 1.0 * ((g > 0) & (t >= g)) + rng.normal(0, 1, n_units)
+            rows.append(pd.DataFrame({"unit": np.arange(n_units), "time": t, "y": yv, "x": x, "g": g}))
+        d = pd.concat(rows, ignore_index=True)
+        d["D"] = ((d.g > 0) & (d.time >= d.g)).astype(float)
+        dm = d.copy()                                  # two-way within transformation (balanced panel)
+        for c in ("y", "D", "x"):
+            dm[c] = d[c] - d.groupby("unit")[c].transform("mean") - d.groupby("time")[c].transform("mean") + d[c].mean()
+        out["TWFE with X"].append(np.linalg.lstsq(dm[["D", "x"]].to_numpy(), dm["y"].to_numpy(), rcond=None)[0][0])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out["DiD, no covariates"].append(causal.att_gt(d, "unit", "time", "y", "g", n_boot=0,
+                                                            show=False)["overall"]["estimate"])
+            out["CS doubly robust, X in levels"].append(causal.att_gt(
+                d, "unit", "time", "y", "g", n_boot=0, covariates=["x"], x_periods="both", verify=False,
+                show=False)["overall"]["estimate"])
+    tab = pd.DataFrame({"mean": {k: np.mean(v) for k, v in out.items()},
+                        "sd": {k: np.std(v, ddof=1) for k, v in out.items()}})
+    tab["bias"] = tab["mean"] - 1.0
+    return {"table": tab, "truth_att": 1.0,
+            "lesson": "When trends depend on covariate levels, adding the covariate to a TWFE regression does not help: "
+                      "the fixed effects keep only its changes. Condition on levels, group-time by group-time "
+                      "(att_gt with covariates), and test whether covariate effects differ across groups (ccc_test)."}
 
 
 def power_mde(n: float | None = None, mde: float | None = None, sd: float = 1.0, alpha: float = ALPHA,
