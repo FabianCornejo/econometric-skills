@@ -59,18 +59,34 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 - **Robust Wald tests with many restrictions** (dozens of cells or groups) over-reject with their χ² reference under heteroskedasticity; use a wild bootstrap imposed under the null (as `ccc_test` does by default) or say that the p-value is anticonservative.
 - **Basel traffic light**: the zones (green 0–4, yellow 5–9, red ≥ 10 violations in 250 days) and the 2.5 expected violations belong to the **99%** VaR. At 97.5% the expectation is 6.25 violations in 250 days and the traffic light does not apply; FRTB's desk-level backtesting sets its own limits at both levels (desks lose model approval with more than 12 exceptions at 99% or 30 at 97.5% in the last 250 days; Basel MAR32 — confirm the local rule).
 
-Script skeleton for every deliverable (v2.3):
+Script skeleton for every deliverable (v2.3.2). The user should run it as received, with no paths to edit and no variables to set:
 
 ```python
 import os, sys
-SKILL_DIR = os.environ.get("ECONOMETRICS_SKILL_DIR", r"<path to your clone>/econometric-skills/econometrics")
+from pathlib import Path
+
+def _skill_dir():
+    """Find the econometrics skill: ECONOMETRICS_SKILL_DIR, the Claude Code plugin, ~/.claude/skills, your clone."""
+    for c in (os.environ.get("ECONOMETRICS_SKILL_DIR"),
+              Path.home() / ".claude/plugins/marketplaces/econometric-skills/econometrics",
+              Path.home() / ".claude/skills/econometrics",
+              r"<path to your clone>/econometric-skills/econometrics"):
+        if c and Path(c, "scripts", "causal.py").exists():
+            return str(c)
+    sys.exit("Econometrics skill not found: set ECONOMETRICS_SKILL_DIR to the skill folder (the one with scripts/).")
+
+SKILL_DIR = _skill_dir()
 sys.path.insert(0, f"{SKILL_DIR}/scripts")
-import causal, reporting
-# ... load data (or simulate data with the same structure), estimate, diagnose ...
-reporting.run_manifest(data={"panel": df}, seed=SEED, results={"ATT": res["overall"]}, path="manifest.json")
+try:
+    import causal, reporting   # the modules this script uses
+except ModuleNotFoundError as e:
+    sys.exit(f"Missing Python package '{e.name}'. Run once:  python \"{SKILL_DIR}/scripts/setup_env.py\" --install")
 ```
 
-To run the script in your own environment, export `ECONOMETRICS_SKILL_DIR` to the skill folder there; the file the user receives keeps their path as the default.
+# ... then load data (or simulate data with the same structure), estimate, diagnose, and end with
+# reporting.run_manifest(data={"panel": df}, seed=SEED, results={"ATT": res["overall"]}, path="manifest.json")
+
+To run it in your own environment, set `ECONOMETRICS_SKILL_DIR` to the skill folder there; never write that path, a sandbox path or the versioned plugin cache path (`plugins/cache/econometric-skills/econometrics/<version>/`, which changes at every release) into the file. List the modules the script really uses in the `import` line of the block.
 
 ## Rules added in v2.3.1
 

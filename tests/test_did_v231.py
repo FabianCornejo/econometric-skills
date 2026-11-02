@@ -180,7 +180,9 @@ ccc = ca.ccc_test(rv, "y", ["renda"], "uf", "ano", gvar="ano_lei", n_boot=19, sh
 src = (ROOT / "econometrics" / "scripts" / "causal.py").read_text()
 check("ccc 'time' advice: x_periods='base' for baseline covariates, 'both' only for time-varying ones",
       "x_periods='base' with baseline or time-invariant covariates" in src)
-check("reporting.SKILL_VERSION is 2.3.1", rp.SKILL_VERSION == "2.3.1")
+import re as _re
+_top = _re.search(r"^## v(\S+)", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"), _re.M).group(1)
+check("reporting.SKILL_VERSION matches the latest CHANGELOG version", rp.SKILL_VERSION == _top, f"{rp.SKILL_VERSION} vs {_top}")
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

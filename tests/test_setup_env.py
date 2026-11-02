@@ -1,0 +1,114 @@
+"""Tests for v2.3.2: zero-step setup for Claude Code users (scripts/setup_env.py and the script skeleton
+that delivered scripts start with).
+
+Checks: setup_env's package minimums equal requirements.txt; --check passes here; in a fresh virtual
+environment without packages, --check exits 1 naming numpy and the skeleton stops with the
+setup_env install instruction instead of a traceback; with a fake home that holds only the Claude
+Code plugin layout (no variable set) the skeleton finds the skill and imports it; the variable takes
+precedence; a versioned plugin-cache location resolves to the stable marketplace copy; and the
+skeleton contains no sandbox or versioned cache path.
+
+Run from the repository root:  python3 tests/test_setup_env.py
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import venv
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SKILL = ROOT / "econometrics"
+sys.path.insert(0, str(SKILL / "scripts"))
+import setup_env as se
+
+ok = []
+
+
+def check(name, cond, info=""):
+    ok.append(bool(cond))
+    print(("PASS " if cond else "FAIL ") + name, info)
+
+
+# ---------------------------------------------------------------- 1. setup_env.py
+req = {}
+for line in (ROOT / "requirements.txt").read_text().splitlines():
+    m = re.match(r"^([A-Za-z0-9_.-]+)>=([0-9.]+)", line.strip())
+    if m:
+        req[m.group(1).lower()] = m.group(2)
+core = {dist.lower(): v for dist, v in se.CORE.values()}
+check("setup_env minimum versions equal requirements.txt", core == req, f"{core} vs {req}")
+r = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), "--check"], capture_output=True, text=True)
+check("--check passes in the test environment", r.returncode == 0 and "all present" in r.stdout, r.stdout.strip()[:120])
+check("version parsing handles suffixes", se._vtuple("0.14.4") > se._vtuple("0.14") and se._vtuple("2.1.0rc1") >= (2, 1)
+      and se._vtuple("1.5.2") < se._vtuple("1.10"))
+
+# versioned plugin cache -> stable marketplace copy
+with tempfile.TemporaryDirectory() as tmp:
+    stable = Path(tmp) / "marketplaces" / "econometric-skills" / "econometrics"
+    (stable / "scripts").mkdir(parents=True)
+    (stable / "scripts" / "causal.py").write_text("")
+    old_skill, old_stable = se.SKILL_DIR, se.STABLE_PLUGIN_DIR
+    se.SKILL_DIR = Path(tmp) / "cache" / "econometric-skills" / "econometrics" / "2.3.2"
+    se.STABLE_PLUGIN_DIR = stable
+    check("a versioned plugin-cache location resolves to the stable marketplace copy", se.recommended_skill_dir() == stable)
+    se.SKILL_DIR = SKILL
+    check("outside the plugin cache, the skill's own folder is used", se.recommended_skill_dir() == SKILL)
+    se.SKILL_DIR, se.STABLE_PLUGIN_DIR = old_skill, old_stable
+
+# ---------------------------------------------------------------- 2. the script skeleton
+rules = (SKILL / "references" / "interpretation-rules.md").read_text(encoding="utf-8")
+m = re.search(r"Script skeleton for every deliverable.*?```python\n(.*?)```", rules, re.S)
+check("interpretation-rules.md contains the script skeleton", m is not None)
+block = m.group(1) if m else ""
+check("skeleton has no sandbox or versioned cache path",
+      all(s not in block for s in ("/mnt/", "/home/claude", "/tmp/", "plugins/cache")) and "ECONOMETRICS_SKILL_DIR" in block)
+skill_md = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+check("SKILL.md delivery rule points to the skeleton and setup_env",
+      "locator block" in skill_md and "setup_env.py --check" in skill_md and "/mnt/" not in skill_md)
+probe = block + "\nprint('FOUND', SKILL_DIR)\n"
+
+
+def run(py, home, env_var=None):
+    env = {k: v for k, v in os.environ.items() if k != "ECONOMETRICS_SKILL_DIR"}
+    env["HOME"] = env["USERPROFILE"] = str(home)
+    if env_var:
+        env["ECONOMETRICS_SKILL_DIR"] = env_var
+    with tempfile.TemporaryDirectory() as wd:
+        f = Path(wd) / "analysis.py"
+        f.write_text(probe)
+        return subprocess.run([py, str(f)], capture_output=True, text=True, cwd=wd, env=env)
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp) / "home"
+    plugin = home / ".claude" / "plugins" / "marketplaces" / "econometric-skills" / "econometrics"
+    plugin.parent.mkdir(parents=True)
+    shutil.copytree(SKILL, plugin, ignore=shutil.ignore_patterns("__pycache__"))
+    r = run(sys.executable, home)
+    check("no variable set: the skeleton finds the Claude Code plugin and imports the skill",
+          r.returncode == 0 and f"FOUND {plugin}" in r.stdout, (r.stdout + r.stderr).strip()[-120:])
+    r = run(sys.executable, home, env_var=str(SKILL))
+    check("ECONOMETRICS_SKILL_DIR takes precedence over the plugin", r.returncode == 0 and f"FOUND {SKILL}" in r.stdout)
+    empty = Path(tmp) / "empty_home"
+    empty.mkdir()
+    r = run(sys.executable, empty)
+    check("skill nowhere: a one-line message, not a traceback",
+          r.returncode != 0 and "Econometrics skill not found" in r.stderr and "Traceback" not in r.stderr)
+
+    # fresh virtual environment without any package
+    venv_dir = Path(tmp) / "bare"
+    venv.EnvBuilder(with_pip=False).create(venv_dir)
+    py = str(venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+    r = subprocess.run([py, str(SKILL / "scripts" / "setup_env.py"), "--check"], capture_output=True, text=True)
+    check("bare Python: --check exits 1 and names the missing packages",
+          r.returncode == 1 and "numpy>=2.1" in r.stdout, r.stdout.strip().splitlines()[1][:100] if r.stdout else "")
+    r = run(py, home)
+    check("bare Python: the skeleton stops with the setup_env install instruction, not a traceback",
+          r.returncode != 0 and "setup_env.py" in r.stderr and "--install" in r.stderr and "Traceback" not in r.stderr,
+          r.stderr.strip()[:110])
+
+print(f"\n{sum(ok)}/{len(ok)} checks passed")
+sys.exit(0 if all(ok) else 1)
