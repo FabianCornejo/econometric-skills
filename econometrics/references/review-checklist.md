@@ -27,8 +27,8 @@ Every check you request names the function of this skill that runs it (`estimati
 - [ ] Is the identifying assumption written and defended with evidence (balance, pre-trends, first stage, density test, pre-period fit)?
 - [ ] Bad controls (post-treatment variables)? Selection on the outcome? Reverse causality?
 - [ ] Staggered DiD estimated with plain TWFE? Treatment dates verified?
-- [ ] Covariates added to a TWFE regression to rescue parallel trends? Hidden linearity bias (`causal.twfe_covariate_diagnostic`); covariate effects equal across groups and periods (`causal.ccc_test`); estimate with `causal.att_gt(covariates=...)` and compare.
-- [ ] Headline numbers reproducible (a run manifest: data hashes, versions, seed) and checked by an independent route?
+- [ ] Covariates added to a TWFE regression to rescue parallel trends? Hidden linearity bias (`causal.twfe_covariate_diagnostic`, their controls in `covariates`, valid ones in `cs_covariates`); forbidden comparisons (`causal.bacon_decomposition`); covariate effects equal across groups and periods (`causal.ccc_test`), and say what a rejection implies: TWFE and Callaway-Sant'Anna with covariates are biased, use intersection DiD (DID-INT); estimate with `causal.att_gt(covariates=..., cluster=<assignment level>)` and compare. Relay the diagnostic's verdict as printed, including "inconclusive (low power)".
+- [ ] Headline numbers reproducible? Ask the authors for the data source and a run manifest (data hashes, package versions, seed) and an independent recomputation of the headline number; produce both for your own re-analysis (`reporting.run_manifest`, `reporting.cross_check` with at least two routes).
 - [ ] IV: first-stage F (effective F), exclusion argued, LATE interpreted for compliers?
 
 **Inference**

@@ -71,3 +71,10 @@ reporting.run_manifest(data={"panel": df}, seed=SEED, results={"ATT": res["overa
 ```
 
 To run the script in your own environment, export `ECONOMETRICS_SKILL_DIR` to the skill folder there; the file the user receives keeps their path as the default.
+
+## Rules added in v2.3.1
+
+- **Cluster the DiD bootstrap at the assignment level** with `att_gt(cluster=...)` (and the same `cluster=` in the date checks); never aggregate units to the cluster level just to cluster, because the estimand changes. With fewer than ~30 clusters or ~6 treated ones, add `causal.randomization_inference`.
+- **Independent checks need two routes**: pass `att_gt`'s `res["cross_check"]` Series to `reporting.cross_check` as it is; a check with one route verified nothing and must not be reported as agreement.
+- **Relay every diagnostic verdict as printed**, including `twfe_covariate_diagnostic`'s "inconclusive (low power)"; a script whose output contradicts the text is a failed deliverable.
+

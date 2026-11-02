@@ -2,6 +2,35 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.3.1 — Fixes from the v2.3.0 blind evals: cluster bootstrap, Goodman-Bacon, a diagnostic that cannot be misread
+
+Both v2.3.0 evals passed. The scripts they produced, run against the release, exposed three gaps in the skill itself, and v2.3.1 fixes them. v2.3.0 and v2.3.1 are published together in one release.
+
+- **`causal.att_gt(cluster=...)`**: the bootstrap resamples whole clusters (the state when a law varies by state and the units are municipalities).
+  - The point estimate is unchanged and the output reports the cluster count.
+  - In a Monte Carlo with state-level shocks, 95% CIs covered 48% of the time resampling municipalities and 95% resampling states.
+  - It warns with fewer than ~30 clusters or ~6 treated ones, pointing to `randomization_inference`.
+  - `did_timing_sensitivity` and `did_uncertain_dates` pass `cluster=` through.
+  - The eval-2 answer had to aggregate to the state level to cluster, which changes the estimand from a municipality average to a state average. The rule now says not to do that.
+- **`causal.bacon_decomposition`** (Goodman-Bacon 2021): the TWFE coefficient as a weighted average of every 2×2, typed as treated vs never, earlier vs later, and later vs earlier (already-treated control, forbidden).
+  - The weights sum to one and reproduce the TWFE coefficient to 1e-15, with never-treated, always-treated or no never-treated units.
+  - It warns when forbidden comparisons carry ≥ 10% of the weight. The eval-2 answer had to send the user to R/Stata for this.
+- **`causal.twfe_covariate_diagnostic`**:
+  - New `cs_covariates`: the controls under review go in `covariates`, bad ones included, and only the valid pre-treatment confounders feed the benchmark and the hidden-linearity test. The eval-2 script had to pass the parecer's bad control to both, which masked the hidden-linearity signal.
+  - Also new: `cs_x_periods` and `cluster`.
+  - The Goodman-Bacon check is part of the verdict.
+  - A new verdict, **"inconclusive (low power)"**, is given when the benchmark CI is too wide to detect the gap; it previously said "no evidence against TWFE".
+  - In the eval-2 scenario, the correct call now flags hidden linearity (p = 3e-19; level coefficient −0.027 for a true −0.025).
+- **`reporting.cross_check`** takes `att_gt`'s `res["cross_check"]` Series as it is, and dicts of result dicts. With fewer than two routes it returns `agree=None` and a warning that nothing was verified. The eval-2 script had passed one route and got "agree".
+- **`ccc_test` advice for `time`**: `x_periods="base"` for baseline or time-invariant covariates, and `"both"` only for covariates that vary over time and that treatment cannot affect. The eval-1 answer reasoned this correctly against the old text.
+- **Rules and checklist**:
+  - Cluster the DiD bootstrap at the assignment level.
+  - Independent checks need two routes.
+  - Relay every diagnostic verdict as printed.
+  - The reviewer checklist states what a CCC rejection implies (DID-INT) and asks the authors for a run manifest and an independent recomputation.
+- **Evals recorded**: did-covariates-municipal-program passed (the script reproduced every number; true effect +4.0%, DR +4.4%). review-twfe-with-controls passed with gaps (the three above).
+- **Validated** in `tests/test_did_v231.py` (25 checks). 507 checks in total, on the minimum and the latest dependency versions.
+
 ## v2.3.0 — DiD with covariates, common causal covariates test, independent verification and run manifests
 
 Sources evaluated for this release: Caetano & Callaway (arXiv:2406.15288) and Karim's CCC test (`SunnyRKarim/ccctest`, with Karim & Webb, arXiv:2412.14447) were adopted; the design of `dynare-mcp` (a second, independent solver; model and solver hashes) and Chan's `statespace-toolkit` (byte-for-byte archives, draw-for-draw tests) shaped the verification rules. The Bayesian state-space and bounded-outcome modules are planned for v2.4.

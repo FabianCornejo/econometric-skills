@@ -122,7 +122,8 @@ r_f = rdd(df, "y", "score", 50, fuzzy="treated")      # fuzzy RD: local IV, LATE
 The 2×2 DiD is in `panel-iv.md` §10. With **units treated at different dates and effects that change over time**, two-way fixed effects (TWFE) compares late-treated units with already-treated ones, giving "forbidden comparisons" and even sign reversals (Goodman-Bacon, 2021; de Chaisemartin & D'Haultfœuille, 2020).
 
 - `event_study(df, unit, time, y, event_time, leads=4, lags=4)`: TWFE leads and lags, reference period −1, endpoints binned, errors clustered by unit, joint test that pre-period coefficients are zero. Fine with a single adoption date or homogeneous effects; a visual check otherwise.
-- `att_gt(df, unit, time, y, gvar, control="never" | "notyet")`: Callaway & Sant'Anna (2021) group-time ATTs using only clean comparisons, aggregated to an overall ATT and to event time, with unit bootstrap SEs. Use this as the main estimate under staggered adoption; report the TWFE event study next to it. With `covariates=[...]` it estimates under conditional parallel trends (§6.0).
+- `att_gt(df, unit, time, y, gvar, control="never" | "notyet")`: Callaway & Sant'Anna (2021) group-time ATTs using only clean comparisons, aggregated to an overall ATT and to event time, with unit bootstrap SEs. Use this as the main estimate under staggered adoption; report the TWFE event study next to it. With `covariates=[...]` it estimates under conditional parallel trends (§6.0). With `cluster=` (the level of assignment, e.g. the state when units are municipalities) the bootstrap resamples whole clusters: in the skill's Monte Carlo with shared state shocks, 95% CIs covered 55% of the time resampling municipalities and 92.5% resampling states, with the same point estimate. Do not aggregate to the state to get clustered inference: that turns a municipality average into a state average, weighting large and small municipalities differently.
+- `bacon_decomposition(df, unit, time, y, gvar)`: the Goodman-Bacon (2021) decomposition of the TWFE coefficient into every 2×2 and its weight (sums exactly to TWFE). The weight on **later vs earlier (control)** comparisons, which use already-treated units as controls, measures how much of TWFE can be contaminated by effects that grow with exposure; the treated weights can all be positive while this share is large.
 - **Pre-trends**: a non-significant pre-trend test is weak evidence (low power; Roth, 2022). Plot the leads with CIs; consider HonestDiD-style sensitivity (Rambachan & Roth, 2023): how large a violation of parallel trends would overturn the result?
 - **Anticipation**: if behaviour changes before the formal date (law announced before it takes effect), either shift the event date to the announcement or use `att_gt(..., anticipation=δ)`, which takes the base period δ+1 periods before the date. Both `att_gt` and `event_study` print a WARNING when the outcome already moves in one of the two periods right before the recorded date (`flags["effect_before_date"]`).
 
@@ -141,7 +142,7 @@ Workflow, in this order:
 | `selected` | Meaning | Estimate with |
 |---|---|---|
 | `homogeneous` | Slopes look equal across groups and periods (not proof: power falls with small cells) | `att_gt(covariates=...)`; TWFE acceptable on this front |
-| `time` | Slopes change over time, common across groups | `att_gt(covariates=..., x_periods="both")`; TWFE with covariates is biased |
+| `time` | Slopes change over time, common across groups | `att_gt(covariates=...)` (each group-time cell is adjusted on levels; `x_periods="base"` for baseline or time-invariant covariates, `"both"` only for covariates that vary over time and that treatment cannot affect); TWFE with covariates is biased |
 | `group` / `twoway` | Slopes differ across groups | Intersection DiD (DID-INT; Karim & Webb: Julia `DiDInt.jl`, R `didintrjl`), not implemented here; or interact covariates with group and say the estimand changed |
 
 3. **Estimate** with `att_gt(df, unit, time, y, gvar, covariates=[...], est_method="dr")`. Covariates enter in **levels** in each group-time 2×2:
@@ -151,13 +152,15 @@ Workflow, in this order:
 
    `x_periods="base"` uses the base-period values (safe when X could respond to treatment). `"both"` adds the change in X up to t (time-varying covariates not affected by treatment). The bootstrap re-estimates every nuisance model. Cell by cell, the estimates match the `csdid`/DRDID implementation to 10⁻¹¹ (tests).
 4. **Read the built-in independent check.** With `verify=True` (default), the other two estimators are recomputed and stored in `res["cross_check"]`; a WARNING fires when they differ by more than one SE. Outcome and propensity models that disagree mean at least one is misspecified: add flexibility (squares, interactions, logs) or check overlap. Comparison units with propensity ≥ 0.995 get zero weight (warned with the count): the treated units there have no comparable controls.
-5. **If a TWFE regression with covariates is on the table** (the client's, a paper's), run `twfe_covariate_diagnostic(df, unit, time, y, gvar, covariates)`. It reports:
+5. **If a TWFE regression with covariates is on the table** (the client's, a paper's), run `twfe_covariate_diagnostic(df, unit, time, y, gvar, covariates=<their controls>, cs_covariates=<valid pre-treatment confounders>, cluster=<assignment level>)`. Put the controls under review in `covariates` even if some are bad controls, and only the valid ones in `cs_covariates`: the benchmark and the hidden-linearity test use the latter. It reports:
    - the joint test of covariate **levels** in untreated first-difference trends (the hidden linearity test);
    - the share of treated observations with negative implicit TWFE weight (Frisch-Waugh);
+   - the Goodman-Bacon weight and average of the forbidden (already-treated control) comparisons;
    - the gap to `att_gt` with covariates, in SE units.
 
-   The verdict is "unreliable" if any of the three fails; then report `att_gt`.
-6. **Pass the same covariates** to `did_timing_sensitivity` and `did_uncertain_dates` (both accept `covariates`, `est_method`, `x_periods`), so the date checks use the main specification.
+   The verdict is "unreliable" if any check fails; then report `att_gt`. "Inconclusive (low power)" means the benchmark CI is too wide to detect the gap: relay it as such, never as support for TWFE.
+6. **Pass the same covariates and cluster** to `did_timing_sensitivity` and `did_uncertain_dates` (both accept `covariates`, `est_method`, `x_periods`, `cluster`), so the date checks use the main specification and inference.
+7. **Verify** with `reporting.cross_check(res["cross_check"], se=res["overall"]["se"])`: `res["cross_check"]` is a Series (dr, reg, ipw) that the function takes as is; with fewer than two routes it reports that nothing was checked.
 
 Covariates do not rescue a design whose parallel trends fail for unobserved reasons; the pre-period cells of `att_gt` (event time < 0) remain the check, now conditional on X.
 
