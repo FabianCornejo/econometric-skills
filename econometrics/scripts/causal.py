@@ -26,6 +26,8 @@ Panel designs
                                                   covariates= in levels (conditional parallel trends): doubly robust
                                                   (Sant'Anna-Zhao 2020), outcome regression or IPW, with the other two
                                                   recomputed as an independent check
+    bacon_decomposition(df, unit, time, y, gvar)  Goodman-Bacon (2021): TWFE as a weighted average of every 2x2,
+                                                  with the weight of forbidden (already-treated control) comparisons
     twfe_covariate_diagnostic(df, ..., covariates) hidden linearity bias of TWFE with covariates (Caetano-Callaway
                                                   2024): level test on untreated trends, implicit weights, CS benchmark
     ccc_test(df, y, covariates, group, time)      common causal covariates test (Karim-Webb 2024): are covariate
@@ -642,7 +644,8 @@ def _did_cell_cov(dy: np.ndarray, Z: np.ndarray, treat: np.ndarray, methods=("dr
 
 def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str = "never",
            n_boot: int = 199, seed: int = 0, anticipation: int = 0, covariates: list[str] | None = None,
-           est_method: str = "dr", x_periods: str = "base", verify: bool = True, show: bool = True) -> dict:
+           est_method: str = "dr", x_periods: str = "base", verify: bool = True, cluster: str | None = None,
+           show: bool = True) -> dict:
     """Callaway & Sant'Anna (2021) ATT(g,t) on a balanced panel, with or without covariates.
     gvar = first treated period (0 or NaN = never treated). control = 'never' or 'notyet'.
     anticipation = δ periods in which units may react before g (law announced before it
@@ -657,13 +660,20 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
     could respond to treatment); 'both': X at the base period and its change up to t, for
     time-varying covariates that are NOT affected by treatment (Caetano & Callaway's setting).
     Comparison units with propensity >= 0.995 get zero weight (warned). verify=True also
-    computes the other two estimators on the full sample (an independent recomputation): if
+    computes the other two estimators on the full sample (an independent recomputation, stored as
+    res["cross_check"], a pandas Series indexed dr/reg/ipw that reporting.cross_check takes as is): if
     they differ from the chosen one by more than one SE, the outcome and propensity models
     disagree, a sign that at least one is misspecified (warned). Covariate effects that differ
     ACROSS GROUPS (not only over time) bias every estimator here; check with ccc_test.
 
-    Inference: unit-level bootstrap (resampling units with replacement, re-estimating every
-    nuisance model); n_boot=0 skips it.
+    Inference: bootstrap resampling units with replacement and re-estimating every nuisance
+    model; n_boot=0 skips it. cluster = a column constant within unit (the state when a law
+    varies by state, with municipalities as units): the bootstrap then resamples whole
+    clusters, so the SEs allow any correlation within them, while the estimand (an average
+    over units) is unchanged. Do not aggregate the data to the cluster level to get clustered
+    inference: that changes the estimand (unit average -> cluster average). With fewer than
+    ~30 clusters or ~6 treated clusters, the cluster bootstrap is unreliable (warned): add
+    randomization_inference.
     Warns when either of the two pre-period cells right before the (anticipation-adjusted)
     date is significant (Bonferroni, ALPHA/2 each): the effect starts before the recorded date (anticipation or a misdated
     treatment) → check the date and run did_timing_sensitivity."""
@@ -672,12 +682,20 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         raise ValueError("est_method must be 'dr', 'reg' or 'ipw'")
     if x_periods not in ("base", "both"):
         raise ValueError("x_periods must be 'base' or 'both'")
-    d = df[[unit, time, y, gvar, *covs]].copy()
+    d = df[[unit, time, y, gvar, *covs] + ([cluster] if cluster and cluster not in (unit, time, y, gvar, *covs)
+                                           else [])].copy()
     d[gvar] = d[gvar].fillna(0)
     Y = d.pivot(index=unit, columns=time, values=y)
     if Y.isna().any().any():
         raise ValueError("att_gt needs a balanced panel (drop units with missing periods)")
     G = d.groupby(unit)[gvar].first().reindex(Y.index).to_numpy()
+    if cluster:
+        if (d.groupby(unit)[cluster].nunique() > 1).any():
+            raise ValueError(f"att_gt: cluster '{cluster}' must be constant within each {unit}")
+        cl_codes = pd.factorize(d.groupby(unit)[cluster].first().reindex(Y.index))[0]
+        cl_members = [np.where(cl_codes == c)[0] for c in range(cl_codes.max() + 1)]
+        n_cl = len(cl_members)
+        n_cl_treated = len({cl_codes[i] for i in np.where(G > 0)[0]})
     T = np.array(Y.columns)
     Ym = Y.to_numpy()
     # covariates as a (units, periods, k) array; time-invariant columns are simply constant
@@ -756,7 +774,11 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         rng = np.random.default_rng(seed)
         bs_simple, bs_dyn, bs_cells = [], [], []
         for _ in range(n_boot):
-            b = compute(rng.integers(0, len(Ym), len(Ym)))
+            if cluster:
+                draw = rng.integers(0, n_cl, n_cl)
+                b = compute(np.concatenate([cl_members[c] for c in draw]))
+            else:
+                b = compute(rng.integers(0, len(Ym), len(Ym)))
             p = b[b["e"] >= 0]
             bs_simple.append(np.average(p["att"], weights=p["n_g"]) if len(p) else np.nan)
             bs_dyn.append(b.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False))
@@ -781,6 +803,10 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
     method = "no covariates" if not covs else {"dr": "doubly robust", "reg": "outcome regression",
                                                "ipw": "IPW"}[est_method] + f", X: {', '.join(covs)} ({x_periods})"
     warns = []
+    if cluster and n_boot and n_boot > 1 and (n_cl < 30 or n_cl_treated < 6):
+        warns.append(f"Cluster bootstrap with {n_cl} clusters ({n_cl_treated} treated): pairs-cluster bootstrap SEs are "
+                     "unreliable with few (treated) clusters. Report causal.randomization_inference (and a wild cluster "
+                     "bootstrap of the TWFE event study) next to this CI.")
     if flag:
         warns.append(f"The outcome already moves at e = {k_chk} (|z| > {zc:.2f}): the effect starts before the recorded"
                      " date (anticipation or a misdated treatment). Confirm the date; re-run with anticipation="
@@ -810,7 +836,8 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
                              "The outcome and propensity models disagree, so at least one is misspecified: add "
                              "flexibility (squares, interactions, logs) or check overlap before reporting.")
     out = {"overall": _out("ATT (CS, simple)", simple, se_simple, len(Ym), anticipation=dlt,
-                           method=method, warnings=warns),
+                           method=method, warnings=warns, cluster=cluster,
+                           n_clusters=n_cl if cluster else len(Ym)),
            "dynamic": dyn_tab, "gt": gt, "flags": {"effect_before_date": flag},
            "cohorts_dropped": dropped, "warnings": warns}
     if covs:
@@ -819,6 +846,7 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
     if show:
         o = out["overall"]
         print(f"\nCallaway-Sant'Anna ({control} controls, {len(cohorts)} cohorts, {n_boot} bootstrap reps"
+              + (f" by {cluster} ({n_cl} clusters, {n_cl_treated} treated)" if cluster else "")
               + (f", anticipation = {dlt}" if dlt else "") + f"; {method})")
         print(f"Overall ATT: {o['estimate']:.4f} (SE {o['se']:.4f}, 95% CI {o['ci_low']:.4f} to {o['ci_high']:.4f})")
         print("Dynamic (event-time) ATT:\n" + dyn_tab.to_string(float_format=lambda v: f"{v:.4f}"))
@@ -834,7 +862,8 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
 
 def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, max_shift: int = 2,
                            control: str = "never", n_boot: int = 199, seed: int = 0, covariates: list[str] | None = None,
-                           est_method: str = "dr", x_periods: str = "base", show: bool = True) -> dict:
+                           est_method: str = "dr", x_periods: str = "base", cluster: str | None = None,
+                           show: bool = True) -> dict:
     """How much does the Callaway-Sant'Anna result depend on the exact treatment date?
 
     1. Shift table: re-estimates the overall ATT with every treated unit's date moved by
@@ -847,9 +876,11 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
        are dynamic), at the cost of fewer usable cohorts and wider CIs.
     Verdict: 'survives' if the date-robust CI excludes 0 with the same sign as the
     baseline; otherwise the conclusion depends on the exact date.
-    covariates / est_method / x_periods: passed to att_gt, so the check uses the same specification."""
+    covariates / est_method / x_periods / cluster: passed to att_gt, so the check uses the same specification
+    and the same (clustered) inference."""
     d = df.copy()
-    cov_kw = dict(covariates=covariates, est_method=est_method, x_periods=x_periods, verify=False)
+    cov_kw = dict(covariates=covariates, est_method=est_method, x_periods=x_periods, verify=False,
+                  cluster=cluster)
     g0 = d[gvar].fillna(0)
     rows = []
     for k in range(-max_shift, max_shift + 1):
@@ -891,7 +922,7 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
 def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: str, g_high: str,
                         control: str = "never", n_draws: int = 200, n_boot: int = 199, seed: int = 0,
                         covariates: list[str] | None = None, est_method: str = "dr", x_periods: str = "base",
-                        show: bool = True) -> dict:
+                        cluster: str | None = None, show: bool = True) -> dict:
     """Staggered DiD when each unit's adoption date is only known to lie in a window
     [g_low, g_high] (e.g. a law phased in court by court with imprecise records).
     Never-treated units: g_low = g_high = 0 or NaN.
@@ -900,9 +931,10 @@ def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: s
        every base period precedes any plausible adoption (Callaway-Sant'Anna, bootstrap CI).
     2. Date draws: n_draws estimates with each unit's date drawn uniformly from its
        window; the spread shows how much date uncertainty alone moves the ATT.
-    covariates / est_method / x_periods: passed to att_gt (same specification as the main estimate)."""
+    covariates / est_method / x_periods / cluster: passed to att_gt (same specification and inference)."""
     d = df.copy()
-    cov_kw = dict(covariates=covariates, est_method=est_method, x_periods=x_periods, verify=False)
+    cov_kw = dict(covariates=covariates, est_method=est_method, x_periods=x_periods, verify=False,
+                  cluster=cluster)
     lo = d.groupby(unit)[g_low].first().fillna(0)
     hi = d.groupby(unit)[g_high].first().fillna(0)
     if ((hi > 0) & (lo > hi)).any():
@@ -1196,8 +1228,10 @@ def ccc_test(df: pd.DataFrame, y: str, covariates: list[str], group: str, time: 
     advice = {
         "homogeneous": "Covariate effects look common across groups and periods: TWFE or att_gt with covariates are "
                        "fine on this front (parallel trends still has to be argued; nonrejection is not proof).",
-        "time": "Covariate effects change over time but not across groups: a TWFE regression with time-varying "
-                "covariates suffers hidden linearity bias; use att_gt(covariates=..., x_periods='both').",
+        "time": "Covariate effects change over time but not across groups: a TWFE regression with covariates "
+                "suffers hidden linearity bias; use att_gt(covariates=...), which conditions on levels in every "
+                "group-time cell (x_periods='base' with baseline or time-invariant covariates; 'both' only for "
+                "covariates that change over time and that treatment cannot affect).",
         "group": "Covariate effects differ across groups: TWFE and Callaway-Sant'Anna with covariates are biased. Use "
                  "intersection DiD (DID-INT; DiDInt.jl or R didintrjl) or interact the covariates with group.",
         "twoway": "Covariate effects differ across groups and periods: TWFE and Callaway-Sant'Anna with covariates are "
@@ -1219,9 +1253,100 @@ def ccc_test(df: pd.DataFrame, y: str, covariates: list[str], group: str, time: 
     return out
 
 
+def bacon_decomposition(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, show: bool = True) -> dict:
+    """Goodman-Bacon (2021) decomposition of the two-way fixed effects DiD coefficient (no
+    covariates, balanced panel, absorbing binary treatment) into every 2x2 comparison and
+    its weight. gvar = first treated period; 0/NaN or a date after the panel = never treated;
+    a date at or before the first period = always treated (acts only as a control).
+
+    Three kinds of 2x2:
+      'treated vs never'            clean;
+      'earlier vs later (control)'  clean: the later cohort is still untreated in the window;
+      'later vs earlier (control)'  FORBIDDEN: the already-treated earlier cohort is the control.
+    If effects grow with exposure, the forbidden comparisons subtract the earlier cohort's
+    growing effect: TWFE is attenuated, and can flip sign, even with every weight positive.
+    The weights sum to one and sum(weight * estimate) equals the TWFE coefficient exactly
+    (checked and reported as 'identity_gap'). Equivalent of R bacondecomp / Stata bacondecomp."""
+    d = df[[unit, time, y, gvar]].copy()
+    d[gvar] = d[gvar].fillna(0)
+    Y = d.pivot(index=unit, columns=time, values=y)
+    if Y.isna().any().any():
+        raise ValueError("bacon_decomposition needs a balanced panel")
+    T = np.array(Y.columns)
+    g = d.groupby(unit)[gvar].first().reindex(Y.index).to_numpy(float)
+    g = np.where((g == 0) | (g > T.max()), np.inf, np.where(g <= T.min(), T.min(), g))   # inf = never
+    Ym = Y.to_numpy(float)
+    N, nT = Ym.shape
+    groups = sorted(set(g))
+    share = {k: np.mean(g == k) for k in groups}
+    dbar = {k: (0.0 if np.isinf(k) else np.mean(T >= k)) for k in groups}
+    mean_t = {k: Ym[g == k].mean(axis=0) for k in groups}
+
+    def dd(treat, ctrl, pre, post):
+        if not pre.any() or not post.any():
+            return np.nan
+        return ((mean_t[treat][post].mean() - mean_t[treat][pre].mean())
+                - (mean_t[ctrl][post].mean() - mean_t[ctrl][pre].mean()))
+
+    rows = []
+    timing = [k for k in groups if np.isfinite(k)]
+    if np.inf in groups:
+        for k in timing:
+            nk, nu = share[k], share[np.inf]
+            nku = nk / (nk + nu)
+            w = (nk + nu) ** 2 * nku * (1 - nku) * dbar[k] * (1 - dbar[k])
+            rows.append(("treated vs never", k, np.inf, dd(k, np.inf, T < k, T >= k), w))
+    for i, k in enumerate(timing):
+        for l in timing[i + 1:]:                         # k earlier than l
+            nk, nl = share[k], share[l]
+            nkl = nk / (nk + nl)
+            Dk, Dl = dbar[k], dbar[l]
+            if Dl < 1:   # earlier treated vs later as control, window before l
+                w = ((nk + nl) * (1 - Dl)) ** 2 * nkl * (1 - nkl) * ((Dk - Dl) / (1 - Dl)) * ((1 - Dk) / (1 - Dl))
+                win = T < l
+                rows.append(("earlier vs later (control)", k, l, dd(k, l, win & (T < k), win & (T >= k)), w))
+            if Dk > 0:   # later treated vs earlier (already treated) as control, window from k
+                w = ((nk + nl) * Dk) ** 2 * nkl * (1 - nkl) * (Dl / Dk) * ((Dk - Dl) / Dk)
+                win = T >= k
+                rows.append(("later vs earlier (control)", l, k, dd(l, k, win & (T < l), win & (T >= l)), w))
+    tab = pd.DataFrame(rows, columns=["type", "treated", "control", "estimate", "weight"])
+    tab = tab[(tab["weight"] > 0) & tab["estimate"].notna()].reset_index(drop=True)
+    tab["weight"] = tab["weight"] / tab["weight"].sum()
+    tab["control"] = tab["control"].replace(np.inf, "never")
+    # TWFE coefficient by two-way within transformation
+    Dm = (g[:, None] <= T[None, :]).astype(float)
+    def within(A):
+        return A - A.mean(axis=1, keepdims=True) - A.mean(axis=0, keepdims=True) + A.mean()
+    Dw = within(Dm)
+    twfe = float((Dw * Ym).sum() / (Dw * Dm).sum())
+    recon = float((tab["weight"] * tab["estimate"]).sum())
+    by_type = tab.groupby("type").apply(
+        lambda s: pd.Series({"weight": s["weight"].sum(), "estimate": np.average(s["estimate"], weights=s["weight"])}),
+        include_groups=False)
+    forbidden = float(by_type["weight"].get("later vs earlier (control)", 0.0))
+    warns = []
+    if forbidden >= 0.10:
+        clean = tab[tab["type"] != "later vs earlier (control)"]
+        fb = by_type.loc["later vs earlier (control)", "estimate"]
+        cl = np.average(clean["estimate"], weights=clean["weight"]) if len(clean) else np.nan
+        warns.append(f"{forbidden:.0%} of the TWFE weight comes from comparisons that use already-treated units as "
+                     f"controls (their average 2x2: {fb:.4g}; clean comparisons: {cl:.4g}). With effects that change "
+                     "over time these are biased: report att_gt.")
+    out = {"table": tab, "by_type": by_type, "twfe": twfe, "reconstructed": recon,
+           "identity_gap": abs(twfe - recon), "forbidden_weight": forbidden, "warnings": warns}
+    if show:
+        print(f"\nGoodman-Bacon decomposition of the TWFE coefficient ({twfe:.4f}; weighted sum of 2x2s {recon:.4f})")
+        print(by_type.to_string(float_format=lambda v: f"{v:.4f}"))
+        for w_ in warns:
+            print("  WARNING: " + w_)
+    return out
+
+
 def twfe_covariate_diagnostic(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, covariates: list[str],
                               control: str = "never", est_method: str = "dr", x_periods: str = "both",
-                              n_boot: int = 199, seed: int = 0, show: bool = True) -> dict:
+                              n_boot: int = 199, seed: int = 0, cs_covariates: list[str] | None = None,
+                              cs_x_periods: str | None = None, cluster: str | None = None,
+                              show: bool = True) -> dict:
     """Is a TWFE regression with covariates trustworthy here? Diagnostics in the spirit of
     Caetano & Callaway (2024), "Difference-in-differences when parallel trends holds conditional
     on covariates", on a balanced panel.
@@ -1235,16 +1360,33 @@ def twfe_covariate_diagnostic(df: pd.DataFrame, unit: str, time: str, y: str, gv
        observation by its residualized treatment dummy; negative weights mean already-treated
        units serve as controls (forbidden comparisons) and the estimate need not lie between the
        unit-level effects.
-    3. Benchmark: att_gt with the same covariates in levels (doubly robust by default); the gap
-       is reported in units of its bootstrap SE (approximate: the two estimates are correlated).
-    Verdict 'unreliable' if (1) rejects at 5%, or any treated weight is negative, or the gap
-    exceeds 2 SE; then report att_gt(covariates=...)."""
+    3. Forbidden comparisons: the Goodman-Bacon decomposition of the TWFE without covariates
+       (bacon_decomposition). Treated weights can all be positive while a large share of the
+       TWFE weight comes from 2x2s whose control is already treated; with effects that grow
+       with exposure those comparisons attenuate TWFE.
+    4. Benchmark: att_gt with covariates in levels (doubly robust by default); the gap is
+       reported in units of its bootstrap SE (approximate: the two estimates are correlated).
+
+    covariates = the TWFE specification under review (the parecer's controls, bad ones
+    included). cs_covariates = the valid pre-treatment confounders for the benchmark and for
+    the hidden-linearity test (default: the same list); never put a control the treatment can
+    affect there. cs_x_periods defaults to x_periods. cluster = the level of treatment
+    assignment (state): TWFE SEs, the hidden-linearity test and the att_gt bootstrap cluster
+    on it (default: the unit).
+    Verdict 'unreliable' if (1) rejects at 5%, any treated weight is negative, forbidden
+    comparisons carry >= 10% of the weight with an average 2x2 that differs from the clean ones
+    by more than a quarter, or the gap exceeds 2 SE; then report att_gt(covariates=...). A
+    benchmark too noisy to detect the gap is flagged: 'no evidence' then means no power."""
     from linearmodels.panel import PanelOLS
     covs = list(covariates)
-    d = df[[unit, time, y, gvar, *covs]].copy()
+    ccovs = list(cs_covariates) if cs_covariates is not None else covs
+    cxp = cs_x_periods or x_periods
+    allc = list(dict.fromkeys(covs + ccovs))
+    extra = [cluster] if cluster and cluster not in (unit, time, y, gvar, *allc) else []
+    d = df[[unit, time, y, gvar, *allc, *extra]].copy()
     d[gvar] = d[gvar].fillna(0)
     d = d.sort_values([unit, time]).reset_index(drop=True)
-    if d.groupby(unit)[time].count().nunique() != 1 or d[[y, *covs]].isna().any().any():
+    if d.groupby(unit)[time].count().nunique() != 1 or d[[y, *allc]].isna().any().any():
         raise ValueError("twfe_covariate_diagnostic needs a balanced panel without missing values")
     d["_D"] = ((d[gvar] > 0) & (d[time] >= d[gvar])).astype(float)
     pdf = d.set_index([unit, time])
@@ -1255,8 +1397,11 @@ def twfe_covariate_diagnostic(df: pd.DataFrame, unit: str, time: str, y: str, gv
         warns.append(f"Time-invariant covariates {ti_} are absorbed by the unit fixed effects: TWFE cannot adjust "
                      "for them at all.")
     exog = pdf[["_D", *tv]]
-    tw = PanelOLS(pdf[y], exog, entity_effects=True, time_effects=True, drop_absorbed=True).fit(
-        cov_type="clustered", cluster_entity=True)
+    tw = (PanelOLS(pdf[y], exog, entity_effects=True, time_effects=True, drop_absorbed=True).fit(
+        cov_type="clustered", clusters=pd.Series(pd.factorize(pdf[cluster])[0], index=pdf.index, name="cl"))
+          if cluster else
+          PanelOLS(pdf[y], exog, entity_effects=True, time_effects=True, drop_absorbed=True).fit(
+              cov_type="clustered", cluster_entity=True))
     twfe = _out("TWFE with covariates", float(tw.params["_D"]), float(tw.std_errors["_D"]), len(d))
     # 2. implicit weights (Frisch-Waugh): residualize D on both FEs and the time-varying covariates
     if tv:
@@ -1275,12 +1420,12 @@ def twfe_covariate_diagnostic(df: pd.DataFrame, unit: str, time: str, y: str, gv
                      "already-treated units act as controls.")
     # 1. hidden linearity test on untreated first differences
     g = d.groupby(unit)
-    fd = pd.DataFrame({"_dy": g[y].diff(), "_t": d[time], "_u": d[unit]})
+    fd = pd.DataFrame({"_dy": g[y].diff(), "_t": d[time], "_u": d[cluster] if cluster else d[unit]})
     lev_cols, dif_cols = [], []
-    for c in covs:
+    for c in ccovs:
         fd["L_" + c] = g[c].shift(1)
         lev_cols.append("L_" + c)
-        if c in tv:
+        if d.groupby(unit)[c].nunique().max() > 1:
             fd["d_" + c] = g[c].diff()
             dif_cols.append("d_" + c)
     pre = (d[gvar] == 0) | (d[time] < d[gvar])
@@ -1298,29 +1443,55 @@ def twfe_covariate_diagnostic(df: pd.DataFrame, unit: str, time: str, y: str, gv
     if p_hl < 0.05:
         warns.append(f"Hidden linearity: untreated outcome trends depend on covariate LEVELS (joint p = {p_hl:.3g}), "
                      "which TWFE differences away. TWFE with covariates is biased here.")
-    # 3. benchmark
-    cs = att_gt(df, unit, time, y, gvar, control=control, n_boot=n_boot, seed=seed, covariates=covs,
-                est_method=est_method, x_periods=x_periods, show=False)
+    # 3. forbidden comparisons (Goodman-Bacon, no covariates)
+    bac = bacon_decomposition(d, unit, time, y, gvar, show=False)
+    bt = bac["by_type"]
+    fb_w = bac["forbidden_weight"]
+    forbidden_bias = False
+    if fb_w >= 0.10:
+        clean = bac["table"][bac["table"]["type"] != "later vs earlier (control)"]
+        cl_est = np.average(clean["estimate"], weights=clean["weight"]) if len(clean) else np.nan
+        fb_est = bt.loc["later vs earlier (control)", "estimate"]
+        forbidden_bias = bool(np.isfinite(cl_est) and abs(fb_est - cl_est) > 0.25 * abs(cl_est))
+        if forbidden_bias:
+            warns.append(f"Forbidden comparisons: {fb_w:.0%} of the TWFE weight uses already-treated units as controls, "
+                         f"and those 2x2s average {fb_est:.4g} against {cl_est:.4g} for the clean ones (Goodman-Bacon). "
+                         "Effects that change with exposure are leaking into the TWFE coefficient.")
+    # 4. benchmark
+    cs = att_gt(df, unit, time, y, gvar, control=control, n_boot=n_boot, seed=seed, covariates=ccovs,
+                est_method=est_method, x_periods=cxp, cluster=cluster, show=False)
     co = cs["overall"]
     gap = twfe["estimate"] - co["estimate"]
     gap_se = gap / co["se"] if np.isfinite(co["se"]) and co["se"] > 0 else np.nan
     if np.isfinite(gap_se) and abs(gap_se) > 2:
         warns.append(f"TWFE ({twfe['estimate']:.4f}) and Callaway-Sant'Anna with covariates ({co['estimate']:.4f}) differ "
                      f"by {abs(gap_se):.1f} SE.")
+    low_power = bool(np.isfinite(co["se"]) and 2 * co["se"] > 0.5 * max(abs(co["estimate"]), abs(twfe["estimate"])))
+    if low_power:
+        warns.append(f"Low power of the benchmark comparison: only a gap above 2 x SE = {2 * co['se']:.4g} would be "
+                     f"flagged, against estimates of {twfe['estimate']:.4g} (TWFE) and {co['estimate']:.4g} (CS). A "
+                     "small gap here is not evidence that TWFE is right.")
     warns += [w_ for w_ in cs["warnings"]]
-    unreliable = bool(p_hl < 0.05 or neg_share > 0 or (np.isfinite(gap_se) and abs(gap_se) > 2))
+    unreliable = bool(p_hl < 0.05 or neg_share > 0 or forbidden_bias or (np.isfinite(gap_se) and abs(gap_se) > 2))
+    verdict = ("unreliable" if unreliable else
+               "inconclusive (low power)" if low_power else "no evidence against TWFE")
     out = {"twfe": twfe, "att_gt": co, "gap": gap, "gap_in_se": gap_se, "hidden_linearity_p": p_hl,
            "level_coefficients": lev_tab, "negative_weight_share": neg_share, "negative_weight_sum": neg_sum,
-           "verdict": "unreliable" if unreliable else "no evidence against TWFE", "warnings": warns}
+           "bacon": bt, "forbidden_weight": fb_w, "low_power": low_power, "cs_covariates": ccovs,
+           "verdict": verdict, "warnings": warns}
     if show:
-        print(f"\nTWFE with covariates vs conditional parallel trends ({', '.join(covs)})")
-        print(f"TWFE: {twfe['estimate']:.4f} (SE {twfe['se']:.4f})   att_gt ({est_method}, {x_periods}): "
+        print(f"\nTWFE with covariates ({', '.join(covs)}) vs conditional parallel trends on "
+              f"({', '.join(ccovs)})" + (f"; clustered by {cluster}" if cluster else ""))
+        print(f"TWFE: {twfe['estimate']:.4f} (SE {twfe['se']:.4f})   att_gt ({est_method}, {cxp}): "
               f"{co['estimate']:.4f} (SE {co['se']:.4f})   gap {gap:+.4f} ({gap_se:+.1f} SE)")
         print(f"Hidden linearity test (levels of X in untreated trends): joint p = {p_hl:.4g}")
         print(lev_tab.to_string(float_format=lambda v: f"{v:.4f}"))
         print(f"Treated observations with negative TWFE weight: {neg_share:.1%}")
-        print("Verdict: " + ("TWFE with covariates is NOT reliable here; report att_gt with covariates."
-                             if unreliable else "no evidence against TWFE on these checks (report both)."))
+        print("Goodman-Bacon (TWFE without covariates):\n" + bt.to_string(float_format=lambda v: f"{v:.4f}"))
+        print("Verdict: " + {"unreliable": "TWFE with covariates is NOT reliable here; report att_gt with covariates.",
+                             "inconclusive (low power)": "inconclusive: the benchmark is too noisy to confirm or "
+                             "reject TWFE (report att_gt and its CI).",
+                             "no evidence against TWFE": "no evidence against TWFE on these checks (report both)."}[verdict])
         for m_ in warns:
             print("  WARNING: " + m_)
     return out

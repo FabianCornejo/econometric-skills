@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-SKILL_VERSION = "2.3.0"
+SKILL_VERSION = "2.3.1"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
@@ -209,7 +209,7 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
     return man
 
 
-def cross_check(estimates: dict, se: float | None = None, tol_se: float = 1.0, rel_tol: float = 1e-6,
+def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol: float = 1e-6,
                 label: str = "estimate", show: bool = True) -> dict:
     """Independent verification of a headline number (the dynare-mcp idea of solving the same
     model twice): pass the same quantity computed by different routes, e.g. {"DR": ..., "outcome
@@ -217,8 +217,21 @@ def cross_check(estimates: dict, se: float | None = None, tol_se: float = 1.0, r
     "simulation": ...}. With se, routes that estimate the same target under different modelling
     assumptions agree if they are within tol_se standard errors; without se, they must agree to
     rel_tol (two implementations of the same estimator). Disagreement is a finding: report it,
-    do not pick the most convenient number."""
-    s = pd.Series(estimates, dtype=float)
+    do not pick the most convenient number.
+
+    estimates: a dict or a pandas Series of numbers, e.g. att_gt's res["cross_check"] passed as
+    it is (a Series dr/reg/ipw). At least two routes are needed: with one, nothing was checked,
+    and the result says so instead of reporting agreement."""
+    if isinstance(estimates, dict) and any(isinstance(v, dict) for v in estimates.values()):
+        estimates = {k: (v.get("estimate") if isinstance(v, dict) else v) for k, v in estimates.items()}
+    s = pd.Series(estimates, dtype=float).dropna()
+    if len(s) < 2:
+        msg = (f"cross_check received {len(s)} route(s) for the {label}: nothing was verified. Pass at least two "
+               "independent computations (for att_gt: reporting.cross_check(res['cross_check'], se=...)).")
+        if show:
+            print("\n  WARNING: " + msg)
+        return {"table": s.rename(label).to_frame(), "spread": np.nan, "agree": None, "criterion": "not checked",
+                "warnings": [msg]}
     spread = float(s.max() - s.min())
     if se is not None and np.isfinite(se) and se > 0:
         agree = spread <= tol_se * se

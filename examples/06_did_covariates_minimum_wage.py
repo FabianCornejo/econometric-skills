@@ -106,7 +106,11 @@ tw = ca.twfe_covariate_diagnostic(d, "countyreal", "year", "lemp", "first.treat"
 # Three red flags: `lpop` drops out of TWFE entirely; with staggered adoption some treated
 # county-years get **negative** weight (already-treated counties serve as controls); and the
 # level of population predicts untreated employment trends at the 10% level, the information
-# TWFE throws away. Here the TWFE number happens to be close (−0.037), but it rests on
+# TWFE throws away. The Goodman-Bacon table shows where the TWFE weight comes from: about 5% sits
+# on comparisons whose control was already treated, whose average 2×2 is slightly positive while
+# the clean comparisons are negative, a small but wrong-signed pull. The benchmark is also flagged
+# as low-powered: its CI could not detect a gap of the size we see, so the closeness of the two
+# numbers is not evidence for TWFE. Here the TWFE number happens to be close (−0.037), but it rests on
 # assumptions the data do not support; the estimate to report is Callaway-Sant'Anna with the
 # covariate.
 #

@@ -207,3 +207,5 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | Caetano & Callaway diagnostics for TWFE with covariates | `causal.twfe_covariate_diagnostic` |
 | Julia `DiDInt.jl`, R `didintrjl` (intersection DiD, DID-INT) | not implemented: use them after `ccc_test` selects `group` or `twoway` |
 | Stata `datasignature`, R `digest`/`renv.lock`, `sessionInfo()` | `reporting.run_manifest` |
+| R `bacondecomp::bacon`, Stata `bacondecomp` (Goodman-Bacon) | `causal.bacon_decomposition` (v2.3.1) |
+| R `did::att_gt(clustervars = "state")`, Stata `csdid, cluster(state)` | `causal.att_gt(cluster="state")` (v2.3.1) |
