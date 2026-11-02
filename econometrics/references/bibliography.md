@@ -150,6 +150,13 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Bailey and López de Prado (2014), "The deflated Sharpe ratio"; Harvey, Liu and Zhu (2016), "... and the cross-section of expected returns" — multiple testing in backtests.
 - Hyndman and Khandakar (2008), "Automatic time series forecasting: the forecast package for R", *Journal of Statistical Software* — the auto-ARIMA algorithm.
 
+## Covariates in DiD and reproducibility (v2.3)
+- Caetano and Callaway (2024, rev. 2026), "Difference-in-differences when parallel trends holds conditional on covariates", arXiv:2406.15288 — hidden linearity bias of TWFE with covariates; estimators with covariates in levels.
+- Karim and Webb (2024), "Good controls gone bad: difference-in-differences with covariates", arXiv:2412.14447 — the common causal covariates (CCC) assumption and intersection DiD (DID-INT); Karim's CCC test (`ccctest`, 2026).
+- Sant'Anna and Zhao (2020), "Doubly robust difference-in-differences estimators", *Journal of Econometrics*; Abadie (2005), "Semiparametric difference-in-differences estimators", *Review of Economic Studies*; Heckman, Ichimura and Todd (1997), *Review of Economic Studies* — the outcome-regression, IPW and DR 2×2 estimators.
+- Davidson and MacKinnon (1999, 2010) and MacKinnon and Webb (2017) — wild bootstrap tests imposed under the null; Webb (2023) six-point weights for few clusters.
+- Chan and Jeliazkov (2009), *International Journal of Mathematical Modelling and Numerical Optimisation*; Chan's `statespace-toolkit` (MATLAB, 2026) — the precision sampler, planned for a later release; its byte-for-byte replication archive and draw-for-draw tests inspired the skill's verification rules, as did the independent-solver design of dynare-mcp.
+
 ## Official data
 - FRED, World Bank, IMF, OECD, BIS — international macro data.
 - Banco Central do Brasil (SGS, Focus survey via the Olinda API, Inflation Reports with applied VAR boxes); IBGE (SIDRA); Ipeadata — Brazilian data.

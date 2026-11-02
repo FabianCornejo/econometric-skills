@@ -2,6 +2,66 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.3.0 — DiD with covariates, common causal covariates test, independent verification and run manifests
+
+Sources evaluated for this release: Caetano & Callaway (arXiv:2406.15288) and Karim's CCC test (`SunnyRKarim/ccctest`, with Karim & Webb, arXiv:2412.14447) were adopted; the design of `dynare-mcp` (a second, independent solver; model and solver hashes) and Chan's `statespace-toolkit` (byte-for-byte archives, draw-for-draw tests) shaped the verification rules. The Bayesian state-space and bounded-outcome modules are planned for v2.4.
+
+- **`causal.att_gt(covariates=...)`**: Callaway-Sant'Anna under parallel trends that hold only conditional on covariates.
+  - Covariates enter in levels in each group-time 2×2, never differenced away.
+  - Three estimators via `est_method`:
+    - `"dr"` (default): doubly robust, Sant'Anna & Zhao 2020.
+    - `"reg"`: outcome regression, Heckman-Ichimura-Todd.
+    - `"ipw"`: normalized IPW, Abadie 2005.
+  - `x_periods="base"` uses pre-treatment values; `"both"` adds the change in time-varying covariates not affected by treatment (Caetano & Callaway's setting).
+  - The bootstrap re-estimates every nuisance model.
+  - Comparison units with propensity ≥ 0.995 get zero weight, with a warning (count and largest propensity).
+  - New `warnings` and `method` keys follow the output contract.
+  - Cell by cell, the three estimators equal the `csdid`/DRDID port to 3e-11, with never-treated and not-yet-treated controls.
+  - Without covariates the function is unchanged: the existing suite gives identical output line by line.
+  - `did_timing_sensitivity` and `did_uncertain_dates` accept the same covariate options.
+- **Independent recomputation built in (`verify=True`)**: `att_gt` with covariates also computes the other two estimators on the full sample (`res["cross_check"]`). It warns when they differ by more than one SE: the outcome and propensity models disagree, so one is misspecified. This is the dynare-mcp principle of solving the same model twice.
+- **`causal.ccc_test`**: Karim & Webb's common causal covariates test, written from the method's description. The authors' `ccctest` licence forbids incorporating its code.
+  - It uses untreated observations only: never-treated units, and treated units before adoption.
+  - Stage 1 tests whether covariate slopes are equal in every group-period cell; stage 2 tests slopes equal across groups and across periods, with Holm adjustment.
+  - It selects homogeneous, time, group or twoway, and explains what each implies for estimation (time: `att_gt` with covariates; group/twoway: intersection DiD, `DiDInt.jl`/`didintrjl`).
+  - Two deliberate differences from `ccctest`:
+    - **CR1 clustered covariances** for repeated units (its HC1 ignores serial dependence).
+    - **Wild-bootstrap p-values imposed under each null, by default**, re-centred within cells. With 29 restrictions and heteroskedastic errors the asymptotic χ² rejected a true null 28% of the time (cells of 40 observations); the wild bootstrap 5%.
+  - It falls back to the classical F statistic (bootstrapped) when restrictions exceed clusters.
+  - Its HC1 and CR1 Wald statistics equal statsmodels' dummy regressions.
+- **`causal.twfe_covariate_diagnostic`**: is a TWFE regression with covariates trustworthy? It reports three checks and a verdict:
+  - the joint test of covariate levels in untreated first-difference trends (hidden linearity; the coefficient recovers the drift of the covariate effect, 0.39 for a true 0.4);
+  - the share of treated observations with negative implicit TWFE weight (Frisch-Waugh);
+  - the gap to `att_gt` with covariates, in SEs.
+
+  It also warns that time-invariant covariates drop out of TWFE.
+- **`simulation.demo_did_covariates`** (Teacher mode): the true ATT is 1. Unadjusted DiD is biased by 0.74, TWFE with the covariate by 0.97, and Callaway-Sant'Anna DR with the covariate in levels by 0.04. With `beta_drift=0` the three agree.
+- **Reproducibility** (`reporting.py`):
+  - `run_manifest` records data hashes (DataFrames by content, files byte by byte), Python, package and skill versions, seed, platform and headline results, optionally as JSON.
+  - `cross_check` compares the same number computed by independent routes, within k SEs or to a relative tolerance.
+  - CI checks that `reporting.SKILL_VERSION` matches this CHANGELOG.
+- **Rules**:
+  - DiD with covariates: levels, not TWFE; test CCC.
+  - Headline numbers are recomputed by an independent route.
+  - Deliverables end with a run manifest.
+  - Robust Wald tests with many restrictions use a wild bootstrap.
+  - New routing row, §6.0 in `causal-inference.md`, reviewer checklist items, Stata/R equivalents (`did`, `csdid`, `drdid`, `ccctest`, `DiDInt.jl`) and bibliography.
+- **Fixes from the v2.2.3 eval**:
+  - Scripts now start with `SKILL_DIR = os.environ.get("ECONOMETRICS_SKILL_DIR", "<path to your clone>/econometric-skills/econometrics")`. The default is the user's folder, never a sandbox path, not even in a comment. To run the script elsewhere, set the variable instead of editing the default. A script skeleton is in `interpretation-rules.md`.
+  - The Basel traffic light and its 2.5 expected violations are stated for the 99% VaR. At 97.5% the expectation is 6.25, and FRTB's desk limits (12 at 99%, 30 at 97.5%) are mentioned.
+- Two new blind-eval cases: DiD with covariates for a municipal credit program, and the review of a TWFE-with-controls report.
+- **Worked example 06** (`examples/06_did_covariates_minimum_wage`): Callaway & Sant'Anna's county panel (`mpdta`, downloaded on first run). Unconditional ATT −0.0400 and DR ATT conditional on log population −0.0418, the published figures. The CCC test is not rejected (p = 0.29, 13 untreated cohort-year cells, clustered by county). All 12 group-time cells equal `csdid` to 5e-15. The TWFE diagnostic flags the absorbed covariate and 7% negative weights. The conclusion survives date errors of ±1 year, and the script ends with a run manifest.
+- **Validated** in `tests/test_did_covariates.py` (44 checks):
+  - the 2×2 estimators equal an independent statsmodels implementation, and `att_gt` equals `csdid` (now in `requirements-dev.txt`, so CI compares them on every push);
+  - unbiasedness under conditional parallel trends (DR −0.02, reg −0.02, IPW −0.04, unadjusted +0.70);
+  - double robustness: a wrong outcome model leaves DR at +0.007 while regression is at +0.56; a wrong propensity model leaves DR at −0.002 while IPW is at +0.17;
+  - DR bootstrap CI coverage 92%;
+  - `ccc_test` size and selection (time, group, twoway chosen 96–100%);
+  - the TWFE diagnostic's three checks;
+  - manifests and the new instructions.
+
+  482 checks in total, on the minimum and the latest dependency versions.
+
 ## v2.2.4 — Claude Code plugin
 
 - The repository is now a Claude Code plugin marketplace: `.claude-plugin/marketplace.json` lists the plugin `econometrics`, whose source is the existing `econometrics/` folder (the entry is the manifest and declares the folder itself as the skill), so nothing moved and `dist/econometrics.skill` is unchanged. Install with `/plugin install econometrics --marketplace FabianCornejo/econometric-skills`; `/plugin update` follows the version in the entry. Validated with `claude plugin validate` and an install on Claude Code 2.1.316: one skill, only the skill folder copied to the plugin cache. CI now fails if the plugin version differs from the latest CHANGELOG version, and the README documents the plugin install. This replaces the October `claude/plugin-packaging` branch, which moved the skill folder and is superseded.

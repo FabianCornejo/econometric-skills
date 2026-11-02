@@ -196,3 +196,14 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | R `evir`, `POT`, `extRemes::fevd(type="GP")`, `ismev::gpd.fit`; MATLAB `gpfit` | `risk.mean_excess`, `risk.gpd_fit`, `risk.var_evt` |
 | R `esback::esr_backtest`, `cc_backtest`; `GAS`/`esreg` FZ loss | `risk.es_backtest`, `risk.fz_loss`, `risk.compare_es_models` |
 | R `GAS::BacktestVaR` (DQ), `rugarch::VaRTest`, MATLAB `varbacktest` | `risk.dq_test`, `risk.backtest_var` |
+
+## DiD with covariates, CCC test and reproducibility (v2.3)
+
+| Stata / R | Python (this skill) |
+|---|---|
+| R `did::att_gt(xformla = ~ x, est_method = "dr"/"reg"/"ipw")`; Stata `csdid y x, ivar() time() gvar() method(dripw)`; Python `csdid` | `causal.att_gt(covariates=["x"], est_method="dr"/"reg"/"ipw")` (cell ATTs equal `csdid` to 1e-11) |
+| R `DRDID::drdid_panel`, `reg_did_panel`, `std_ipw_did_panel`; Stata `drdid` | the 2×2 inside `att_gt` (`causal._did_cell_cov`) |
+| Karim's `ccctest` (Stata/R/Python, restricted licence; HC1, asymptotic χ²) | `causal.ccc_test` (own implementation; HC1 or CR1, wild-bootstrap p-values by default) |
+| Caetano & Callaway diagnostics for TWFE with covariates | `causal.twfe_covariate_diagnostic` |
+| Julia `DiDInt.jl`, R `didintrjl` (intersection DiD, DID-INT) | not implemented: use them after `ccc_test` selects `group` or `twoway` |
+| Stata `datasignature`, R `digest`/`renv.lock`, `sessionInfo()` | `reporting.run_manifest` |

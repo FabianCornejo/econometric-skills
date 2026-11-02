@@ -1,7 +1,7 @@
 # Worked examples
 
 Each example applies the skill's 7-step workflow (`econometrics/SKILL.md`) to a real question with
-Wooldridge's textbook data, using the skill's own scripts. They show what a full analysis looks like:
+Wooldridge's textbook data (example 06: Callaway & Sant'Anna's county panel, downloaded on first run), using the skill's own scripts. They show what a full analysis looks like:
 a hypothesis written before estimating, diagnostics that change the model, robustness checks, and a
 report that says what the estimate does *not* prove.
 
@@ -12,6 +12,7 @@ report that says what the estimate does *not* prove.
 | [03 Panel: union premium](03_panel_union_premium.ipynb) | Union wage premium net of fixed worker differences | pooled, RE, FE, clustered SEs, `mundlak_test` (CRE) |
 | [04 Distributed lag](04_distributed_lag_fertility.ipynb) | Long-run effect of a tax exemption on fertility | `stationarity_many`, spurious-regression signs, first differences, HAC, `long_run_effect` |
 | [05 Limited dependent variables](05_limited_dependent.ipynb) | Hours worked with corner solutions; counts of arrests | `tobit` (three margins, McDonald-Moffitt), Poisson, `count_diagnostics` |
+| [06 DiD with covariates](06_did_covariates_minimum_wage.ipynb) | Did minimum-wage increases reduce teen employment? (Callaway-Sant'Anna's county panel, staggered adoption) | `att_gt` with and without covariates (doubly robust, independent recomputation), `ccc_test`, `twfe_covariate_diagnostic`, `did_timing_sensitivity`, check against `csdid`, `run_manifest` |
 
 The `.py` files are the source (cells marked with `# %%`, runnable as scripts and checked in CI);
 the notebooks are generated from them with outputs:

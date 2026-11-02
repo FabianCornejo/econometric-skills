@@ -27,6 +27,8 @@ Every check you request names the function of this skill that runs it (`estimati
 - [ ] Is the identifying assumption written and defended with evidence (balance, pre-trends, first stage, density test, pre-period fit)?
 - [ ] Bad controls (post-treatment variables)? Selection on the outcome? Reverse causality?
 - [ ] Staggered DiD estimated with plain TWFE? Treatment dates verified?
+- [ ] Covariates added to a TWFE regression to rescue parallel trends? Hidden linearity bias (`causal.twfe_covariate_diagnostic`); covariate effects equal across groups and periods (`causal.ccc_test`); estimate with `causal.att_gt(covariates=...)` and compare.
+- [ ] Headline numbers reproducible (a run manifest: data hashes, versions, seed) and checked by an independent route?
 - [ ] IV: first-stage F (effective F), exclusion argued, LATE interpreted for compliers?
 
 **Inference**

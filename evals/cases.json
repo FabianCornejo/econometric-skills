@@ -1,5 +1,5 @@
 {
-  "version": "2.2",
+  "version": "2.3",
   "how_to_run": "See evals/README.md. Paste each prompt, alone, in a fresh conversation with the current econometrics skill installed. Grade the answer against every criterion; a case passes only if all 'must' criteria hold and no 'must_not' criterion is triggered.",
   "cases": [
     {
@@ -174,6 +174,45 @@
       "must_not": [
         "Ignores serial correlation and clustering when computing power.",
         "Gives a number of months without showing how it was computed."
+      ]
+    },
+    {
+      "id": "did-covariates-municipal-program",
+      "language": "pt-BR",
+      "prompt": "Um programa estadual de crédito para pequenas empresas foi adotado por municípios em anos diferentes entre 2015 e 2020. Tenho um painel anual de 2010 a 2022 com 600 municípios: emprego formal, PIB per capita, população e participação da indústria. Os municípios que aderiram são mais ricos e mais industriais, e o emprego vinha crescendo mais rápido onde a indústria pesa mais. Como estimo o efeito do programa sobre o emprego?",
+      "must": [
+        "Recognizes staggered adoption and uses causal.att_gt (Callaway-Sant'Anna), not a plain TWFE, as the main estimate.",
+        "Recognizes that parallel trends plausibly hold only conditional on covariates (industry share drives employment trends) and estimates with att_gt(covariates=[...]) in levels, doubly robust (est_method='dr').",
+        "Explains that adding the covariates to a TWFE regression does not fix this (unit fixed effects keep only their changes: hidden linearity bias; time-invariant ones drop out), and/or runs causal.twfe_covariate_diagnostic on the TWFE version.",
+        "Chooses covariates that the program cannot affect: pre-treatment (base-period) values or covariates not moved by credit; flags GDP per capita or employment-related variables measured after adoption as bad controls (x_periods='base' or pre-period values).",
+        "Runs causal.ccc_test on untreated observations with a group that has several observations per cell (region or cohort, not the municipality) and states what each selection implies (DID-INT if covariate effects differ across groups).",
+        "Reads the independent recomputation (res['cross_check']: DR vs outcome regression vs IPW) and the overlap warnings, and says what disagreement would mean.",
+        "Asks about or checks the adoption dates (did_timing_sensitivity with the same covariates) and clusters at the municipality (or assignment) level.",
+        "Ends with a runnable script on simulated data with the same structure, whose SKILL_DIR defaults to the user's clone through ECONOMETRICS_SKILL_DIR (no sandbox path, not even in a comment), and which ends with reporting.run_manifest."
+      ],
+      "must_not": [
+        "Reports a TWFE regression with time-varying controls as the causal estimate.",
+        "Uses post-treatment values of covariates the program can affect as controls without warning.",
+        "Calls ccc_test with group = municipality (one observation per cell)."
+      ]
+    },
+    {
+      "id": "review-twfe-with-controls",
+      "language": "pt-BR",
+      "prompt": "Recebi um parecer que estima o efeito de uma lei estadual sobre a taxa de homicídios com uma regressão de efeitos fixos de município e ano mais controles de renda média, desemprego e população jovem (todos anuais), e conclui que a lei reduziu homicídios em 12%. Os estados adotaram a lei em anos diferentes. Revise a análise.",
+      "must": [
+        "Uses Reviewer mode: claim, verdict, findings by severity, what would change the verdict.",
+        "Flags staggered adoption with TWFE (forbidden comparisons, negative weights) and asks for causal.att_gt.",
+        "Flags hidden linearity bias: time-varying controls inside TWFE enter only through their changes; asks for causal.twfe_covariate_diagnostic and att_gt(covariates=...) with controls in levels.",
+        "Asks whether the controls can be affected by the law (unemployment, income) and treats them as potential bad controls (base-period values).",
+        "Asks for causal.ccc_test (covariate effects equal across states and years) and explains the consequence if rejected (DID-INT).",
+        "Flags inference: clustering by state (the assignment level), few treated clusters, wild cluster bootstrap and/or randomization inference.",
+        "Converts the 12% claim correctly given the functional form (log outcome: 100*(e^b - 1)) or asks for it.",
+        "Requests a reproducible package: data source and a run manifest (hashes, versions, seed) and an independent recomputation of the headline number."
+      ],
+      "must_not": [
+        "Accepts the TWFE-with-controls estimate as causal without these checks.",
+        "Recommends clustering by municipality when the law varies by state."
       ]
     }
   ]

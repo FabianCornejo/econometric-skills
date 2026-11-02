@@ -42,7 +42,7 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 - **Teaching simulations** use a fixed seed, show their code, and report the quantity the lesson is about (bias, coverage, rejection rate), not only a single draw.
 
 - **Betas for a valuation** come from comparables whose windows start after any break in their risk profile (change of control, privatization, new regulation); report the unlevering method (Hamada/Conine or Harris-Pringle, with or without debt beta), and use `finance_empirics.dimson_beta` or weekly returns for thinly traded stocks.
-- **Scripts must run on the user's machine and on real data**: a `SKILL_DIR` variable for this skill's `scripts/` folder (never a sandbox path), and a test on simulated data that include the cases real data bring (events without enough history, missing values, repeated units). In event studies, use `finance_empirics.car_regression` for the cross-section of CARs rather than hand-merging results.
+- **Scripts must run on the user's machine and on real data**: a `SKILL_DIR` variable for this skill's folder that contains `scripts/`, whose default is the user's path, never a sandbox path, not even with the user's path in a comment (skeleton below), and a test on simulated data that include the cases real data bring (events without enough history, missing values, repeated units). In event studies, use `finance_empirics.car_regression` for the cross-section of CARs rather than hand-merging results.
 
 ## Rules added in v2.2
 
@@ -50,3 +50,24 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 - **Causal claims from observables carry a sensitivity analysis**: report the robustness value (OLS: `specification.sensitivity`; DML: `causal.dml_sensitivity`) benchmarked on the strongest observed covariates (`causal.dml_benchmark`), in words: "a confounder k times as strong as X would move the estimate to ...".
 - **An insignificant effect needs its MDE**: report the minimum detectable effect of the design (`simulation.mde_did`; with serial correlation or few treated units, `simulation.power_did_sim`) and the largest effect the CI excludes. Plan power before collecting data.
 - **Far-tail risk (99.5% and beyond) uses EVT** (`risk.gpd_fit`, `risk.var_evt`) with the threshold-stability table, and states ξ with its CI; **ES forecasts are backtested** (`risk.es_backtest`) and ranked with `risk.compare_es_models`, not judged by eye.
+
+## Rules added in v2.3
+
+- **DiD with covariates: levels, not TWFE.** When parallel trends need covariates, estimate with `causal.att_gt(covariates=[...])` (doubly robust by default), never by adding the covariates to a TWFE regression: unit fixed effects difference them away (hidden linearity bias; Caetano & Callaway 2024). Before reporting, run `causal.ccc_test` on the untreated observations and say what it selected; if `group` or `twoway`, say that TWFE and Callaway-Sant'Anna with covariates are biased and point to DID-INT. When someone else's TWFE with covariates is under review, run `causal.twfe_covariate_diagnostic` and report its verdict.
+- **Headline numbers are recomputed by an independent route** (the dynare-mcp principle of solving the same model with a second solver). Use the routes the skill already computes (`att_gt`'s DR vs outcome regression vs IPW in `res["cross_check"]`; DML vs OLS with the same controls; historical vs filtered VaR; a formula vs its simulation) or `reporting.cross_check` for any pair. Agreement goes in the report in one line; disagreement beyond one SE is a finding to explain, never a reason to pick the more convenient number.
+- **Deliverables carry a run manifest.** Every script that produces numbers for a report ends with `reporting.run_manifest(data={...}, files=[...], seed=..., results={...}, path="manifest.json")`: data hashes, package and skill versions, seed. A number that cannot be traced to a manifest is not reproducible.
+- **Robust Wald tests with many restrictions** (dozens of cells or groups) over-reject with their χ² reference under heteroskedasticity; use a wild bootstrap imposed under the null (as `ccc_test` does by default) or say that the p-value is anticonservative.
+- **Basel traffic light**: the zones (green 0–4, yellow 5–9, red ≥ 10 violations in 250 days) and the 2.5 expected violations belong to the **99%** VaR. At 97.5% the expectation is 6.25 violations in 250 days and the traffic light does not apply; FRTB's desk-level backtesting sets its own limits at both levels (desks lose model approval with more than 12 exceptions at 99% or 30 at 97.5% in the last 250 days; Basel MAR32 — confirm the local rule).
+
+Script skeleton for every deliverable (v2.3):
+
+```python
+import os, sys
+SKILL_DIR = os.environ.get("ECONOMETRICS_SKILL_DIR", r"<path to your clone>/econometric-skills/econometrics")
+sys.path.insert(0, f"{SKILL_DIR}/scripts")
+import causal, reporting
+# ... load data (or simulate data with the same structure), estimate, diagnose ...
+reporting.run_manifest(data={"panel": df}, seed=SEED, results={"ATT": res["overall"]}, path="manifest.json")
+```
+
+To run the script in your own environment, export `ECONOMETRICS_SKILL_DIR` to the skill folder there; the file the user receives keeps their path as the default.

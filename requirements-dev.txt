@@ -3,3 +3,4 @@
 wooldridge>=0.5
 hmmlearn>=0.3
 rdrobust>=1.3
+csdid>=0.4             # cross-validation of causal.att_gt with covariates against the DRDID port
