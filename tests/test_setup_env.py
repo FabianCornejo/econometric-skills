@@ -58,6 +58,42 @@ with tempfile.TemporaryDirectory() as tmp:
     check("outside the plugin cache, the skill's own folder is used", se.recommended_skill_dir() == SKILL)
     se.SKILL_DIR, se.STABLE_PLUGIN_DIR = old_skill, old_stable
 
+# ---------------------------------------------------------------- 1b. the command to run Python (v2.3.5)
+# On Windows, 'python' and 'python3' often open the Microsoft Store alias ("Python was not found")
+# even with Python installed; only the 'py' launcher works. Instructions must name a command that runs.
+EXE = r"C:\Users\Ana Silva\AppData\Local\Programs\Python\Python313\python.exe"
+STORE = r"C:\Users\Ana Silva\AppData\Local\Microsoft\WindowsApps\python.exe"
+V = (3, 13)
+
+
+def fake_which(table):
+    return lambda name: table.get(name)
+
+
+cmd = se.run_command(exe=EXE, which=fake_which({"py": "py.exe", "python": STORE}), os_name="nt",
+                     launcher=lambda tag: EXE, version=V)
+check("Windows, py launcher runs this Python: the command is 'py -3.13' (works in PowerShell, cmd, Git Bash)",
+      cmd == "py -3.13", cmd)
+cmd = se.run_command(exe=r"C:\proj\.venv\Scripts\python.exe",
+                     which=fake_which({"py": "py.exe", "python": r"C:\proj\.venv\Scripts\python.exe"}), os_name="nt",
+                     launcher=lambda tag: EXE, version=V)
+check("Windows virtual environment (py would start another Python): the command is 'python'", cmd == "python", cmd)
+cmd = se.run_command(exe=EXE, which=fake_which({"python": STORE, "python3": STORE}), os_name="nt",
+                     launcher=lambda tag: None, version=V)
+check("Windows, no launcher, 'python' is the Store alias: never 'python', the quoted full path instead",
+      cmd == f'"{EXE}"', cmd)
+cmd = se.run_command(exe="/usr/bin/python3", which=fake_which({"python3": "/usr/bin/python3"}), os_name="posix",
+                     launcher=lambda tag: None, version=V)
+check("macOS/Linux: the command is 'python3' when it is this Python", cmd == "python3", cmd)
+note = se.store_alias_note(exe=EXE, which=fake_which({"python": STORE}), os_name="nt")
+check("Windows: a note when 'python' opens the Microsoft Store alias", "Microsoft Store" in note, note[:80])
+check("no note when 'python' is this Python, or off Windows",
+      se.store_alias_note(exe=EXE, which=fake_which({"python": EXE}), os_name="nt") == ""
+      and se.store_alias_note(exe="/usr/bin/python3", which=fake_which({"python": STORE}), os_name="posix") == "")
+r = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), "--check"], capture_output=True, text=True)
+check("--check prints the command to run scripts with", "Run scripts with: " in r.stdout,
+      next((l for l in r.stdout.splitlines() if l.startswith("Run scripts")), "")[:90])
+
 # ---------------------------------------------------------------- 2. the script skeleton
 rules = (SKILL / "references" / "interpretation-rules.md").read_text(encoding="utf-8")
 m = re.search(r"Script skeleton for every deliverable.*?```python\n(.*?)```", rules, re.S)
@@ -122,6 +158,9 @@ with tempfile.TemporaryDirectory() as tmp:
     check("bare Python: the skeleton stops with the setup_env install instruction, not a traceback",
           r.returncode != 0 and "setup_env.py" in r.stderr and "--install" in r.stderr and "Traceback" not in r.stderr,
           r.stderr.strip()[:110])
+    venv_exe = subprocess.run([py, "-c", "import sys; print(sys.executable)"], capture_output=True, text=True).stdout.strip()
+    check("bare Python: the install instruction names this exact Python, not a bare 'python'",
+          f'"{venv_exe}"' in r.stderr and "Run once:  python " not in r.stderr, r.stderr.strip()[-110:])
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

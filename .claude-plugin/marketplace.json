@@ -12,8 +12,8 @@
       "skills": [
         "."
       ],
-      "version": "2.3.4",
-      "description": "Econometric agent (consultant, teacher, reviewer): regression diagnostics, causal inference with DAGs, double ML sensitivity and DiD with covariates (doubly robust, CCC test, cluster bootstrap, Goodman-Bacon), heterogeneous effects, power analysis, MLE and wild bootstrap, WACC betas and event studies, time series, VaR/ES with EVT and backtests (FRTB). 522 tested checks.",
+      "version": "2.3.5",
+      "description": "Econometric agent (consultant, teacher, reviewer): regression diagnostics, causal inference with DAGs, double ML sensitivity and DiD with covariates (doubly robust, CCC test, cluster bootstrap, Goodman-Bacon), heterogeneous effects, power analysis, MLE and wild bootstrap, WACC betas and event studies, time series, VaR/ES with EVT and backtests (FRTB). 557 tested checks.",
       "author": {
         "name": "Fabian Cornejo",
         "url": "https://github.com/FabianCornejo"

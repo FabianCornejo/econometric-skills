@@ -83,9 +83,11 @@ dist/         econometrics.skill, the packaged skill
   ```
   /plugin install econometrics --marketplace FabianCornejo/econometric-skills
   ```
-  (Claude Code 2.1.275 or later; on older versions, or from a terminal: `claude plugin marketplace add FabianCornejo/econometric-skills`, then `claude plugin install econometrics@econometric-skills`). Restart Claude Code and that is all. You need Python 3.10 or later on the machine.
+  (Claude Code 2.1.275 or later; on older versions, or from a terminal: `claude plugin marketplace add FabianCornejo/econometric-skills`, then `claude plugin install econometrics@econometric-skills`). Restart Claude Code and that is all. You need Python 3.10 or later on the machine. On Windows, `python` often opens the Microsoft Store alias ("Python was not found") even with Python installed; the skill detects it and gives you commands that work (usually `py -3.13`).
 
   *What happens the first time.* Before running anything, Claude checks your Python with `setup_env.py --check`. If packages are missing (numpy, pandas, statsmodels, linearmodels, arch, scikit-learn), it tells you which and asks before installing them. The scripts it gives you find the skill by themselves (the plugin folder, any copy under `~/.claude/skills`, including the one synced from the Claude app, or a clone), so you run them as delivered, with no paths to edit. If a script ever reports a missing package, run the command it prints.
+
+  *If Claude does not use the skill.* Type `/skills`: `econometrics` should be listed with its description. With hundreds of skills installed, Claude Code shortens the descriptions to fit its budget (`claude --debug` logs "Skill listing over budget") and may not pick the skill. Turn off the plugins you do not need in your analysis folder with a `.claude/settings.json` there holding `{"enabledPlugins": {"<plugin>@<marketplace>": false}}` (other folders keep them), or ask for it by name: "use the econometrics skill".
 
   *Updates.* `/plugin` → Marketplaces → `econometric-skills` → `u`, then restart (or `claude plugin marketplace update econometric-skills` and `claude plugin update econometrics@econometric-skills`); `claude plugin list` shows the version. If you also uploaded the skill to the Claude app, Claude Code shows that copy too, synced from your account as `anthropic-skills:econometrics`: update both at every release, or keep the skill in only one place.
 
