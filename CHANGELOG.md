@@ -2,6 +2,14 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.3.4 — Console output no longer stops an analysis on Windows
+
+Running the full test suite on a Windows notebook (Python 3.13, PowerShell) showed that the skill could stop in the middle of an analysis with `UnicodeEncodeError`. When output is captured, as when Claude Code runs a delivered script or a pipe or log file takes it, Python on Windows encodes stdout with the ANSI code page (cp1252), which has no arrow (→), no ≈ and no Greek letters. Twenty-nine `print()` calls in seven modules (`causal`, `data_prep`, `diagnostics`, `forecasting`, `reporting`, `specification`, `state_space`) print such characters; `causal.propensity_score` failed on its overlap line. The CI runs only on Linux, where the streams are UTF-8, so it never saw it. No change to estimators or results.
+
+- **New `scripts/_console.py`.** On import it checks stdout and stderr once. A stream whose error handler raises on such characters (`strict`, or `surrogateescape`, which a PowerShell pipe gives) and whose encoding cannot write them switches to `errors="replace"`: an unencodable character prints as `?` and the run goes on. Output on UTF-8 streams (Linux, macOS, Windows with `PYTHONUTF8=1`) is unchanged; streams that are already tolerant and streams without `reconfigure` (StringIO, notebooks) are left alone. The seven modules import it after their own imports, and so do `examples/_setup.py` and the five test files whose check names hold such characters.
+- **Tests read and write text as UTF-8.** Eight `read_text()`, `write_text()` and `open()` calls in four test files gave no encoding and used cp1252 on Windows; `test_did_covariates.py` failed reading `interpretation-rules.md`.
+- **New `tests/test_windows_console.py`** forces cp1252 output on any OS, so the Linux CI now catches a regression: each affected module imports and prints an arrow, `causal.propensity_score` runs under `cp1252` and `cp1252:surrogateescape`, UTF-8 output is unchanged, and a module, test or example that holds such a character without importing `_console` fails the suite (540 checks in total).
+
 ## v2.3.3 — Scripts also find the copy synced from the Claude app
 
 The first real run of the v2.3.2 flow on Windows (Claude Code 2.1.316) worked: Claude loaded the skill, ran `setup_env.py --check`, listed the eight missing packages for Python 3.14 and 3.12, and asked before installing. It also showed where Claude Code keeps the skill synced from the Claude app: `~/.claude/skills/synced/<id>/econometrics`. The script locator did not search there. A user with only the app copy, and no plugin, would have seen "skill not found".

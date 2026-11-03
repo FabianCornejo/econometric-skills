@@ -6,6 +6,7 @@ Needs: statsmodels, linearmodels, scikit-learn, scipy (rdrobust optional, for a 
 import sys, warnings, tempfile, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "econometrics" / "scripts"))
+import _console  # noqa: E402,F401  (Windows-safe console output, see econometrics/scripts/_console.py)
 warnings.filterwarnings("ignore")
 import numpy as np, pandas as pd
 
@@ -169,7 +170,7 @@ check("read_any sniffs ';' and latin-1", list(r.columns) == ["NM", "VALOR"] and 
 check("br_number parses '1.234,56'", dp.br_number(r.VALOR).tolist() == [1234.56, 10.0])
 check("fix_mojibake", dp.fix_mojibake("setor_censitÃ¡rio") == "setor_censitário")
 xml = os.path.join(tmp, "o.xls")
-open(xml, "w").write('<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet><Table>'
+open(xml, "w", encoding="utf-8").write('<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet><Table>'
                      '<Row><Cell><Data ss:Type="String">VARIABLES</Data></Cell><Cell><Data>(1)</Data></Cell></Row>'
                      '<Row><Cell><Data>x</Data></Cell><Cell><Data>0.5***</Data></Cell></Row></Table></Worksheet></Workbook>')
 check("SpreadsheetML .xls read", dp.read_any(xml).iloc[1, 1] == "0.5***")

@@ -29,6 +29,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
 ENCODINGS = ("utf-8", "utf-8-sig", "latin-1", "cp1252")
 

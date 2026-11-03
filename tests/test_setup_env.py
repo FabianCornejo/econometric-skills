@@ -34,7 +34,7 @@ def check(name, cond, info=""):
 
 # ---------------------------------------------------------------- 1. setup_env.py
 req = {}
-for line in (ROOT / "requirements.txt").read_text().splitlines():
+for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
     m = re.match(r"^([A-Za-z0-9_.-]+)>=([0-9.]+)", line.strip())
     if m:
         req[m.group(1).lower()] = m.group(2)
@@ -49,7 +49,7 @@ check("version parsing handles suffixes", se._vtuple("0.14.4") > se._vtuple("0.1
 with tempfile.TemporaryDirectory() as tmp:
     stable = Path(tmp) / "marketplaces" / "econometric-skills" / "econometrics"
     (stable / "scripts").mkdir(parents=True)
-    (stable / "scripts" / "causal.py").write_text("")
+    (stable / "scripts" / "causal.py").write_text("", encoding="utf-8")
     old_skill, old_stable = se.SKILL_DIR, se.STABLE_PLUGIN_DIR
     se.SKILL_DIR = Path(tmp) / "cache" / "econometric-skills" / "econometrics" / "2.3.2"
     se.STABLE_PLUGIN_DIR = stable
@@ -78,7 +78,7 @@ def run(py, home, env_var=None):
         env["ECONOMETRICS_SKILL_DIR"] = env_var
     with tempfile.TemporaryDirectory() as wd:
         f = Path(wd) / "analysis.py"
-        f.write_text(probe)
+        f.write_text(probe, encoding="utf-8")
         return subprocess.run([py, str(f)], capture_output=True, text=True, cwd=wd, env=env)
 
 

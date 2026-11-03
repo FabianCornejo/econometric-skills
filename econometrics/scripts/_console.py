@@ -1,0 +1,54 @@
+"""Console output that cannot stop an analysis on Windows.
+
+The modules print summaries with characters such as an arrow or a less-or-equal sign. On Windows,
+when output is captured (Claude Code running a delivered script, a pipe, a log file), Python
+encodes stdout with the ANSI code page, usually cp1252, which has no arrow, and print() raises
+UnicodeEncodeError in the middle of the analysis.
+
+Importing this module checks stdout and stderr once. When a stream's error handler raises on such
+characters ("strict", or "surrogateescape", which a PowerShell pipe gives) and its encoding cannot
+write them, its error handler becomes "replace": an unencodable character
+prints as "?" and the run goes on. The encoding and every other character are unchanged. Nothing
+happens on UTF-8 streams (Linux, macOS, Windows with PYTHONUTF8=1), on streams that are already
+tolerant (stderr uses "backslashreplace" by default) or on streams without reconfigure (StringIO,
+notebooks).
+
+Modules that print such characters import it right after their own imports:
+
+    import _console  # noqa: F401  (Windows-safe console output)
+
+tests/test_windows_console.py fails if a module prints such a character without that import.
+"""
+from __future__ import annotations
+
+import sys
+
+# Characters the modules print, plus close relatives; a stream that cannot write one of them
+# gets the tolerant handler.
+_PROBE = "\u2192\u2190\u2264\u2265\u2260\u2248\xb1\u221a\u03b1\u03b2\u03c3\u03c1\u2713\u2717\u2014"
+
+# Error handlers that already write something for a character the encoding lacks.
+_TOLERANT = {"replace", "backslashreplace", "ignore", "xmlcharrefreplace", "namereplace"}
+
+
+def make_output_tolerant() -> None:
+    """Switch stdout/stderr streams that would raise on _PROBE to errors="replace"."""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        encoding = getattr(stream, "encoding", None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        # "strict" and "surrogateescape" (what a PowerShell pipe gives) both raise on an arrow
+        if not encoding or reconfigure is None or getattr(stream, "errors", None) in _TOLERANT:
+            continue
+        try:
+            _PROBE.encode(encoding)
+        except UnicodeEncodeError:
+            try:
+                reconfigure(errors="replace")
+            except (ValueError, OSError):  # closed or detached stream: leave it as it is
+                pass
+        except LookupError:  # unknown encoding name: leave it as it is
+            pass
+
+
+make_output_tolerant()

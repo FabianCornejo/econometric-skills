@@ -50,6 +50,7 @@ from statsmodels.stats.diagnostic import (
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.stats.stattools import durbin_watson, jarque_bera
 from statsmodels.tsa.stattools import adfuller, coint, kpss
+import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
 ALPHA = 0.05
 
