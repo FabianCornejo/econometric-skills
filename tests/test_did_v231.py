@@ -177,7 +177,7 @@ check("cross_check with one route reports that nothing was verified (agree=None,
       c_one["agree"] is None and "nothing was verified" in c_one["warnings"][0])
 check("cross_check accepts dicts of result dicts", c_nested["agree"] is True)
 ccc = ca.ccc_test(rv, "y", ["renda"], "uf", "ano", gvar="ano_lei", n_boot=19, show=False)
-src = (ROOT / "econometrics" / "scripts" / "causal.py").read_text()
+src = (ROOT / "econometrics" / "scripts" / "causal.py").read_text(encoding="utf-8")
 check("ccc 'time' advice: x_periods='base' for baseline covariates, 'both' only for time-varying ones",
       "x_periods='base' with baseline or time-invariant covariates" in src)
 import re as _re

@@ -6,6 +6,7 @@ Needs: statsmodels, arch, scikit-learn, scipy; hmmlearn for the HMM check.
 import sys, time, warnings
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "econometrics" / "scripts"))
+import _console  # noqa: E402,F401  (Windows-safe console output, see econometrics/scripts/_console.py)
 warnings.filterwarnings("ignore")
 import numpy as np, pandas as pd
 from scipy import stats

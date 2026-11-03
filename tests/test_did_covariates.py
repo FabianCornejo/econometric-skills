@@ -321,7 +321,7 @@ with tempfile.TemporaryDirectory() as tmp:
     df9.to_csv(fp, index=False)
     with contextlib.redirect_stdout(io.StringIO()):
         m4 = rp.run_manifest(files=[fp], seed=7, results={"ATT": base6["overall"]}, path=str(Path(tmp) / "m.json"))
-    back = json.loads((Path(tmp) / "m.json").read_text())
+    back = json.loads((Path(tmp) / "m.json").read_text(encoding="utf-8"))
 check("manifest: file hash, versions, seed and results written to JSON",
       len(back["files"][str(fp)]) == 64 and back["packages"]["numpy"] and back["seed"] == 7
       and set(back["results"]["ATT"]) <= {"estimate", "se", "ci_low", "ci_high", "p", "n"}
@@ -334,8 +334,8 @@ check("cross_check: agree within 1 SE, disagree beyond it, exact agreement witho
       c1["agree"] and not c2["agree"] and c2["warnings"] and c3["agree"])
 
 # ---------------------------------------------------------------- 10. instructions
-skill = (ROOT / "econometrics" / "SKILL.md").read_text()
-rules = (ROOT / "econometrics" / "references" / "interpretation-rules.md").read_text()
+skill = (ROOT / "econometrics" / "SKILL.md").read_text(encoding="utf-8")
+rules = (ROOT / "econometrics" / "references" / "interpretation-rules.md").read_text(encoding="utf-8")
 check("SKILL.md: SKILL_DIR defaults to the user's clone through ECONOMETRICS_SKILL_DIR, never a sandbox path",
       'ECONOMETRICS_SKILL_DIR' in skill and "/mnt/" not in skill and "/home/claude" not in skill)
 check("rules: the Basel traffic light is stated for 99% VaR (2.5 expected), 97.5% expects 6.25",

@@ -36,6 +36,7 @@ from scipy import stats
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.tsa.stattools import adfuller, kpss
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
 ALPHA = 0.05
 

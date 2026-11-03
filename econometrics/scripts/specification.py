@@ -29,6 +29,7 @@ import pandas as pd
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from scipy import stats
+import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
 ALPHA = 0.05
 _INTERCEPT = ("Intercept", "const")

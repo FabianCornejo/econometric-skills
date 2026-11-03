@@ -24,6 +24,7 @@ import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "econometrics" / "scripts"))
+import _console  # noqa: E402,F401  (Windows-safe console output, see econometrics/scripts/_console.py)
 warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd

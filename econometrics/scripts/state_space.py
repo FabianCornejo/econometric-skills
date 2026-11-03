@@ -27,6 +27,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from scipy import optimize
+import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
 
 def kalman_regression(y, x, delta: float = 1e-4, R: float | None = None, init: int = 20,
