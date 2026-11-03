@@ -2,6 +2,8 @@
 Environment check and setup for the econometrics skill, the same on Windows, macOS and Linux.
 
     python setup_env.py --check      report Python version, missing or outdated packages, the skill folder
+                                     and the command that runs this Python ("Run scripts with:"; on
+                                     Windows usually 'py -X.Y', since 'python' may be the Store alias)
     python setup_env.py --install    install what is missing (plain pip first; adds --break-system-packages
                                      only if pip refuses because the system Python is externally managed)
     python setup_env.py --skill-dir  print the folder that scripts should use as SKILL_DIR
@@ -13,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from importlib import metadata
@@ -66,6 +69,54 @@ def recommended_skill_dir() -> Path:
     return SKILL_DIR
 
 
+def _same_file(a, b) -> bool:
+    if not a or not b:
+        return False
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except (OSError, ValueError):
+        return False
+
+
+def _py_launcher_exe(tag: str):
+    """The interpreter that the Windows 'py -X.Y' launcher starts, or None."""
+    try:
+        r = subprocess.run(["py", f"-{tag}", "-c", "import sys; print(sys.executable)"],
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def run_command(exe=None, which=shutil.which, os_name=os.name, launcher=_py_launcher_exe, version=None) -> str:
+    """A command that starts this Python from a terminal, for instructions given to the user.
+
+    On Windows, 'python' and 'python3' often open the Microsoft Store alias ("Python was not found")
+    even with Python installed, so the 'py -X.Y' launcher comes first when it starts this same
+    interpreter (it does not inside a virtual environment); it works in PowerShell, cmd and Git Bash.
+    Then 'python' or 'python3' when they are this interpreter; otherwise the quoted full path."""
+    exe = exe or sys.executable
+    v = version or sys.version_info
+    tag = f"{v[0]}.{v[1]}"
+    if os_name == "nt" and which("py") and _same_file(launcher(tag), exe):
+        return f"py -{tag}"
+    for name in ("python", "python3"):
+        if _same_file(which(name), exe):
+            return name
+    return f'"{exe}"' if " " in exe else exe
+
+
+def store_alias_note(exe=None, which=shutil.which, os_name=os.name) -> str:
+    """A warning when 'python' on this Windows machine is the Microsoft Store alias, not this Python."""
+    if os_name != "nt":
+        return ""
+    found = which("python")
+    if found and "windowsapps" in found.lower() and not _same_file(found, exe or sys.executable):
+        return ("'python' on this machine opens the Microsoft Store alias, not this Python "
+                "(it prints 'Python was not found'): use the command above.")
+    return ""
+
+
 def install(reqs: list[str]) -> bool:
     base = [sys.executable, "-m", "pip", "install", "-q", *reqs]
     r = subprocess.run(base, capture_output=True, text=True)
@@ -76,8 +127,8 @@ def install(reqs: list[str]) -> bool:
         if r.returncode == 0:
             return True
     sys.stderr.write(r.stderr[-2000:])
-    print("pip could not install the packages. Create a virtual environment (python -m venv .venv), activate it "
-          "and run this script again with --install.")
+    print(f"pip could not install the packages. Create a virtual environment ({run_command()} -m venv .venv), "
+          "activate it and run this script again with --install.")
     return False
 
 
@@ -86,6 +137,10 @@ def report(reqs: list[str]) -> None:
     print(f"Python {sys.version.split()[0]} ({sys.executable}): "
           + ("ok" if ok_py else f"TOO OLD, the skill needs {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or later"))
     print("Packages: " + ("all present" if not reqs else "missing or outdated: " + ", ".join(reqs)))
+    print(f"Run scripts with: {run_command()}")
+    note = store_alias_note()
+    if note:
+        print(f"  note: {note}")
     rec = recommended_skill_dir()
     print(f"Skill folder for scripts: {rec}")
     env = os.environ.get("ECONOMETRICS_SKILL_DIR")

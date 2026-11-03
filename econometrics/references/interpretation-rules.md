@@ -59,7 +59,7 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 - **Robust Wald tests with many restrictions** (dozens of cells or groups) over-reject with their χ² reference under heteroskedasticity; use a wild bootstrap imposed under the null (as `ccc_test` does by default) or say that the p-value is anticonservative.
 - **Basel traffic light**: the zones (green 0–4, yellow 5–9, red ≥ 10 violations in 250 days) and the 2.5 expected violations belong to the **99%** VaR. At 97.5% the expectation is 6.25 violations in 250 days and the traffic light does not apply; FRTB's desk-level backtesting sets its own limits at both levels (desks lose model approval with more than 12 exceptions at 99% or 30 at 97.5% in the last 250 days; Basel MAR32 — confirm the local rule).
 
-Script skeleton for every deliverable (v2.3.2). The user should run it as received, with no paths to edit and no variables to set:
+Script skeleton for every deliverable (v2.3.2; install message v2.3.5). The user should run it as received, with no paths to edit and no variables to set:
 
 ```python
 import os, sys
@@ -83,8 +83,11 @@ SKILL_DIR = _skill_dir()
 sys.path.insert(0, f"{SKILL_DIR}/scripts")
 try:
     import causal, reporting   # the modules this script uses
-except ModuleNotFoundError as e:
-    sys.exit(f"Missing Python package '{e.name}'. Run once:  python \"{SKILL_DIR}/scripts/setup_env.py\" --install")
+except ModuleNotFoundError as e:   # name a command that starts THIS Python ('python' may be the Windows Store alias)
+    import shutil
+    py = (f"py -{sys.version_info[0]}.{sys.version_info[1]}" if os.name == "nt" and sys.prefix == sys.base_prefix
+          and shutil.which("py") else f'"{sys.executable}"')
+    sys.exit(f"Missing Python package '{e.name}'. Run once:  {py} \"{SKILL_DIR}/scripts/setup_env.py\" --install")
 ```
 
 # ... then load data (or simulate data with the same structure), estimate, diagnose, and end with
