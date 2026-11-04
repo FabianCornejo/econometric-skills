@@ -35,10 +35,14 @@ Every check you request names the function of this skill that runs it (`estimati
 - [ ] SEs robust to heteroskedasticity; clustered at the level where the regressor of interest varies; number of clusters reported; wild bootstrap with few clusters? With few **treated** clusters (a policy adopted by a handful of states), also randomization inference (`causal.randomization_inference`): the wild bootstrap itself becomes unreliable when treated clusters are very few.
 - [ ] Time series: HAC SEs, stationarity, spurious regression (R² > DW)?
 - [ ] Multiple testing: how many outcomes, subgroups, specifications were tried?
+- [ ] "We do not reject, therefore H0 is true" or "no difference"? (Compatible with H0 is not evidence for it; ask for the interval and the power, `inference.power_curve`.)
+- [ ] Two means compared with a pooled t when variances and group sizes differ, or paired data treated as independent? (`inference.two_sample`.) A proportion near 0 or 1 with a Wald interval? (`inference.proportion_ci`.) Variance tests or F tests on heavy-tailed data?
+- [ ] A crude cross-table read causally when a third variable could reverse it (Simpson)? (`inference.contingency(..., strata=)`.)
 - [ ] Heterogeneity claims backed by a test (BLP/GATES or pre-specified interactions), not by picking subgroups?
 
 **Specification and data**
 - [ ] Functional form checked (RESET, residual plots); units and transformations correct; elasticities read correctly?
+- [ ] Odds ratios, log coefficients and dummies in log models translated with the exact formulas (an odds ratio of 1.39 is +39%; a dummy b in a log model is 100 (e^b - 1)%)? Excess kurtosis (Excel KURT) read as plain kurtosis? Goodness-of-fit df reduced for estimated parameters?
 - [ ] Missing data handled and N reported per model; outliers and influential points checked?
 - [ ] Nominal vs real, seasonality, breaks, frequency alignment?
 - [ ] Look-ahead in forecasts, signals or risk models?

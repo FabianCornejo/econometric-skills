@@ -2,6 +2,17 @@
 
 Use to go deeper on a topic beyond this skill: proofs, worked examples, test variants. If the user has their own material (books, lecture notes, course slides) in a folder or connector available in the session, prefer consulting it.
 
+## Statistics foundations (Module 0)
+- Tamhane and Dunlop, *Statistics and Data Analysis: From Elementary to Intermediate* (2000); Bussab and Morettin, *Estatística Básica* — probability, distributions, sampling, estimation and tests (the Insper MPE statistics course).
+- Casella and Berger, *Statistical Inference* (2nd ed., 2002) — estimators, likelihood, Fisher information, tests (advanced level).
+- Brown, Cai and DasGupta (2001), "Interval estimation for a binomial proportion", *Statistical Science* — why the Wald interval fails; Wilson (1927); Clopper and Pearson (1934); Agresti and Coull (1998); Newcombe (1998), "Interval estimation for the difference between independent proportions", *Statistics in Medicine*.
+- Welch (1947), "The generalization of Student's problem when several different population variances are involved", *Biometrika*; Brown and Forsythe (1974), "Robust tests for the equality of variances", *JASA*.
+- Shapiro and Wilk (1965), *Biometrika*; Lilliefors (1967), *JASA*; Jarque and Bera (1987), *International Statistical Review*.
+- Agresti, *Categorical Data Analysis* (3rd ed., 2013) — chi-square tests, Fisher, odds ratios, Mantel-Haenszel, Breslow-Day.
+- Hollander, Wolfe and Chicken, *Nonparametric Statistical Methods* (3rd ed., 2014) — Wilcoxon, Mann-Whitney, Hodges-Lehmann intervals.
+- Holm (1979), *Scandinavian Journal of Statistics*; Benjamini and Hochberg (1995), *JRSS B*; Benjamini and Yekutieli (2001), *Annals of Statistics* — multiple testing.
+- Wasserstein and Lazar (2016), "The ASA statement on p-values", *The American Statistician* — what a p-value is and is not.
+
 ## General econometrics (regression, inference, diagnostics)
 - Wooldridge, *Introductory Econometrics: A Modern Approach* — the standard teaching reference; heteroskedasticity (ch. 8), specification (ch. 9), IV (ch. 15), simultaneous equations (ch. 16), limited dependent variables (ch. 17).
 - Greene, *Econometric Analysis* — comprehensive reference for estimators and tests.

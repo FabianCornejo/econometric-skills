@@ -10,6 +10,25 @@ from linearmodels.iv import IV2SLS, IVLIML, IVGMM
 from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 ```
 
+## Statistics foundations (`inference.py`)
+
+| Stata | R | Python (skill) |
+|---|---|---|
+| `summarize x, detail` | `summary(x)`; `e1071::kurtosis` | `inference.describe_dist(x)` (both kurtosis conventions) |
+| `ttest x == 10` | `t.test(x, mu = 10)` | `inference.one_sample(x, 10)` |
+| `ttest x, by(g) unequal` | `t.test(x ~ g)` (Welch is R's default) | `inference.two_sample(x1, x2)` |
+| `ttest x, by(g)` | `t.test(x ~ g, var.equal = TRUE)` | `inference.two_sample(x1, x2, equal_var=True)` |
+| `ttest a == b` | `t.test(a, b, paired = TRUE)` | `inference.two_sample(a, b, paired=True)` |
+| `sdtest x, by(g)`; `robvar x, by(g)` | `var.test`; `car::leveneTest(center = median)` | `inference.variance_test(x1, x2)` |
+| `ci proportions x, wilson` | `binom::binom.confint`; `prop.test` | `inference.proportion_ci(k, n)` |
+| `prtest x == .25`; `bitest` | `prop.test`; `binom.test` | `inference.proportion_test(k, n, 0.25)` |
+| `tab r c, chi2 exact V` | `chisq.test`; `fisher.test`; `mantelhaen.test` | `inference.contingency(...)` |
+| `swilk x`; `sktest x` | `shapiro.test`; `nortest::lillie.test` | `inference.normality(x)` |
+| `signrank x = 0`; `ranksum x, by(g)` | `wilcox.test(..., conf.int = TRUE)` | `inference.nonparametric(...)` |
+| `pwcorr x y, sig`; `spearman` | `cor.test(x, y, method = ...)` | `inference.correlation_test(x, y)` |
+| `power twomeans` | `power.t.test` | `inference.power_curve(...)` |
+| (`mtest` options) | `p.adjust` | `inference.adjust_pvalues(p, "holm")` |
+
 ## Regression and tests
 
 | Stata | EViews | Python |
