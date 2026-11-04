@@ -563,7 +563,8 @@ def demo_clt(dist: str = "exponential", n_values=(1, 2, 5, 30, 100), R: int = 40
     tab = pd.DataFrame(rows).set_index("n")
     return {"table": tab, "population": dist,
             "lesson": "The SD of the mean is sigma/sqrt(n) for any n; its distribution turns normal as n grows, faster "
-                      "for symmetric populations. Until it does, nominal 95% t intervals cover less than 95%."}
+                      "for symmetric populations. Until it does, nominal 95% t intervals for a skewed population cover "
+                      "less than 95%, and they approach 95% only slowly."}
 
 
 def demo_ci_coverage(n_values=(10, 30, 100), R: int = 4000, alpha: float = ALPHA, seed: int = 0) -> dict:
@@ -660,6 +661,7 @@ def demo_multiple_testing(m: int = 20, n: int = 50, R: int = 1000, share_true: f
                          "power": float(np.mean(acc["power"])) if acc["power"] else np.nan})
     tab = pd.DataFrame(rows).set_index(["scenario", "method"])
     return {"table": tab, "m": m,
-            "lesson": f"With {m} true nulls at 5% each, the chance of at least one 'significant' result is about "
-                      f"1 - 0.95^{m} = {1 - 0.95 ** m:.0%}. Holm keeps that chance at 5% (more power than Bonferroni); "
-                      "Benjamini-Hochberg keeps the share of false discoveries at 5% and keeps more power."}
+            "lesson": f"With {m} true nulls tested at {alpha:.0%} each, the chance of at least one 'significant' result "
+                      f"is about 1 - (1 - {alpha:g})^{m} = {1 - (1 - alpha) ** m:.0%}. Holm keeps that chance at most "
+                      f"{alpha:.0%} (with more power than Bonferroni); Benjamini-Hochberg keeps the expected share of false "
+                      f"discoveries at most {alpha:.0%} and keeps more power."}

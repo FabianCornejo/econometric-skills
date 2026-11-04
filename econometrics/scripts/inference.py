@@ -74,8 +74,8 @@ def _p_value(stat, dist, alternative):
     """p-value of `stat` under a scipy distribution, for the given alternative."""
     if alternative == "two-sided":
         if getattr(dist, "dist", None) is not None and dist.dist.name in ("chi2", "f"):
-            return float(min(1.0, 2 * min(dist.cdf(stat), dist.sf(stat))))
-        return float(min(1.0, 2 * dist.sf(abs(stat))))
+            return float(np.minimum(1.0, 2 * np.minimum(dist.cdf(stat), dist.sf(stat))))
+        return float(np.minimum(1.0, 2 * dist.sf(abs(stat))))
     return float(dist.sf(stat) if alternative == "greater" else dist.cdf(stat))
 
 
@@ -200,13 +200,16 @@ def one_sample(x, mu0: float = 0.0, sigma: float | None = None, alternative: str
 
     t test with the sample SD (df = n - 1); z test only when the population sigma is truly known.
     The CI matches the alternative: two-sided, or a one-sided bound for 'greater'/'less'.
-    Effect size: Cohen's d = (mean - mu0) / s and Hedges' g (small-sample corrected), with an approximate CI."""
+    Effect size: Cohen's d = (mean - mu0) / s and Hedges' g (small-sample corrected), with an approximate
+    two-sided CI (whatever the alternative)."""
     _check_alt(alternative)
     a, n_missing = _clean(x)
     n = a.size
     if n < 2:
         raise ValueError("one_sample needs at least 2 values")
     m, s = a.mean(), a.std(ddof=1)
+    if s == 0 and sigma is None:
+        raise ValueError("all values are equal: no variation, so no t test or interval")
     if sigma is not None:
         se = sigma / np.sqrt(n)
         dist = stats.norm()
@@ -267,6 +270,8 @@ def two_sample(x, y, paired: bool = False, equal_var: bool = False, alternative:
         if n < 2:
             raise ValueError("need at least 2 complete pairs")
         m, s = dlt.mean(), dlt.std(ddof=1)
+        if s == 0:
+            raise ValueError("all paired differences are equal: no variation, so no t test or interval")
         se, df = s / np.sqrt(n), n - 1
         stat = m / se
         p = _p_value(stat, stats.t(df), alternative)
@@ -292,6 +297,8 @@ def two_sample(x, y, paired: bool = False, equal_var: bool = False, alternative:
     m1, m2 = a.mean(), b.mean()
     v1, v2 = a.var(ddof=1), b.var(ddof=1)
     diff = m1 - m2
+    if v1 == 0 or v2 == 0:
+        raise ValueError("a sample has no variation: the t tests are not defined; describe the groups instead")
     se_w = np.sqrt(v1 / n1 + v2 / n2)
     df_w = (v1 / n1 + v2 / n2) ** 2 / ((v1 / n1) ** 2 / (n1 - 1) + (v2 / n2) ** 2 / (n2 - 1))
     sp2 = ((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2)
@@ -355,6 +362,8 @@ def variance_test(x, y=None, sigma2: float | None = None, groups: list | None = 
     a, _ = _clean(x)
     n1 = a.size
     v1 = a.var(ddof=1)
+    if v1 == 0:
+        raise ValueError("x has no variation")
     if y is None:
         df = n1 - 1
         lo = df * v1 / stats.chi2.ppf(1 - alpha / 2, df)
@@ -380,6 +389,8 @@ def variance_test(x, y=None, sigma2: float | None = None, groups: list | None = 
         b, _ = _clean(y)
         n2 = b.size
         v2 = b.var(ddof=1)
+        if v2 == 0:
+            raise ValueError("y has no variation")
         d1, d2 = n1 - 1, n2 - 1
         f = v1 / v2
         p = _p_value(f, stats.f(d1, d2), alternative)
@@ -474,8 +485,8 @@ def proportion_test(count, nobs, value: float | None = None, alternative: str = 
     zc2, zc1 = stats.norm.ppf(1 - alpha / 2), stats.norm.ppf(1 - alpha)
     if np.ndim(count) == 0:
         x, n = int(count), int(nobs)
-        if value is None:
-            raise ValueError("give value (the proportion under H0) for a one-sample test")
+        if value is None or not 0 < value < 1:
+            raise ValueError("give value, the proportion under H0, strictly between 0 and 1")
         p = x / n
         se0 = np.sqrt(value * (1 - value) / n)
         z = (p - value) / se0
@@ -500,10 +511,15 @@ def proportion_test(count, nobs, value: float | None = None, alternative: str = 
     se0 = np.sqrt(pp * (1 - pp) * (1 / n[0] + 1 / n[1]))
     z = diff / se0 if se0 > 0 else np.nan
     pz = _p_value(z, stats.norm(), alternative)
-    l1, u1 = _wilson(x[0], n[0], zc2)
-    l2, u2 = _wilson(x[1], n[1], zc2)
+    zc = zc2 if alternative == "two-sided" else zc1
+    l1, u1 = _wilson(x[0], n[0], zc)
+    l2, u2 = _wilson(x[1], n[1], zc)
     lo = diff - np.sqrt((p1 - l1) ** 2 + (u2 - p2) ** 2)
     hi = diff + np.sqrt((u1 - p1) ** 2 + (p2 - l2) ** 2)
+    if alternative == "greater":
+        hi = 1.0
+    elif alternative == "less":
+        lo = -1.0
     table = np.array([[x[0], n[0] - x[0]], [x[1], n[1] - x[1]]])
     alt_f = {"two-sided": "two-sided", "greater": "greater", "less": "less"}[alternative]
     p_fisher = float(stats.fisher_exact(table, alternative=alt_f).pvalue)
@@ -583,6 +599,8 @@ def chisq_fit(data=None, dist: str | None = None, observed=None, expected_probs=
             else:
                 if n_trials is None:
                     raise ValueError("binomial needs n_trials")
+                if k_max > n_trials:
+                    raise ValueError(f"a value ({k_max}) exceeds n_trials ({n_trials})")
                 pr = x.mean() / n_trials
                 fitted = stats.binom(n_trials, pr)
                 name, a, params = f"Binomial(n = {n_trials}, p = {pr:.4g})", 1, {"p": pr}
@@ -632,6 +650,10 @@ def chisq_fit(data=None, dist: str | None = None, observed=None, expected_probs=
     w.append(f"df = k - a - 1 = {k} - {a} - 1 = {df}: each parameter estimated from the data costs one degree of freedom.")
     if pooled:
         w.append(f"cells with expected count below {min_expected:g} were pooled with a neighbour.")
+    if observed is None and a > 0:
+        w.append("the parameters were estimated from the raw data, not from the cell counts: the statistic then lies "
+                 f"between chi2({df}) and chi2({k - 1}) (Chernoff-Lehmann), so the p-value can be somewhat too small"
+                 + ("; for continuous data prefer normality() and a QQ plot." if dist in ("normal", "exponential") else "."))
     if (exp < 1).any() or (exp < 5).mean() > 0.2:
         w.append("after pooling, more than 20% of cells still expect fewer than 5: the chi-square approximation is rough.")
     if show:
@@ -797,7 +819,13 @@ def nonparametric(x, y=None, paired: bool = False, mu0: float = 0.0, alternative
     Mann-Whitney tests whether one distribution tends to give larger values; it is a test of medians or means
     only if the two shapes are the same. CIs use the normal approximation for the order statistics."""
     _check_alt(alternative)
-    z = stats.norm.ppf(1 - alpha / 2)
+    z = stats.norm.ppf(1 - alpha / 2) if alternative == "two-sided" else stats.norm.ppf(1 - alpha)
+
+    def _bounds(sorted_vals, k, m):
+        lo, hi = float(sorted_vals[k - 1]), float(sorted_vals[m - k])
+        return (lo, hi) if alternative == "two-sided" else ((lo, np.inf) if alternative == "greater" else (-np.inf, hi))
+
+    small = False
     if y is None or paired:
         if y is None:
             d, _ = _clean(np.asarray(x, float) - mu0)
@@ -815,12 +843,13 @@ def nonparametric(x, y=None, paired: bool = False, mu0: float = 0.0, alternative
         ranks = stats.rankdata(np.abs(dn))
         tp, tm = ranks[dn > 0].sum(), ranks[dn < 0].sum()
         rbc = (tp - tm) / (tp + tm)
-        walsh = (dn[:, None] + dn[None, :])[np.triu_indices(n)]
+        walsh = ((dn[:, None] + dn[None, :]) / 2)[np.triu_indices(n)]
         walsh.sort()
         m = walsh.size
         k = int(np.floor(m / 2 - z * np.sqrt(n * (n + 1) * (2 * n + 1) / 24)))
+        small = k < 1
         k = max(k, 1)
-        ci = (float(walsh[k - 1]), float(walsh[m - k])) if k <= m - k + 1 else (np.nan, np.nan)
+        ci = _bounds(walsh, k, m)
         est = float(np.median(walsh)) + (mu0 if y is None else 0.0)
         if y is None:
             ci = (ci[0] + mu0, ci[1] + mu0)
@@ -846,8 +875,9 @@ def nonparametric(x, y=None, paired: bool = False, mu0: float = 0.0, alternative
         diffs.sort()
         m = diffs.size
         k = int(np.floor(n1 * n2 / 2 - z * np.sqrt(n1 * n2 * (n1 + n2 + 1) / 12)))
+        small = k < 1
         k = max(k, 1)
-        ci = (float(diffs[k - 1]), float(diffs[m - k])) if (n1 * n2 <= 4_000_000 and k <= m - k + 1) else (np.nan, np.nan)
+        ci = _bounds(diffs, k, m) if n1 * n2 <= 4_000_000 else (np.nan, np.nan)
         res = _result("location shift x - y (Hodges-Lehmann)", float(np.median(diffs)), np.nan, ci, float(mw.pvalue),
                       n1 + n2, "Mann-Whitney U test (Wilcoxon rank-sum)", alpha,
                       h0="P(X > Y) = P(Y > X)", statistic=u1,
@@ -855,6 +885,11 @@ def nonparametric(x, y=None, paired: bool = False, mu0: float = 0.0, alternative
         res["warnings"].append("the test compares whole distributions; read the shift as a difference of medians "
                                "only if the two shapes are similar.")
         extra = [f"U = {u1:.4g}; P(X > Y) + P(X = Y)/2 = {ps:.3f}; rank-biserial correlation = {rbc:.3f}"]
+    if small:
+        res["warnings"].append(f"the sample is too small for a distribution-free {1 - alpha:.0%} interval: the bounds "
+                               "shown are the most extreme possible and cover less than the stated level.")
+    if alternative != "two-sided":
+        res["warnings"].append("one-sided test: the interval is a one-sided bound matching the alternative.")
     if show:
         _print(res, extra)
     return res
@@ -956,8 +991,11 @@ def adjust_pvalues(pvalues, method: str = "holm", alpha: float = ALPHA) -> pd.Da
     """Adjust p-values for multiple tests. bonferroni and holm control the family-wise error rate (the chance
     of any false rejection; Holm is uniformly more powerful than Bonferroni); bh (Benjamini-Hochberg) controls
     the false discovery rate under independence or positive dependence; by (Benjamini-Yekutieli) under any
-    dependence. Returns the adjusted p-values and the rejections at alpha, in the input order."""
-    p = np.asarray(pvalues, float)
+    dependence. Returns the adjusted p-values and the rejections at alpha, in the input order; missing p-values
+    stay missing and do not count in m."""
+    p_all = np.asarray(pvalues, float)
+    ok = ~np.isnan(p_all)
+    p = p_all[ok]
     m = p.size
     order = np.argsort(p)
     ps = p[order]
@@ -971,7 +1009,9 @@ def adjust_pvalues(pvalues, method: str = "holm", alpha: float = ALPHA) -> pd.Da
         adj_s = np.minimum(np.minimum.accumulate(raw[::-1])[::-1], 1)
     else:
         raise ValueError("method must be 'bonferroni', 'holm', 'bh' or 'by'")
-    adj = np.empty(m)
-    adj[order] = adj_s
-    idx = pvalues.index if isinstance(pvalues, pd.Series) else range(m)
-    return pd.DataFrame({"p": p, "p_adjusted": adj, "reject": adj < alpha}, index=idx)
+    adj_ok = np.empty(m)
+    adj_ok[order] = adj_s
+    adj = np.full(p_all.size, np.nan)
+    adj[ok] = adj_ok
+    idx = pvalues.index if isinstance(pvalues, pd.Series) else range(p_all.size)
+    return pd.DataFrame({"p": p_all, "p_adjusted": adj, "reject": np.where(ok, adj < alpha, False)}, index=idx)

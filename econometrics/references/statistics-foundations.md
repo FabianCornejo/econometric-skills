@@ -19,7 +19,7 @@ The layer under every regression: probability, distributions, sampling, estimati
 
 ## 1. Probability
 
-- **Rules.** P(A or B) = P(A) + P(B) - P(A and B); conditional P(A|B) = P(A and B) / P(B); independence means P(A and B) = P(A) P(B), equivalently P(A|B) = P(A). Mutually exclusive events are *dependent* (one rules out the other).
+- **Rules.** P(A or B) = P(A) + P(B) - P(A and B); conditional P(A|B) = P(A and B) / P(B); independence means P(A and B) = P(A) P(B), equivalently P(A|B) = P(A). Mutually exclusive events with positive probabilities are *dependent* (one rules out the other).
 - **Total probability and Bayes.** P(A) = sum_i P(A|B_i) P(B_i) over a partition; P(B|A) = P(A|B) P(B) / P(A). Typical uses: credit class given a default, condition given a positive test, fraud given an alert. The base rate decides: a 95%-accurate test for a condition with 1% prevalence gives a positive predictive value near 16%.
 - **Randomized response** (sensitive questions): with a known randomization probability, the share answering yes identifies the sensitive share (for a fair coin that sends half the people to an innocuous yes/no question, theta = 2 * share_yes - 0.5 when the innocuous yes rate is 1/2).
 - **Simpson's paradox.** An association can reverse once a third variable is held fixed (treatment A better within small and large kidney stones, worse overall, because A was used on the harder cases). The crude comparison is confounded; report the stratified one (`inference.contingency(..., strata=)`, Mantel-Haenszel). It is the categorical face of omitted-variable bias (`ols-regression.md` §14).
@@ -47,7 +47,7 @@ The layer under every regression: probability, distributions, sampling, estimati
 ## 3. Sampling distributions and the central limit theorem
 
 - A statistic computed from a random sample has its own distribution across samples. For the mean: E(X̄) = mu and SD(X̄) = sigma / sqrt(n), for any population, which is why precision grows with sqrt(n), not n.
-- **CLT**: for i.i.d. draws with finite variance, (X̄ - mu) / (sigma / sqrt(n)) tends to N(0, 1). How fast depends on skewness: a few observations for symmetric data, hundreds for very skewed ones (`simulation.demo_clt` shows the t interval's coverage climbing toward 95%). Dependent data (time series) need the long-run variance instead of sigma^2 (`time-series.md`).
+- **CLT**: for i.i.d. draws with finite variance, (X̄ - mu) / (sigma / sqrt(n)) tends to N(0, 1). How fast depends on skewness: a few observations for symmetric data, hundreds for very skewed ones (`simulation.demo_clt` shows the t interval covering less than 95% for a skewed population until n is large). Dependent data (time series) need the long-run variance instead of sigma^2 (`time-series.md`).
 - **Normal samples**: (n - 1) S^2 / sigma^2 ~ chi-square(n - 1); (X̄ - mu) / (S / sqrt(n)) ~ t(n - 1); S1^2 / S2^2 over sigma1^2 / sigma2^2 ~ F(n1 - 1, n2 - 1). The t result is robust to moderate non-normality; the chi-square and F results for variances are not.
 
 ## 4. Estimators and how to judge them
@@ -68,10 +68,10 @@ The layer under every regression: probability, distributions, sampling, estimati
 ## 6. Hypothesis tests
 
 - **Logic.** H0 is the claim tested (no effect, a given value); the test statistic measures the distance from H0 in standard errors; the p-value is the probability, *if H0 were true*, of a statistic at least as extreme as the one observed. It is not the probability that H0 is true, and not the size of the effect.
-- **Errors.** Type I (reject a true H0) has probability alpha, chosen in advance; type II (keep a false H0) has probability beta; power = 1 - beta depends on the true effect, the noise, n and alpha (`inference.power_curve`). A study with low power that does not reject has learned little.
+- **Errors.** Type I (reject a true H0) has probability alpha, chosen in advance; type II (fail to reject a false H0) has probability beta; power = 1 - beta depends on the true effect, the noise, n and alpha (`inference.power_curve`). A study with low power that does not reject has learned little.
 - **Never "accept H0".** Not rejecting means the data are compatible with H0 and with every value inside the interval. Write "does not reject at 5%", give the interval and, when the question is "is there no effect?", the effect the study could have detected (MDE) or an equivalence test against a margin that matters.
-- **One- vs two-sided**: one-sided only when the direction was fixed before seeing the data; the one-sided p is half the two-sided one when the estimate falls on the predicted side.
-- **Tests and intervals agree**: a two-sided test at alpha rejects mu = mu0 exactly when mu0 lies outside the 1 - alpha interval.
+- **One- vs two-sided**: one-sided only when the direction was fixed before seeing the data; for symmetric statistics (t, z) the one-sided p is half the two-sided one when the estimate falls on the predicted side (not for exact binomial, Fisher, chi-square or F tests).
+- **Tests and intervals agree** when the interval inverts the same test: a two-sided t test at alpha rejects mu = mu0 exactly when mu0 lies outside the 1 - alpha t interval. Different methods (an exact binomial p-value next to a Wilson interval) can disagree near the boundary.
 - **Statistical vs practical significance**: with large n tiny effects reject; with small n large effects do not. Report magnitude, interval and units (`interpretation-rules.md`).
 
 ## 7. Which test? (decision table)

@@ -145,6 +145,10 @@ ref = confint_proportions_2indep(81, 87, 234, 270, method="newcomb")
 zz, pp = proportions_ztest([81, 234], [87, 270])
 check("proportion_test two samples: Newcombe CI equals statsmodels", close([r["ci_low"], r["ci_high"]], ref, 1e-7))
 check("proportion_test two samples: pooled z equals statsmodels", close([r["statistic"], r["p"]], [zz, pp]))
+r1 = quiet(inf.proportion_test, [81, 234], [87, 270], alternative="greater")
+ref90 = confint_proportions_2indep(81, 87, 234, 270, method="newcomb", alpha=0.10)
+check("proportion_test one-sided: Newcombe lower bound at 95% one-sided, upper bound 1",
+      close(r1["ci_low"], ref90[0], 1e-7) and r1["ci_high"] == 1.0)
 check("n_for_proportion: 3 points at 95% needs 1068", inf.n_for_proportion(0.03)["n"] == 1068)
 check("n_for_proportion: finite population of 10,000 needs 965",
       inf.n_for_proportion(0.03, population=10_000)["n"] == 965)
@@ -164,6 +168,27 @@ ref = stats.chisquare(die)
 check("chisq_fit with given probabilities equals scipy chisquare", close([r["statistic"], r["p"]], [ref.statistic, ref.pvalue]))
 r = quiet(inf.chisq_fit, rng.exponential(size=500), "normal")
 check("chisq_fit: exponential data reject a fitted normal", r["p"] < 1e-4)
+
+try:
+    inf.chisq_fit(np.array([0, 1, 2, 7]), "binomial", n_trials=5, show=False)
+    raised = False
+except ValueError:
+    raised = True
+check("chisq_fit binomial: a value above n_trials is an error, not silently dropped", raised)
+r = quiet(inf.chisq_fit, kicks, "poisson")
+check("chisq_fit: warns that parameters from the raw data make the p-value somewhat too small",
+      any("Chernoff-Lehmann" in w for w in r["warnings"]))
+
+# ---------------------------------------------------------------- degenerate data
+errs = 0
+for f, args in [(inf.one_sample, ([3, 3, 3, 3],)), (inf.two_sample, ([1, 1, 1], [2, 2, 2])),
+                (inf.variance_test, ([1, 2, 3], [5, 5, 5]))]:
+    try:
+        f(*args, show=False)
+    except ValueError:
+        errs += 1
+check("no variation: one_sample, two_sample and variance_test stop instead of reporting p = 0 or 1", errs == 3)
+check("a NaN p-value is not turned into 1", np.isnan(inf._p_value(np.nan, stats.norm(), "two-sided")))
 
 # ---------------------------------------------------------------- normality
 gauss = np.random.default_rng(7).normal(size=200)
@@ -217,9 +242,25 @@ check("nonparametric: the Hodges-Lehmann CI covers the true shift about 95% (t3 
       f"{cover:.3f}")
 one = rng.normal(0.3, 1, 25)
 r = quiet(inf.nonparametric, one)
-walsh = (one[:, None] + one[None, :])[np.triu_indices(25)]
+walsh = [(one[i] + one[j]) / 2 for i in range(25) for j in range(i, 25)]      # Walsh averages, written out
 check("nonparametric one sample: Wilcoxon p equals scipy, pseudo-median of Walsh averages",
       close(r["p"], stats.wilcoxon(one).pvalue) and close(r["estimate"], np.median(walsh)))
+r = quiet(inf.nonparametric, [1.2, 2.3, 0.5, 3.1, 1.7, 2.9, 0.8, 1.9])
+check("nonparametric one sample: estimate inside the data range (Walsh averages are means, not sums)",
+      0.5 <= r["estimate"] <= 3.1 and close(r["estimate"], np.median(
+          [(a_ + b_) / 2 for i, a_ in enumerate([1.2, 2.3, 0.5, 3.1, 1.7, 2.9, 0.8, 1.9])
+           for b_ in [1.2, 2.3, 0.5, 3.1, 1.7, 2.9, 0.8, 1.9][i:]])))
+gen = np.random.default_rng(12)
+cover = np.mean([(lambda q: q["ci_low"] <= 0.5 <= q["ci_high"])(
+    quiet(inf.nonparametric, gen.standard_t(3, 30) + 0.5)) for _ in range(300)])
+check("nonparametric one sample: the signed-rank CI covers the true centre about 95% (t3 data)",
+      0.91 <= cover <= 0.985, f"{cover:.3f}")
+r2 = quiet(inf.nonparametric, xa, xb, alpha=0.10)
+r1 = quiet(inf.nonparametric, xa, xb, alternative="greater")
+check("nonparametric one-sided: the lower bound is the two-sided 90% lower bound, the upper is infinite",
+      close(r1["ci_low"], r2["ci_low"]) and np.isinf(r1["ci_high"]))
+check("nonparametric: tiny samples say the interval cannot reach 95%",
+      any("too small" in w for w in quiet(inf.nonparametric, [0.4, 1.1, 0.9, 2.0])["warnings"]))
 
 # ---------------------------------------------------------------- correlation
 cx = rng.normal(size=40)
@@ -259,6 +300,12 @@ for mine, theirs in [("bonferroni", "bonferroni"), ("holm", "holm"), ("bh", "fdr
     rej, padj, _, _ = multipletests(pv, 0.05, theirs)
     good &= close(a_["p_adjusted"], padj) and (a_["reject"].to_numpy() == rej).all()
 check("adjust_pvalues: Bonferroni, Holm, BH and BY equal statsmodels", good)
+pn = pv.copy()
+pn[3] = np.nan
+adj = inf.adjust_pvalues(pn, "bh")
+_, padj, _, _ = multipletests(np.delete(pv, 3), 0.05, "fdr_bh")
+check("adjust_pvalues: a missing p-value stays missing and does not spoil the others",
+      np.isnan(adj["p_adjusted"].iloc[3]) and close(np.delete(adj["p_adjusted"].to_numpy(), 3), padj))
 
 # ---------------------------------------------------------------- verdict wording
 verdicts = []
