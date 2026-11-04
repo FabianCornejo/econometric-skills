@@ -56,8 +56,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/pkg"
           unzip -q dist/econometrics.skill -d "$RUNNER_TEMP/pkg"
-          diff -r -x __pycache__ "$RUNNER_TEMP/pkg/econometrics" econometrics \
-            || { echo "dist/econometrics.skill is stale: rebuild it with 'zip -qrD dist/econometrics.skill econometrics -x \"*__pycache__*\"'"; exit 1; }
+          # statistics/ is the plugin's second entry point (Claude Code only); the app package carries one skill
+          diff -r -x __pycache__ -x statistics "$RUNNER_TEMP/pkg/econometrics" econometrics \
+            || { echo "dist/econometrics.skill is stale: rebuild it with 'zip -qrD dist/econometrics.skill econometrics -x \"*__pycache__*\" \"econometrics/statistics/*\"'"; exit 1; }
+          if unzip -l dist/econometrics.skill | grep -q "econometrics/statistics/"; then echo "dist must not contain statistics/"; exit 1; fi
       - name: Plugin version matches the latest CHANGELOG version
         run: |
           python - <<'PY'
