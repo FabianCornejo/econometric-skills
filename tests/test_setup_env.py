@@ -94,6 +94,106 @@ r = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), "--
 check("--check prints the command to run scripts with", "Run scripts with: " in r.stdout,
       next((l for l in r.stdout.splitlines() if l.startswith("Run scripts")), "")[:90])
 
+# ---------------------------------------------------------------- 1c. optional extras (v2.3.6)
+# Reading or writing .xlsx needs openpyxl. In a clean-install test Claude asked to install the 8 core
+# packages and then ran a separate 'pip install openpyxl' the user had not approved. Optional packages
+# now go through setup_env (--extra), in the same permission question, with a clear message when missing.
+dev = {}
+for line in (ROOT / "requirements-dev.txt").read_text(encoding="utf-8").splitlines():
+    m = re.match(r"^([A-Za-z0-9_.-]+)>=([0-9.]+)", line.strip())
+    if m:
+        dev[m.group(1).lower()] = m.group(2)
+opt = {dist.lower(): v for pkgs in getattr(se, "OPTIONAL", {}).values() for dist, v in pkgs.values()}
+check("extra 'excel' is openpyxl, with the same minimum as requirements-dev.txt",
+      "openpyxl" in opt and all(dev.get(k) == v for k, v in opt.items()), f"{opt} vs dev")
+
+
+class blocked:
+    """Make a module look absent (importlib.util.find_spec returns None, import raises ImportError)."""
+    def __init__(self, name):
+        self.name, self.saved = name, None
+
+    def __enter__(self):
+        self.saved = sys.modules.get(self.name, "absent")
+        sys.modules[self.name] = None
+
+    def __exit__(self, *a):
+        if self.saved == "absent":
+            sys.modules.pop(self.name, None)
+        else:
+            sys.modules[self.name] = self.saved
+
+
+import contextlib
+import importlib.util
+import io
+
+skill_md_text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+with blocked("openpyxl"):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code_plain = se.main(["--check"])
+        code_extra = se.main(["--check", "--extra", "excel"])
+    out = buf.getvalue()
+check("--check names the missing extra and how to get it, without failing the core check",
+      "Optional 'excel'" in out and "--extra excel" in out and code_plain == 0, out.strip().splitlines()[-1][:100])
+check("--check --extra excel exits 1 when openpyxl is missing", code_extra == 1)
+asked = []
+old_install = se.install
+se.install = lambda reqs: asked.append(list(reqs)) or True
+try:
+    with blocked("openpyxl"), contextlib.redirect_stdout(io.StringIO()):
+        se.main(["--install", "--extra", "excel"])
+finally:
+    se.install = old_install
+check("--install --extra excel installs openpyxl (and only what is missing)",
+      asked == [[f"openpyxl>={opt.get('openpyxl')}"]], asked)
+try:
+    with contextlib.redirect_stderr(io.StringIO()):
+        se.main(["--install", "--extra", "nonsense"])
+    bad_extra = False
+except SystemExit as e:
+    bad_extra = e.code == 2
+check("an unknown extra is rejected by the argument parser", bad_extra)
+
+import pandas as pd
+import reporting
+import data_prep
+import diagnostics
+
+
+def message_of(fn):
+    try:
+        fn()
+    except ImportError as e:
+        return str(e)
+    return ""
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    tab = pd.DataFrame({"model": ["(1)", "(2)"], "educ": [0.083, 0.09]}).set_index("model")
+    xlsx = Path(tmp) / "t.xlsx"
+    with blocked("openpyxl"):
+        m_write = message_of(lambda: reporting.export_table(tab, str(xlsx)))
+        xlsx.write_bytes(b"PK\x03\x04 not a real workbook")
+        m_read = message_of(lambda: data_prep.read_any(xlsx))
+        m_cli = message_of(lambda: diagnostics._read(str(xlsx), None))
+    for what, msg in (("reporting.export_table(.xlsx)", m_write), ("data_prep.read_any(.xlsx)", m_read),
+                      ("diagnostics command line with .xlsx", m_cli)):
+        check(f"no openpyxl: {what} stops with the setup_env --extra excel command",
+              "openpyxl" in msg and "setup_env.py" in msg and "--install --extra excel" in msg, msg[:110])
+    xlsx.unlink()
+    if importlib.util.find_spec("openpyxl"):
+        reporting.export_table(tab, str(xlsx))
+        back = data_prep.read_any(xlsx).set_index("model")
+        check("with openpyxl: a table exported to .xlsx reads back unchanged",
+              back.round(6).equals(tab.round(6)), back.to_dict())
+    else:
+        check("openpyxl is installed in the test environment (requirements-dev.txt)", False)
+check("SKILL.md: the permission question lists every package, optional extras included, and installs them via setup_env",
+      "--extra excel" in skill_md_text and "every package" in skill_md_text)
+
 # ---------------------------------------------------------------- 2. the script skeleton
 rules = (SKILL / "references" / "interpretation-rules.md").read_text(encoding="utf-8")
 m = re.search(r"Script skeleton for every deliverable.*?```python\n(.*?)```", rules, re.S)

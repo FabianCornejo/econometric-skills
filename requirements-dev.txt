@@ -3,5 +3,6 @@
 wooldridge>=0.5
 hmmlearn>=0.3
 rdrobust>=1.3
+openpyxl>=3.1          # optional extra 'excel' (.xlsx read/write), tested in tests/test_setup_env.py
 pyyaml>=6.0            # strict check of the SKILL.md header (tests/test_skill_metadata.py)
 csdid>=0.4             # cross-validation of causal.att_gt with covariates against the DRDID port

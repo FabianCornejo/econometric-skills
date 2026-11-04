@@ -75,6 +75,9 @@ def read_any(path, sheet=0, **kw) -> pd.DataFrame:
             return read_spreadsheetml(p)
         if head.lstrip().startswith((b"<html", b"<!doctype", b"<table")):
             return pd.read_html(p)[0]
+        if ext in (".xlsx", ".xlsm"):
+            from setup_env import require_extra   # optional openpyxl (v2.3.6)
+            require_extra("excel", f"Reading {p.name}")
         return pd.read_excel(p, sheet_name=sheet, **kw)
     if ext == ".json":
         obj = json.loads(p.read_text(encoding=_sniff(p)[0]))

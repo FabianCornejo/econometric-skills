@@ -729,6 +729,9 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
 # CLI
 # =============================================================================
 def _read(path, date_col):
+    if path.lower().endswith((".xlsx", ".xlsm")):
+        from setup_env import require_extra   # optional openpyxl (v2.3.6)
+        require_extra("excel", f"Reading {path}")
     df = pd.read_csv(path) if path.lower().endswith(".csv") else pd.read_excel(path)
     if date_col and date_col in df.columns:
         raw = df[date_col].astype(str)
