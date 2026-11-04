@@ -207,11 +207,15 @@ def quantile_regression(df: pd.DataFrame, formula: str, taus=(0.1, 0.25, 0.5, 0.
     se = float(np.std(diffs, ddof=1)) if len(diffs) > 1 else float("nan")
     z = diff0 / se
     valid = converged[lo] and converged[hi] and len(diffs) > 1
-    if B and len(diffs) < 0.9 * B:
-        warns.append(f"only {len(diffs)} of {B} bootstrap replications converged; the equality test rests on those.")
-    if not valid:
-        warns.append(f"the equality test ({test_coef}: tau {hi} minus tau {lo}) is not valid: "
-                     "an end tau or the bootstrap did not converge.")
+    if not B:          # v2.3.8: no bootstrap asked for is not a convergence problem
+        warns.append(f"no bootstrap was asked for (B=0): the equality test ({test_coef}: tau {hi} minus tau {lo}) "
+                     "was not computed; pass B > 0 to test it.")
+    else:
+        if len(diffs) < 0.9 * B:
+            warns.append(f"only {len(diffs)} of {B} bootstrap replications converged; the equality test rests on those.")
+        if not valid:
+            warns.append(f"the equality test ({test_coef}: tau {hi} minus tau {lo}) is not valid: "
+                         "an end tau or the bootstrap did not converge.")
     test = {"estimand": f"{test_coef}: tau {hi} minus tau {lo}", "estimate": float(diff0), "se": se,
             "ci_low": float(diff0 - 1.96 * se), "ci_high": float(diff0 + 1.96 * se),
             "p": float(2 * stats.norm.sf(abs(z))), "n": len(d), "B_used": len(diffs), "valid": bool(valid)}

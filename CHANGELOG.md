@@ -2,6 +2,14 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.3.8 — Delivered scripts skip removed skills; B=0 is not a convergence problem
+
+Two small fixes found in the v2.3.7 validation on Windows. No change to estimators or results.
+
+- **The script skeleton skips Claude Code's trash.** Removing the skill in the Claude app moves the copy synced to Claude Code into `~/.claude/skills/.trash/<id>/econometrics`. The locator searched every `~/.claude/skills/**/econometrics`, newest first, so a user with only the app copy could run a removed version, or an older one trashed after a newer upload (a plugin install was not affected: its copy comes first). The locator now skips hidden folders under `~/.claude/skills`. Scripts delivered before v2.3.8 keep the old locator; regenerate them if the skill was removed from the app. README too.
+- **`quantile_regression` with `B=0`** said "an end tau or the bootstrap did not converge". It now says that no bootstrap was asked for and the equality test was not computed; convergence warnings appear only when there was a bootstrap.
+- New `tests/test_v238.py`: an active synced copy beats a newer trashed one; only a trashed copy gives the one-line "skill not found"; `B=0` gives the plain message and keeps the taus' convergence; `B>0` stays valid (586 checks in total).
+
 ## v2.3.7 — No number from an estimator that did not converge, and independent checks that are independent
 
 Two gaps found while reviewing the deliverable of the v2.3.6 clean-install test (return to education, WAGE1). The headline results were right (the textbook's Example 7.6 reproduced), but: (1) `linear_models.quantile_regression` used statsmodels' default of 1000 iterations and did not check convergence. At tau = 0.1 with eight regressors it stopped at the limit with educ 0.038897; the solution is 0.038610 (reached at 5000 iterations and stable at 20000). The report gave 4.0% instead of 3.9%, with only a footnote about the warning. (2) The agent passed the same OLS computed by statsmodels and by numpy to `reporting.cross_check` and reported it as an independent confirmation, which checks the arithmetic, not the method.
