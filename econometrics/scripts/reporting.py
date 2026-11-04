@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
-SKILL_VERSION = "2.3.5"
+SKILL_VERSION = "2.3.6"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
@@ -129,6 +129,8 @@ def export_table(tab: pd.DataFrame, path: str):
     if p.endswith(".md"):
         open(path, "w", encoding="utf-8").write(tab.to_markdown())
     elif p.endswith(".xlsx"):
+        from setup_env import require_extra   # optional openpyxl: one clear line if missing (v2.3.6)
+        require_extra("excel", "Writing an .xlsx table")
         tab.to_excel(path)
     elif p.endswith(".tex"):
         open(path, "w", encoding="utf-8").write(tab.to_latex(escape=True))

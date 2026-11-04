@@ -7,6 +7,7 @@ Environment check and setup for the econometrics skill, the same on Windows, mac
     python setup_env.py --install    install what is missing (plain pip first; adds --break-system-packages
                                      only if pip refuses because the system Python is externally managed)
     python setup_env.py --skill-dir  print the folder that scripts should use as SKILL_DIR
+    --extra excel                    with --check or --install: also the optional openpyxl (.xlsx files)
 
 Exit code 0 when everything needed is present (after --install, when it succeeded), 1 otherwise.
 In Claude Code, Claude runs --check before the first script on a user's machine and asks before --install.
@@ -14,6 +15,7 @@ In Claude Code, Claude runs --check before the first script on a user's machine 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -33,6 +35,12 @@ CORE = {
     "sklearn": ("scikit-learn", "1.5"),
     "tabulate": ("tabulate", "0.9"),
 }
+# Optional packages by feature (--extra NAME), same layout as CORE; minimums kept in sync with
+# requirements-dev.txt (tested). They go in the same permission question as the core packages.
+OPTIONAL = {
+    "excel": {"openpyxl": ("openpyxl", "3.1")},
+}
+OPTIONAL_USE = {"excel": "read or write .xlsx/.xlsm files"}
 SKILL_DIR = Path(__file__).resolve().parents[1]
 STABLE_PLUGIN_DIR = Path.home() / ".claude" / "plugins" / "marketplaces" / "econometric-skills" / "econometrics"
 
@@ -47,17 +55,29 @@ def _vtuple(v: str) -> tuple:
     return tuple(out)
 
 
-def missing_packages() -> list[str]:
-    """Requirement strings ('numpy>=2.1') for packages that are absent or older than the minimum."""
+def _installed_version(import_name: str, dist: str):
+    """Version of an importable package, or None when it cannot be imported here."""
+    try:
+        if importlib.util.find_spec(import_name) is None:
+            return None
+    except (ImportError, ValueError):
+        return None
+    try:
+        return metadata.version(dist)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def missing_packages(extras=(), core: bool = True) -> list[str]:
+    """Requirement strings ('numpy>=2.1') for packages that are absent or older than the minimum:
+    the core packages (unless core=False) plus those of each optional extra named in `extras`."""
+    groups = ([CORE] if core else []) + [OPTIONAL[e] for e in extras]
     need = []
-    for _, (dist, minimum) in CORE.items():
-        try:
-            installed = metadata.version(dist)
-        except metadata.PackageNotFoundError:
-            need.append(f"{dist}>={minimum}")
-            continue
-        if _vtuple(installed) < _vtuple(minimum):
-            need.append(f"{dist}>={minimum}")
+    for group in groups:
+        for import_name, (dist, minimum) in group.items():
+            installed = _installed_version(import_name, dist)
+            if installed is None or _vtuple(installed) < _vtuple(minimum):
+                need.append(f"{dist}>={minimum}")
     return need
 
 
@@ -117,6 +137,23 @@ def store_alias_note(exe=None, which=shutil.which, os_name=os.name) -> str:
     return ""
 
 
+def install_command(extra: str | None = None) -> str:
+    """The exact command, for this machine, that installs what is missing (plus one optional extra)."""
+    cmd = f'{run_command()} "{recommended_skill_dir() / "scripts" / "setup_env.py"}" --install'
+    return cmd + (f" --extra {extra}" if extra else "")
+
+
+def require_extra(extra: str, purpose: str) -> None:
+    """Raise ImportError with the install command when an optional extra is missing.
+
+    Called by the modules right before the feature that needs it (e.g. reporting.export_table to .xlsx),
+    so the user sees one actionable line instead of pandas' 'Missing optional dependency'."""
+    missing = missing_packages([extra], core=False)
+    if missing:
+        raise ImportError(f"{purpose} needs {', '.join(missing)}, which is not installed. "
+                          f"Install it once:  {install_command(extra)}")
+
+
 def install(reqs: list[str]) -> bool:
     base = [sys.executable, "-m", "pip", "install", "-q", *reqs]
     r = subprocess.run(base, capture_output=True, text=True)
@@ -137,6 +174,11 @@ def report(reqs: list[str]) -> None:
     print(f"Python {sys.version.split()[0]} ({sys.executable}): "
           + ("ok" if ok_py else f"TOO OLD, the skill needs {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or later"))
     print("Packages: " + ("all present" if not reqs else "missing or outdated: " + ", ".join(reqs)))
+    for name in OPTIONAL:
+        miss = missing_packages([name], core=False)
+        state = "present" if not miss else (f"missing {', '.join(miss)} (only if needed: "
+                                            f"--install --extra {name}; ask the user first)")
+        print(f"Optional '{name}' ({OPTIONAL_USE[name]}): {state}")
     print(f"Run scripts with: {run_command()}")
     note = store_alias_note()
     if note:
@@ -154,6 +196,9 @@ def main(argv=None) -> int:
     g.add_argument("--check", action="store_true")
     g.add_argument("--install", action="store_true")
     g.add_argument("--skill-dir", action="store_true")
+    ap.add_argument("--extra", action="append", default=[], choices=sorted(OPTIONAL),
+                    help="also check/install an optional extra: " +
+                         "; ".join(f"{k} = {OPTIONAL_USE[k]}" for k in OPTIONAL))
     a = ap.parse_args(argv)
     if a.skill_dir:
         print(recommended_skill_dir())
@@ -161,12 +206,12 @@ def main(argv=None) -> int:
     if sys.version_info[:2] < MIN_PYTHON:
         report([])
         return 1
-    reqs = missing_packages()
+    reqs = missing_packages(a.extra)
     if a.install and reqs:
         print("Installing: " + " ".join(reqs))
         if not install(reqs):
             return 1
-        reqs = missing_packages()
+        reqs = missing_packages(a.extra)
     report(reqs)
     return 0 if not reqs else 1
 

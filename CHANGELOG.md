@@ -2,6 +2,15 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.3.6 — Optional packages go through the same permission question
+
+In the v2.3.5 clean-install test Claude asked to install the eight core packages and then ran a separate `pip install openpyxl`, which the user had not approved, to write an Excel table. `setup_env.py` did not know optional packages, and without openpyxl the skill stopped with pandas' `Missing optional dependency`. openpyxl is needed in three places: `reporting.export_table` to `.xlsx`, `data_prep.read_any` on `.xlsx`/`.xlsm` files and the `diagnostics.py` command line with an Excel file. No change to estimators or results.
+
+- **Optional extras in `setup_env.py`.** `--extra excel` (openpyxl) works with `--check` (exit 1 if the extra is missing) and with `--install`, through the same pip logic as the core packages. `--check` always reports each extra on its own line, without failing the core check. Minimums are kept in sync with `requirements-dev.txt`, which now includes openpyxl.
+- **One clear line instead of pandas' error.** `export_table`, `read_any` and the command line call `setup_env.require_extra` right before they need openpyxl; when it is missing they stop with the exact command for the machine (for example `py -3.13 ".../setup_env.py" --install --extra excel`). SpreadsheetML and HTML files saved as `.xls`, which the skill reads without openpyxl, are unchanged; legacy binary `.xls` (xlrd) is out of scope.
+- **`SKILL.md` §7**: the permission question names every package to be installed, optional extras included; Claude adds `--extra excel` when the deliverable reads or writes Excel files and never installs a package with a separate pip command. README too.
+- `tests/test_setup_env.py` covers the extra's minimum, `--check` and `--install --extra excel`, an unknown extra, the three messages with openpyxl absent, and an `.xlsx` round trip (567 checks in total).
+
 ## v2.3.5 — Claude Code sees the skill again
 
 A clean install on a Windows notebook (Claude Code 2.1.317, plugin v2.3.4) showed that Claude never used the skill. Asked for the return to education with diagnostics, it wrote its own statsmodels script in 7 minutes, tested it in a temporary environment and ended with `pip install ...` and `python analise.py`, which on that machine opens the Microsoft Store alias. The debug log (`claude --debug`) had the cause: `Failed to parse YAML frontmatter in .../SKILL.md`. Since v2.2.3 the description held `: ` without quotes ("which do not estimate: VaR ...", "Methods: OLS ..."). YAML reads `: ` as a new key, so the whole header failed, Claude Code loaded the skill with no name and no description, and the skill was never offered to the model, on any machine. Claude Code only logs a warning, and the tests never read the header. No change to estimators or results.
