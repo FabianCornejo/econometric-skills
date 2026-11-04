@@ -294,3 +294,237 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
             print("Observed covariates (partial R² with outcome), for comparison:")
             print(out["benchmarks"].to_string(float_format=lambda v: f"{v:.2%}"))
     return out
+
+
+# =============================================================================
+# Classical regression (v2.4.2): restrictions, AR(1) errors, non-nested models
+# =============================================================================
+def _restriction_matrix(res, restrictions):
+    """R, r and readable rows from a statsmodels formula fit and a constraint string or (R, r)."""
+    names = list(res.params.index)
+    if isinstance(restrictions, str):
+        try:                                      # statsmodels >= 0.15
+            from statsmodels.formula._manager import FormulaManager
+            lc = FormulaManager().get_linear_constraints(restrictions, names)
+            R, r = np.asarray(lc.constraint_matrix, float), np.asarray(lc.constraint_values, float).ravel()
+        except ImportError:                       # statsmodels 0.14 (patsy)
+            from patsy import DesignInfo
+            lc = DesignInfo(names).linear_constraint(restrictions)
+            R, r = np.asarray(lc.coefs, float), np.asarray(lc.constants, float).ravel()
+        rows = [s.strip() for s in restrictions.split(",")]
+    else:
+        R, r = restrictions
+        R = np.atleast_2d(np.asarray(R, float))
+        r = np.zeros(R.shape[0]) if r is None else np.asarray(r, float).ravel()
+        rows = [" + ".join(f"{v:g}*{n}" for v, n in zip(row, names) if v != 0) + f" = {c:g}" for row, c in zip(R, r)]
+    if R.shape[1] != len(names) or R.shape[0] != len(r):
+        raise ValueError(f"R must have {len(names)} columns and one row per restriction")
+    if np.linalg.matrix_rank(R) < R.shape[0]:
+        raise ValueError("the restrictions are linearly dependent: drop the redundant rows")
+    return R, r, rows
+
+
+def linear_restriction_test(formula: str, data: pd.DataFrame, restrictions, cov_type: str = "nonrobust",
+                            alpha: float = ALPHA, show: bool = True) -> dict:
+    """Test H0: Rβ = r in an OLS model, with the restricted estimates (Wooldridge ch. 4.5; Greene ch. 5).
+
+    restrictions: a string in the formula's names ("educ = exper", "x1 = 0, x2 = 0", "x1 + x2 = 1") or (R, r).
+    Classical errors (default): F = [(SSR_r − SSR_ur)/q] / [SSR_ur/(n − k)], computed from the sums of
+    squared residuals, with the restricted least-squares coefficients β_r = β̂ − (X'X)⁻¹R'[R(X'X)⁻¹R']⁻¹(Rβ̂ − r).
+    The R² form [(R²_ur − R²_r)/q]/[(1 − R²_ur)/(n − k)] gives the same F only when both models explain the
+    same y; a restricted model fitted to a transformed y (y − x1 to impose β1 = 1) has another total sum of
+    squares, and its R² must not be used. Robust cov_type ("HC3", ...): Wald F with that covariance (the SSR
+    form is not valid under heteroskedasticity). With one restriction, also the estimate of θ = Rβ − r with
+    its SE, t and CI: the t of the reparametrized model, whose square is F."""
+    ur = smf.ols(formula, data).fit()
+    R, r, rows = _restriction_matrix(ur, restrictions)
+    q, n, k = R.shape[0], int(ur.nobs), int(ur.df_model) + 1
+    b = ur.params.to_numpy()
+    X = ur.model.exog
+    XtXi = np.linalg.inv(X.T @ X)
+    d = R @ b - r
+    b_r = b - XtXi @ R.T @ np.linalg.solve(R @ XtXi @ R.T, d)
+    e_r = ur.model.endog - X @ b_r
+    ssr_ur, ssr_r = float(ur.ssr), float(e_r @ e_r)
+    warn = []
+    if cov_type == "nonrobust":
+        F = ((ssr_r - ssr_ur) / q) / (ssr_ur / ur.df_resid)
+        V = ur.cov_params().to_numpy()
+        form = "SSR"
+    else:
+        fit = ur.model.fit(cov_type=cov_type)
+        V = fit.cov_params().to_numpy()
+        F = float(d @ np.linalg.solve(R @ V @ R.T, d)) / q
+        form = f"Wald with {cov_type} covariance"
+        warn.append("robust F: the SSR and R² forms assume homoskedasticity and are not reported as the test")
+    p = float(stats.f.sf(F, q, ur.df_resid))
+    yv = ur.model.endog
+    sst = float(np.sum((yv - yv.mean()) ** 2)) if ur.k_constant else float(yv @ yv)   # same definition as ur.rsquared
+    r2_r = 1 - ssr_r / sst
+    out = {"F": float(F), "df": (q, float(ur.df_resid)), "p": p, "q": q, "n": n, "form": form, "restrictions": rows,
+           "ssr_unrestricted": ssr_ur, "ssr_restricted": ssr_r, "r2_unrestricted": float(ur.rsquared),
+           "r2_restricted": r2_r, "restricted_params": pd.Series(b_r, index=ur.params.index),
+           "verdict": ("reject H0" if p < alpha else "do not reject H0 (not evidence that it holds)") + f" at {alpha:.0%}",
+           "unrestricted": ur, "warnings": warn}
+    if q == 1:
+        theta = float(d[0])
+        se = float(np.sqrt(R[0] @ V @ R[0]))
+        t = theta / se
+        tq = stats.t.ppf(1 - alpha / 2, ur.df_resid)
+        out["theta"] = {"estimand": f"{rows[0]} (θ = Rβ − r)", "estimate": theta, "se": se, "t": t,
+                        "p": float(2 * stats.t.sf(abs(t), ur.df_resid)),
+                        "ci_low": theta - tq * se, "ci_high": theta + tq * se}
+    if show:
+        print(f"\nH0: {'; '.join(rows)}   (q = {q}, n = {n}, {form})")
+        print(f"F({q}, {ur.df_resid:.0f}) = {F:.4f}, p = {p:.4g} → {out['verdict']}")
+        if cov_type == "nonrobust":
+            print(f"SSR restricted = {ssr_r:.6g}, unrestricted = {ssr_ur:.6g}")
+        if q == 1:
+            th = out["theta"]
+            print(f"θ = {th['estimate']:.4f} (se {th['se']:.4f}), t = {th['t']:.3f}, "
+                  f"CI [{th['ci_low']:.4f}, {th['ci_high']:.4f}]; t² = F")
+        for w in warn:
+            print("Warning:", w)
+    return out
+
+
+def prais_winsten(formula: str, data: pd.DataFrame, method: str = "prais", max_iter: int = 100, tol: float = 1e-8,
+                  cov_type: str = "nonrobust", time: str | None = None, alpha: float = ALPHA, show: bool = True) -> dict:
+    """Feasible GLS for AR(1) errors, u_t = ρu_{t−1} + e_t (Wooldridge ch. 12.3), iterated to convergence.
+
+    method="prais" (Prais-Winsten) keeps the first observation, scaled by √(1 − ρ²); method="cochrane"
+    (Cochrane-Orcutt) drops it. ρ̂ = Σû_tû_{t−1}/Σû²_{t−1} from the residuals of the current estimates,
+    then OLS on the quasi-differenced data, until ρ̂ changes less than tol. Data must be sorted in time
+    and without gaps: pass time="<column>" to sort by it; without it the index must be increasing. Rows dropped
+    for missing values are allowed only at the start or the end of the sample (lags), never inside it, where the
+    quasi-difference would join non-adjacent periods. FGLS needs strictly exogenous regressors: with a lagged y or feedback from y to x it
+    is inconsistent, and OLS with Newey-West errors is the safer choice (diagnostics.compare_standard_errors).
+    The DW statistic is reported for the OLS residuals and for the transformed (whitened) residuals."""
+    if method not in ("prais", "cochrane"):
+        raise ValueError("method must be 'prais' or 'cochrane'")
+    if time is not None:
+        if data[time].isna().any() or not data[time].is_unique:
+            raise ValueError(f"'{time}' must have unique, non-missing values")
+        data = data.sort_values(time)
+    elif not data.index.is_monotonic_increasing or not data.index.is_unique:
+        raise ValueError("data are not in time order: sort them, or pass time='<column>'")
+    ols = smf.ols(formula, data).fit()
+    pos = data.index.get_indexer(ols.model.data.row_labels)
+    if np.any(np.diff(pos) != 1):
+        raise ValueError("rows with missing values inside the sample break the time sequence; fill or drop them "
+                         "explicitly (only leading or trailing rows may be missing)")
+    y, X = ols.model.endog, ols.model.exog
+    names = list(ols.params.index)
+    n = len(y)
+    if n < 10:
+        raise ValueError("too few observations for an AR(1) error model")
+    b = ols.params.to_numpy()
+    rho, converged, it = 0.0, False, 0
+    for it in range(1, max_iter + 1):
+        u = y - X @ b
+        rho_new = float(u[1:] @ u[:-1] / (u[:-1] @ u[:-1]))
+        if abs(rho_new) >= 1:
+            raise ValueError(f"ρ̂ = {rho_new:.3f} is not in (−1, 1): the errors look nonstationary; difference the data")
+        ys, Xs = y[1:] - rho_new * y[:-1], X[1:] - rho_new * X[:-1]
+        if method == "prais":
+            c = np.sqrt(1 - rho_new ** 2)
+            ys, Xs = np.r_[c * y[0], ys], np.vstack([c * X[0], Xs])
+        b = np.linalg.lstsq(Xs, ys, rcond=None)[0]
+        done = abs(rho_new - rho) < tol
+        rho = rho_new
+        if done:
+            converged = True
+            break
+    fit = sm.OLS(ys, Xs).fit(cov_type=cov_type)
+    from statsmodels.stats.stattools import durbin_watson
+    tq = stats.t.ppf(1 - alpha / 2, fit.df_resid)
+    table = pd.DataFrame({"OLS coef": ols.params.to_numpy(), "OLS se": ols.bse.to_numpy(),
+                          "FGLS coef": fit.params, "FGLS se": fit.bse}, index=names)
+    table["FGLS ci_low"] = table["FGLS coef"] - tq * table["FGLS se"]
+    table["FGLS ci_high"] = table["FGLS coef"] + tq * table["FGLS se"]
+    warn = []
+    if not converged:
+        warn.append(f"ρ̂ did not converge in {max_iter} iterations")
+    if abs(rho) > 0.9:
+        warn.append(f"ρ̂ = {rho:.3f} is close to 1: consider first differences or a unit-root test")
+    out = {"method": "Prais-Winsten" if method == "prais" else "Cochrane-Orcutt", "rho": rho, "iterations": it,
+           "converged": converged, "n": int(fit.nobs), "table": table, "dw_ols": float(durbin_watson(ols.resid)),
+           "dw_transformed": float(durbin_watson(fit.resid)), "ols": ols, "fgls": fit, "warnings": warn}
+    if show:
+        print(f"\n{out['method']} FGLS, AR(1) errors: ρ̂ = {rho:.4f} ({it} iterations"
+              f"{'' if converged else ', NOT converged'}), n = {out['n']}, SEs: {cov_type}")
+        print(table.to_string(float_format=_fmt))
+        print(f"Durbin-Watson: OLS {out['dw_ols']:.3f} → transformed {out['dw_transformed']:.3f}")
+        for w in warn:
+            print("Warning:", w)
+    return out
+
+
+def nonnested_test(formula1: str, formula2: str, data: pd.DataFrame, cov_type: str = "HC3", alpha: float = ALPHA,
+                   show: bool = True) -> dict:
+    """Choose between two non-nested models of the same y (Wooldridge ch. 9.2; Davidson-MacKinnon, 1981).
+
+    J test, in both directions: add the fitted values of the rival model to each model and t-test them.
+    Encompassing (Mizon-Richard) test: the comprehensive model with the regressors of both; F-test the
+    regressors that only the rival has. Both, rejected both, or neither can happen: rejecting both says
+    neither model is adequate; rejecting neither says the data cannot tell them apart. Both models must
+    explain the same y; for y vs log y use a PE test or compare out-of-sample predictions in y units."""
+    m1, m2 = smf.ols(formula1, data).fit(), smf.ols(formula2, data).fit()
+    if m1.model.endog_names != m2.model.endog_names:
+        raise ValueError("the J and encompassing tests need the same dependent variable in both models")
+    idx = m1.model.data.row_labels.intersection(m2.model.data.row_labels)
+    if len(idx) < len(m1.model.data.row_labels) or len(idx) < len(m2.model.data.row_labels):
+        warnings.warn("the models use different rows (missing values); both are refitted on the common rows")
+    d = data.loc[idx].copy()
+    m1, m2 = smf.ols(formula1, d).fit(), smf.ols(formula2, d).fit()
+    rows = []
+    for name, base, rival in (("model 1", formula1, m2), ("model 2", formula2, m1)):
+        d["_rival_fit"] = rival.fittedvalues
+        aug = smf.ols(f"{base} + _rival_fit", d).fit(cov_type=cov_type)
+        rows.append({"H0": f"{name} is adequate (J)", "statistic": float(aug.tvalues["_rival_fit"]),
+                     "df": 1, "p": float(aug.pvalues["_rival_fit"])})
+    X1 = pd.DataFrame(m1.model.exog, columns=m1.params.index, index=idx)
+    X2 = pd.DataFrame(m2.model.exog, columns=m2.params.index, index=idx)
+
+    def extra_columns(own, rival):
+        """Rival columns not in the span of own's columns (added one at a time while they raise the rank),
+        so that a variable written differently in the two formulas (C(d) vs d) is not counted twice."""
+        keep, cur = [], own.to_numpy()
+        r0 = np.linalg.matrix_rank(cur)
+        for c in rival.columns:
+            cand = np.column_stack([cur, rival[c].to_numpy()])
+            r1 = np.linalg.matrix_rank(cand)
+            if r1 > r0:
+                keep.append(c); cur, r0 = cand, r1
+        return keep
+
+    for name, own, rival in (("model 1", X1, X2), ("model 2", X2, X1)):
+        extra = extra_columns(own, rival)
+        if not extra:
+            rows.append({"H0": f"{name} encompasses the rival (the rival adds nothing)", "statistic": np.nan, "df": 0,
+                         "p": np.nan})
+            continue
+        full_X = pd.concat([own, rival[extra].add_prefix("rival:")], axis=1)
+        full = sm.OLS(m1.model.endog, full_X).fit(cov_type=cov_type)
+        Rm = np.zeros((len(extra), full_X.shape[1]))
+        Rm[:, own.shape[1]:] = np.eye(len(extra))
+        w = full.wald_test(Rm, scalar=True, use_f=True)
+        rows.append({"H0": f"{name} encompasses the rival (F on {', '.join(extra)})",
+                     "statistic": float(w.statistic), "df": len(extra), "p": float(w.pvalue)})
+    tab = pd.DataFrame(rows).set_index("H0")
+    rej1, rej2 = tab["p"].iloc[0] < alpha, tab["p"].iloc[1] < alpha
+    verdict = {(True, True): "J rejects both models: neither is adequate; look for a better specification",
+               (False, False): "J rejects neither: the data do not discriminate; prefer the simpler or theory-based model",
+               (True, False): "J rejects model 1, not model 2: the data favour model 2",
+               (False, True): "J rejects model 2, not model 1: the data favour model 1"}[(rej1, rej2)]
+    out = {"table": tab, "verdict": verdict, "n": len(idx), "cov_type": cov_type,
+           "adj_r2": {"model 1": float(m1.rsquared_adj), "model 2": float(m2.rsquared_adj)},
+           "bic": {"model 1": float(m1.bic), "model 2": float(m2.bic)}, "models": (m1, m2)}
+    if show:
+        print(f"\nNon-nested comparison (n = {len(idx)}, SEs {cov_type})")
+        print(f"  model 1: {formula1}\n  model 2: {formula2}")
+        print(tab.to_string(float_format=_fmt))
+        print("→", verdict)
+        print(f"Adjusted R²: {out['adj_r2']['model 1']:.4f} vs {out['adj_r2']['model 2']:.4f}; "
+              f"BIC: {out['bic']['model 1']:.2f} vs {out['bic']['model 2']:.2f} (lower is better)")
+    return out

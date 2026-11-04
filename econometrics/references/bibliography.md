@@ -168,6 +168,12 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Davidson and MacKinnon (1999, 2010) and MacKinnon and Webb (2017) — wild bootstrap tests imposed under the null; Webb (2023) six-point weights for few clusters.
 - Chan and Jeliazkov (2009), *International Journal of Mathematical Modelling and Numerical Optimisation*; Chan's `statespace-toolkit` (MATLAB, 2026) — the precision sampler, planned for a later release; its byte-for-byte replication archive and draw-for-draw tests inspired the skill's verification rules, as did the independent-solver design of dynare-mcp.
 
+## Classical regression and discrete choice (v2.4.2)
+- Davidson and MacKinnon (1981), "Several tests for model specification in the presence of alternative hypotheses", *Econometrica* — the J test; Mizon and Richard (1986), *Econometrica* — the encompassing principle.
+- Prais and Winsten (1954), Cowles Commission Discussion Paper 383; Cochrane and Orcutt (1949), *Journal of the American Statistical Association* — FGLS for AR(1) errors; Wooldridge, *Introductory Econometrics*, ch. 12.3 (Example 12.4 is the replication target).
+- Heckman (1979), "Sample selection bias as a specification error", *Econometrica*; Greene, *Econometric Analysis*, ch. 19 (corrected two-step covariance) — Wooldridge Example 17.5 is the replication target.
+- Anderson and Rubin (1949), *Annals of Mathematical Statistics* — weak-instrument-robust inference; Lee, McCrary, Moreira and Porter (2022), "Valid t-ratio inference for IV", *American Economic Review* — the F > 104.7 threshold; Staiger and Stock (1997), *Econometrica*.
+
 ## Official data
 - FRED, World Bank, IMF, OECD, BIS — international macro data.
 - Banco Central do Brasil (SGS, Focus survey via the Olinda API, Inflation Reports with applied VAR boxes); IBGE (SIDRA); Ipeadata — Brazilian data.

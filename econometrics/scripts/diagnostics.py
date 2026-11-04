@@ -22,6 +22,8 @@ Main functions
     cointegration(df)                 Engle-Granger + Johansen
     endogeneity_test(...)             regression-based Durbin-Wu-Hausman (control function)
     overid_test(...)                  Wooldridge nR² and Sargan
+    iv_report(formula, data)          2SLS vs OLS, first-stage partial F (weak/acceptable/strong), endogeneity
+                                      and overid tests, Anderson-Rubin confidence set (one endogenous regressor)
     hausman(fe, re)                   FE vs RE (linearmodels)
     panel_bp_lm(...)                  pooled vs random effects (Breusch-Pagan LM)
     mundlak_test(df, y, x_vary, ...)  FE vs RE via correlated random effects, clustered Wald
@@ -461,6 +463,133 @@ def overid_test(resid_2sls, included_exog: pd.DataFrame | None, instruments: pd.
               + ("at least one instrument is invalid" if p < ALPHA else
                  "no evidence against validity (this does not prove validity)"))
     return {"nR2": nr2, "sargan": sargan, "q": q, "p": p}
+
+
+def _ar_pvalue(yv, xv, W, Z, b0, robust):
+    """Anderson-Rubin test of H0: β = b0 for one endogenous regressor: regress y − b0·x on W and Z, F on Z."""
+    yy = yv - b0 * xv
+    X = np.column_stack([W, Z])
+    fit = sm.OLS(yy, X).fit(cov_type="HC1" if robust else "nonrobust")
+    R = np.zeros((Z.shape[1], X.shape[1])); R[:, W.shape[1]:] = np.eye(Z.shape[1])
+    return float(fit.wald_test(R, scalar=True, use_f=True).pvalue)
+
+
+def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha: float = ALPHA,
+              ar_grid: int = 2001, show: bool = True) -> dict:
+    """2SLS with the checks that decide whether to believe it (panel-iv.md sections 2-4).
+
+    formula: linearmodels syntax, "lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]".
+    Reports OLS and 2SLS side by side; for each endogenous regressor the first-stage partial F and partial
+    R² of the excluded instruments, classified as weak (F < 10), acceptable but needing the Anderson-Rubin
+    interval (10 to 104.7, Lee et al., 2022) or strong; the endogeneity test (robust Wooldridge regression
+    test, or Wu-Hausman with cov_type="unadjusted"); the overidentification test only when there are more
+    instruments than endogenous regressors (robust Wooldridge score test, or Sargan); and, with one
+    endogenous regressor, the Anderson-Rubin confidence set, valid however weak the instruments are
+    (found on a grid of ±20 SEs around 2SLS; it can be unbounded, or the complement of an interval; ±inf marks a
+    piece that reaches the grid edge). The robust first-stage statistic is reported as an F (Wald χ²/q). The 104.7
+    threshold is for one instrument. Exogeneity of an instrument cannot be tested with just one: it is an
+    argument, not a statistic."""
+    from linearmodels.iv import IV2SLS
+    robust = cov_type != "unadjusted"
+    iv = IV2SLS.from_formula(formula, data).fit(cov_type=cov_type)
+    lhs, rhs = formula.split("~", 1)
+    endog_part = rhs[rhs.index("[") + 1: rhs.index("]")]
+    endog_names = [e.strip() for e in endog_part.split("~")[0].split("+")]
+    instr_names = [e.strip() for e in endog_part.split("~")[1].split("+")]
+    exog_rhs = (rhs[:rhs.index("[")] + rhs[rhs.index("]") + 1:]).strip().strip("+").strip()
+    ols_rhs = " + ".join([p for p in (exog_rhs, " + ".join(endog_names)) if p])
+    warn = []
+    W0 = np.asarray(iv.model.exog.ndarray)
+    has_const = W0.shape[1] > 0 and np.any(np.all(np.isclose(W0, W0[:1]), axis=0) & ~np.all(W0 == 0, axis=0))
+    if not has_const:
+        warn.append("the IV model has no constant (write 'y ~ 1 + ...'); OLS is fitted without one too, to compare like "
+                    "with like")
+        ols_rhs = "0 + " + ols_rhs
+    ols = IV2SLS.from_formula(f"{lhs.strip()} ~ {ols_rhs}", data).fit(cov_type=cov_type)
+    table = pd.DataFrame({"OLS": ols.params, "OLS se": ols.std_errors, "2SLS": iv.params, "2SLS se": iv.std_errors,
+                          "2SLS p": iv.pvalues})
+    ci = iv.conf_int(level=1 - alpha)
+    table["2SLS ci_low"], table["2SLS ci_high"] = ci.iloc[:, 0], ci.iloc[:, 1]
+    diag = iv.first_stage.diagnostics
+    q_instr = len(instr_names)
+    # linearmodels reports the robust first-stage statistic as a Wald chi2(q); F = chi2 / q
+    fstat = [float(v) / q_instr if str(dist).lower().startswith("chi2") else float(v)
+             for v, dist in zip(diag["f.stat"], diag["f.dist"])]
+    fs = pd.DataFrame({"partial F": fstat, "partial F p": diag["f.pval"], "partial R²": diag["partial.rsquared"]},
+                      index=diag.index)
+    fs["strength"] = ["WEAK (F < 10)" if f < 10 else ("acceptable: report Anderson-Rubin (10 ≤ F ≤ 104.7)" if f <= 104.7
+                      else "strong (F > 104.7)") for f in fs["partial F"]]
+    if q_instr > 1:
+        fs["strength"] += " [104.7 is the one-instrument threshold of Lee et al.]"
+    if (fs["partial F"] < 10).any():
+        warn.append("weak instrument(s): 2SLS is biased toward OLS and its t-intervals undercover; use the "
+                    "Anderson-Rubin set (or LIML) and say so")
+    tests = []
+    endo = iv.wooldridge_regression if robust else iv.wu_hausman()
+    tests.append({"test": "endogeneity (" + ("Wooldridge robust regression" if robust else "Wu-Hausman") + ")",
+                  "H0": "regressors are exogenous: OLS is consistent", "statistic": float(endo.stat),
+                  "p": float(endo.pval)})
+    q = len(instr_names) - len(endog_names)
+    if q > 0:
+        ov = iv.wooldridge_overid if robust else iv.sargan
+        tests.append({"test": "overidentification (" + ("Wooldridge robust score" if robust else "Sargan") + f", {q} df)",
+                      "H0": "the extra instruments are valid given that the others are", "statistic": float(ov.stat),
+                      "p": float(ov.pval)})
+    tests = pd.DataFrame(tests).set_index("test")
+    ar = None
+    if len(endog_names) == 1:
+        yv = np.asarray(iv.model.dependent.ndarray).ravel()
+        xv = np.asarray(iv.model.endog.ndarray).ravel()
+        W = np.asarray(iv.model.exog.ndarray)
+        Z = np.asarray(iv.model.instruments.ndarray)
+        b, s = float(iv.params[endog_names[0]]), float(iv.std_errors[endog_names[0]])
+        grid = np.linspace(b - 20 * s, b + 20 * s, ar_grid)
+        pv = np.array([_ar_pvalue(yv, xv, W, Z, g, robust) for g in grid])
+        acc = pv > alpha
+        pieces = []
+        if acc.any():
+            idx = np.flatnonzero(acc)
+            for seg in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
+                pieces.append((float(grid[seg[0]]) if seg[0] > 0 else -np.inf,
+                               float(grid[seg[-1]]) if seg[-1] < len(grid) - 1 else np.inf))
+        if not pieces:
+            shape = "empty on the grid (the model may be misspecified)"
+        elif len(pieces) == 1 and np.isfinite(pieces[0][0]) and np.isfinite(pieces[0][1]):
+            shape = "bounded interval"
+        elif acc[0] and acc[-1] and len(pieces) == 2:
+            shape = "complement of an interval (unbounded in both directions)"
+        elif acc[0] and acc[-1]:
+            shape = "unbounded in both directions"
+        elif acc[0] or acc[-1]:
+            shape = "unbounded in one direction (or wider than ±20 SEs)"
+        else:
+            shape = "disjoint (union of intervals)"
+        lo = pieces[0][0] if pieces else np.nan
+        hi = pieces[-1][1] if pieces else np.nan
+        ar = {"estimand": endog_names[0], "ci_low": lo, "ci_high": hi, "pieces": pieces, "shape": shape,
+              "p_at_zero": _ar_pvalue(yv, xv, W, Z, 0.0, robust), "level": 1 - alpha}
+        if shape != "bounded interval":
+            warn.append(f"Anderson-Rubin set is {shape}: the data do not pin down the effect")
+    out = {"table": table, "first_stage": fs, "tests": tests, "anderson_rubin": ar, "n": int(iv.nobs),
+           "endogenous": endog_names, "instruments": instr_names, "overidentified_by": q, "cov_type": cov_type,
+           "warnings": warn, "iv": iv, "ols": ols}
+    if show:
+        print(f"\nIV report (n = {out['n']}, cov_type = {cov_type}); endogenous: {', '.join(endog_names)}; "
+              f"instruments: {', '.join(instr_names)}")
+        print(table.to_string(float_format=_fmt))
+        print("\nFirst stage (excluded instruments):")
+        print(fs.to_string(float_format=_fmt))
+        print("\nTests:")
+        print(tests[["statistic", "p"]].to_string(float_format=_fmt))
+        if q == 0:
+            print("Exactly identified: no overidentification test is possible; instrument validity is an argument.")
+        if ar:
+            txt = " ∪ ".join(f"[{a_:.4f}, {b_:.4f}]" for a_, b_ in ar["pieces"]) or "empty"
+            print(f"\nAnderson-Rubin {ar['level']:.0%} set for {ar['estimand']}: {txt} ({ar['shape']}); "
+                  f"AR p-value of β = 0: {ar['p_at_zero']:.4f}")
+        for w in warn:
+            print("Warning:", w)
+    return out
 
 
 def hausman(fe_res, re_res, show: bool = True) -> dict:
