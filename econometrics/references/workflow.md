@@ -66,6 +66,7 @@ Classify the goal, because it changes the right model:
 - **Seasonality, holidays, events and breaks** (pandemic, methodology changes, a new menu or product line).
 - **Sample size**: with fewer than ~30 observations per parameter, warn that inference is fragile.
 - **Transformations**: logs for elasticities and variance; differences for non-stationary series.
+- **Describe every model variable** with `inference.describe_dist(df[c], c)`: location, spread, skewness and kurtosis (both conventions), Tukey outliers; check each outlier rather than dropping it (`statistics-foundations.md` §11).
 - **Missing values**: run `data_prep.missing_report(df, cols, predictors)` before estimating. Dropping incomplete rows is consistent if missingness depends only on the regressors, biased if it depends on y; under MAR in the regressors use multiple imputation (`data-collection-wrangling.md`, "Missing data"). Never mean-impute by default; report N per model.
 - Keep the raw data and do all cleaning in code (documented exclusions).
 

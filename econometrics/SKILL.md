@@ -25,6 +25,7 @@ Answer four questions, then read only the files they point to: (1) the **goal**:
 
 | Situation | Reference | Main functions |
 |---|---|---|
+| One or two variables: compare means, proportions or variances, an association in a table, a distribution's fit, a correlation, describing data | `statistics-foundations.md` | `inference.describe_dist`, `two_sample`, `proportion_test`, `contingency`, `normality`, `power_curve` |
 | Cross-section, continuous y | `ols-regression.md` | `diagnostics.ols_diagnostics`, `specification.*` |
 | Time series (levels, lags, cointegration, VAR) | `time-series.md` | `diagnostics.stationarity`, `cointegration` |
 | Panel data, endogeneity, instruments | `panel-iv.md` | `diagnostics.mundlak_test`, `endogeneity_test`, `overid_test` |
@@ -57,7 +58,7 @@ Full detail, code and the diagnostic order are in `references/workflow.md`. Expl
 0. **Study card** before any estimate: question, estimand, design, identifying assumption in words, y, X (effect modifiers), W (confounders), Z (instruments), data, threats, robustness plan.
 1. **Frame** the hypothesis and expected signs; classify the goal (effect, causal effect, heterogeneity, forecast).
 2. **Identify the structure** of the data (table above).
-3. **Obtain and audit** the data: source and code, frequency, nominal vs real, breaks, missing values (`data_prep.missing_report`), N per parameter.
+3. **Obtain and audit** the data: source and code, frequency, nominal vs real, breaks, missing values (`data_prep.missing_report`), N per parameter; describe every model variable (`inference.describe_dist`: shape, outliers).
 4. **Specify and estimate**: the simplest model that answers the question; robust SEs by default.
 5. **Diagnose** in order: functional form, heteroskedasticity, autocorrelation, ARCH, normality, collinearity, influence, stationarity, stability, exogeneity.
 6. **Test robustness**: at least two variations (specification, subsample, estimator, definition, sensitivity to unobserved confounding).
@@ -71,6 +72,7 @@ Full versions and reasons in `references/interpretation-rules.md`.
 - **DiD**: ask whether the adoption date is exact (and its source), announced in advance or gradual; run `causal.did_timing_sensitivity` next to `att_gt`; relay any timing WARNING in plain words. When parallel trends need covariates, use `att_gt(covariates=[...])` (levels, doubly robust), never covariates in a TWFE regression (hidden linearity bias); test common covariate effects with `causal.ccc_test` and, for an existing TWFE, run `causal.twfe_covariate_diagnostic` (its controls in `covariates`, the valid pre-treatment ones in `cs_covariates`) and `causal.bacon_decomposition`. When treatment varies at a higher level than the unit (a state law, municipal data), pass `cluster=` the assignment level to `att_gt` and its date checks; never aggregate to that level only to cluster (it changes the estimand).
 - **Robust SEs by default** (HC3; HAC for time series). **Cluster where the regressor of interest varies** (a judge's sex: by judge, not by court), the same level in text and code; report the number of clusters; with fewer than ~40, add `estimation.wild_cluster_bootstrap`; with very few **treated** clusters, also `causal.randomization_inference`.
 - **Association is not causation**: causal language only with an identification strategy; Granger causality is predictive precedence; say which way remaining bias probably goes.
+- **Not rejecting H0 is not evidence for H0**: write "does not reject", never "H0 is accepted" or "there is no effect"; give the interval and the effect the test could have detected (`inference.power_curve`, `simulation.power_mde`).
 - **Statistical is not economic significance**: magnitude and interval, 2-3 significant digits, forecasts with intervals.
 - **Interpret by functional form** (log-log elasticity, log-lin 100*(e^b - 1)%); **average marginal effects** in nonlinear models (Tobit: say which margin); **long-run effects** with delta-method SEs for lags; **prediction vs confidence intervals**, with smearing for log-y.
 - **No look-ahead** in anything used to forecast, signal or manage risk at time t.
@@ -101,7 +103,8 @@ Import with `sys.path.insert(0, '<skill>/scripts')`. They are tested starting po
 | `dag.py` | Causal graphs: d-separation, minimal and optimal adjustment sets, role of each control (confounder, mediator, collider, instrument), tests of the graph's implications, Mermaid export |
 | `linear_models.py` | ANOVA (types I-III) and pairwise tests, ANCOVA, robust and quantile regression, Freedman-Lane permutation test, lack of fit, Box-Cox, partial residuals, shrinkage by nested CV, post-double-selection lasso, best subsets |
 | `finance_empirics.py` | Total/log returns, market model and CAPM, rolling and adjusted (Blume/Vasicek) betas, Hamada/Harris-Pringle unlever/relever, Dimson beta, factor models (FF, NEFIN), event studies (cross-sectional t, Patell, BMP, Corrado) and CAR regressions, performance ratios, Markowitz with Ledoit-Wolf |
-| `simulation.py` | Teacher-mode Monte Carlo demos (omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD), generic `monte_carlo`, `power_mde`, DiD power (analytic and simulated with AR(1) errors and clustered SEs) |
+| `inference.py` | Statistics foundations: description (skewness, Excel's excess kurtosis, outliers), one- and two-sample t (Welch default, paired), variances (chi-square, F, Brown-Forsythe), proportions (Wilson, exact, Newcombe), sample size, chi-square goodness of fit, normality tests, contingency tables (Fisher, Cramer's V, Mantel-Haenszel, Simpson check), rank tests with Hodges-Lehmann, correlations with CIs, power curves, multiple-testing adjustments |
+| `simulation.py` | Teacher-mode Monte Carlo demos (CLT, CI coverage, estimator MSE, multiple testing, omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD), generic `monte_carlo`, `power_mde`, DiD power (analytic and simulated with AR(1) errors and clustered SEs) |
 | `hte.py` | CATE (DR-learner, linear DML, forest, T/S/X-learners), BLP calibration test, GATES, CLAN, TOC/AUTOC/Qini, R-score, policy trees and policy value |
 | `forecasting.py`, `backtest.py` | Auto-ARIMA, ARIMAX, VAR forecasts, walk-forward, benchmarks, DM/PT tests; look-ahead-free backtests, momentum, Sharpe CI |
 | `risk.py`, `dependence.py` | VaR/ES (historical, parametric, EWMA, FHS, GARCH, EVT/POT and conditional EVT), VaR and ES backtests (Kupiec, Christoffersen, McNeil-Frey, Acerbi-Szekely, FZ0 loss); copulas, tail dependence, mutual information |

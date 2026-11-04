@@ -18,6 +18,13 @@ Demos (assumption that breaks -> what the student sees)
     demo_did_covariates()          trends depend on covariate levels -> TWFE with covariates wrong (hidden linearity
                                    bias); Callaway-Sant'Anna with covariates in levels right
 
+Statistics foundations (v2.4.0)
+    demo_clt()                     sampling distribution of the mean: SD = sigma/sqrt(n) always; normal shape and
+                                   t coverage only gradually for skewed populations
+    demo_ci_coverage()             what 95% means: t vs z-with-s, skewed data, Wald vs Wilson for a proportion
+    demo_estimator_mse()           bias, variance and MSE: S^2 vs MLE of a variance; MoM vs MLE for a uniform(0, theta)
+    demo_multiple_testing()        m tests: family-wise error and false discovery rate, raw vs Bonferroni/Holm/BH
+
 Design
     power_mde(...)                 minimum detectable effect or sample size, two-sample or clustered
     mde_did(...)                   analytic MDE / units for a DiD with m pre and r post periods
@@ -510,3 +517,149 @@ def did_power_inputs(df: pd.DataFrame, unit: str, time: str, y: str) -> dict:
     return {"sd_unit": float(um.std(ddof=1)), "time_sd": float(tm.std(ddof=1)), "sd_e": sd_e,
             "rho_ar": rho, "rho_ar_uncorrected": rho_hat, "n_units": G, "T": T,
             "sd_total": float(Y.std(ddof=1)), "warnings": warn}
+
+
+# =============================================================================
+# Statistics foundations (v2.4.0): sampling distributions, coverage, estimator quality, many tests
+# =============================================================================
+def _population(dist: str, rng, size):
+    """Draws from a few populations with known mean and SD (returned with them)."""
+    if dist == "normal":
+        return rng.normal(0.0, 1.0, size), 0.0, 1.0
+    if dist == "exponential":
+        return rng.exponential(1.0, size), 1.0, 1.0
+    if dist == "bernoulli":
+        return (rng.random(size) < 0.1).astype(float), 0.1, float(np.sqrt(0.09))
+    if dist == "poisson":
+        return rng.poisson(0.5, size).astype(float), 0.5, float(np.sqrt(0.5))
+    if dist == "lognormal":
+        m, v = np.exp(0.5), (np.exp(1) - 1) * np.exp(1)
+        return rng.lognormal(0.0, 1.0, size), float(m), float(np.sqrt(v))
+    raise ValueError("dist must be normal, exponential, bernoulli, poisson or lognormal")
+
+
+def demo_clt(dist: str = "exponential", n_values=(1, 2, 5, 30, 100), R: int = 4000, alpha: float = ALPHA,
+             seed: int = 0) -> dict:
+    """Central limit theorem: the sampling distribution of the mean of n draws from a skewed population.
+    For each n: the mean and SD of the R sample means against mu and sigma / sqrt(n), their skewness
+    (which shrinks like 1/sqrt(n)), the Kolmogorov distance to the normal approximation and the coverage
+    of the t interval. The student sees that the SD formula holds for every n, while the normal shape,
+    and with it the interval's coverage, arrive only gradually, more slowly the more skewed the population."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for n in n_values:
+        x, mu, sd = _population(dist, rng, (R, n))
+        means = x.mean(axis=1)
+        row = {"n": n, "mean_of_means": means.mean(), "sd_of_means": means.std(ddof=1),
+               "sigma/sqrt(n)": sd / np.sqrt(n), "skewness": float(stats.skew(means)),
+               "ks_distance_to_normal": float(stats.kstest(means, stats.norm(mu, sd / np.sqrt(n)).cdf).statistic)}
+        if n >= 2:
+            s = x.std(axis=1, ddof=1)
+            half = stats.t.ppf(1 - alpha / 2, n - 1) * s / np.sqrt(n)
+            row["t_interval_coverage"] = float(np.mean(np.abs(means - mu) <= half))
+        else:
+            row["t_interval_coverage"] = np.nan
+        rows.append(row)
+    tab = pd.DataFrame(rows).set_index("n")
+    return {"table": tab, "population": dist,
+            "lesson": "The SD of the mean is sigma/sqrt(n) for any n; its distribution turns normal as n grows, faster "
+                      "for symmetric populations. Until it does, nominal 95% t intervals cover less than 95%."}
+
+
+def demo_ci_coverage(n_values=(10, 30, 100), R: int = 4000, alpha: float = ALPHA, seed: int = 0) -> dict:
+    """What '95% confidence' means: the share of R intervals that contain the truth.
+    Scenarios: t interval for a normal mean (exact); z interval with the sample SD (too short in small samples);
+    t interval for a lognormal mean (skewness breaks it); Wald and Wilson intervals for a proportion of 0.1."""
+    rng = np.random.default_rng(seed)
+    z = stats.norm.ppf(1 - alpha / 2)
+    rows = []
+    for n in n_values:
+        tq = stats.t.ppf(1 - alpha / 2, n - 1)
+        x = rng.normal(0.0, 1.0, (R, n))
+        m, s = x.mean(1), x.std(1, ddof=1)
+        rows.append({"scenario": "normal mean, t interval", "n": n,
+                     "coverage": np.mean(np.abs(m) <= tq * s / np.sqrt(n)), "mean_width": np.mean(2 * tq * s / np.sqrt(n))})
+        rows.append({"scenario": "normal mean, z with sample SD", "n": n,
+                     "coverage": np.mean(np.abs(m) <= z * s / np.sqrt(n)), "mean_width": np.mean(2 * z * s / np.sqrt(n))})
+        x, mu, _ = _population("lognormal", rng, (R, n))
+        m, s = x.mean(1), x.std(1, ddof=1)
+        rows.append({"scenario": "lognormal mean, t interval", "n": n,
+                     "coverage": np.mean(np.abs(m - mu) <= tq * s / np.sqrt(n)), "mean_width": np.mean(2 * tq * s / np.sqrt(n))})
+        k = rng.binomial(n, 0.1, R)
+        ph = k / n
+        h = z * np.sqrt(ph * (1 - ph) / n)
+        rows.append({"scenario": "proportion 0.1, Wald", "n": n,
+                     "coverage": np.mean((ph - h <= 0.1) & (0.1 <= ph + h)), "mean_width": np.mean(2 * h)})
+        den = 1 + z ** 2 / n
+        c = (ph + z ** 2 / (2 * n)) / den
+        hw = z * np.sqrt(ph * (1 - ph) / n + z ** 2 / (4 * n ** 2)) / den
+        rows.append({"scenario": "proportion 0.1, Wilson", "n": n,
+                     "coverage": np.mean((c - hw <= 0.1) & (0.1 <= c + hw)), "mean_width": np.mean(2 * hw)})
+    tab = pd.DataFrame(rows).set_index(["scenario", "n"]).sort_index()
+    return {"table": tab, "nominal": 1 - alpha,
+            "lesson": "A 95% interval is a procedure that covers the truth in 95% of samples when its assumptions hold. "
+                      "z with an estimated SD, skewed data in small samples and the Wald interval for a proportion "
+                      "near 0 or 1 all cover less; Wilson stays close to 95%."}
+
+
+def demo_estimator_mse(n: int = 10, R: int = 20000, theta: float = 5.0, seed: int = 0) -> dict:
+    """Bias, variance and mean squared error (MSE = variance + bias^2) of competing estimators.
+    (1) The variance of a normal sample with divisors n - 1 (unbiased S^2), n (the MLE) and n + 1 (minimum MSE).
+    (2) theta of a uniform(0, theta): method of moments 2 * mean, the MLE max(x) (biased down) and the
+    unbiased (n + 1)/n * max(x). Unbiased is not best: the MLE of the variance has a smaller MSE than S^2,
+    and both estimators based on max(x) beat the method of moments by far."""
+    rng = np.random.default_rng(seed)
+    x = rng.normal(0.0, 1.0, (R, n))
+    ss = ((x - x.mean(1, keepdims=True)) ** 2).sum(1)
+
+    def summ(est, truth):
+        return {"mean": est.mean(), "bias": est.mean() - truth, "variance": est.var(ddof=1),
+                "mse": np.mean((est - truth) ** 2)}
+
+    var_tab = pd.DataFrame({f"divide by {lab}": summ(ss / d, 1.0) for lab, d in
+                            (("n - 1 (S^2, unbiased)", n - 1), ("n (MLE)", n), ("n + 1", n + 1))}).T
+    u = rng.uniform(0.0, theta, (R, n))
+    mx = u.max(1)
+    uni_tab = pd.DataFrame({"method of moments 2*mean": summ(2 * u.mean(1), theta),
+                            "MLE max(x)": summ(mx, theta),
+                            "unbiased (n+1)/n*max(x)": summ((n + 1) / n * mx, theta)}).T
+    return {"variance_table": var_tab, "uniform_table": uni_tab, "n": n,
+            "lesson": "Judge estimators by MSE = variance + bias^2, not by bias alone: S^2 is unbiased but the MLE "
+                      "(divide by n) has a lower MSE; for a uniform(0, theta) the MLE max(x) is biased yet far more "
+                      "precise than the method of moments, and a small correction removes its bias."}
+
+
+def demo_multiple_testing(m: int = 20, n: int = 50, R: int = 1000, share_true: float = 0.25, effect: float = 0.5,
+                          alpha: float = ALPHA, seed: int = 0) -> dict:
+    """m two-sample t tests per study, repeated R times, first with every null true and then with a share of
+    real effects of `effect` SDs. For raw p-values, Bonferroni, Holm and Benjamini-Hochberg: the family-wise
+    error rate (chance of at least one false rejection), the false discovery rate and the power."""
+    from inference import adjust_pvalues
+
+    rng = np.random.default_rng(seed)
+    rows = []
+    for label, share in (("all nulls true", 0.0), (f"{share_true:.0%} real effects", share_true)):
+        k_true = int(round(share * m))
+        is_true = np.arange(m) < k_true
+        stats_acc = {meth: {"any_false": 0, "fdp": [], "power": []} for meth in ("raw", "bonferroni", "holm", "bh")}
+        for _ in range(R):
+            a = rng.normal(0.0, 1.0, (m, n))
+            b = rng.normal(0.0, 1.0, (m, n)) + effect * is_true[:, None]
+            p = stats.ttest_ind(b, a, axis=1).pvalue
+            for meth in stats_acc:
+                rej = p < alpha if meth == "raw" else adjust_pvalues(p, meth, alpha)["reject"].to_numpy()
+                false = rej & ~is_true
+                acc = stats_acc[meth]
+                acc["any_false"] += bool(false.any())
+                acc["fdp"].append(false.sum() / max(rej.sum(), 1))
+                if k_true:
+                    acc["power"].append((rej & is_true).sum() / k_true)
+        for meth, acc in stats_acc.items():
+            rows.append({"scenario": label, "method": meth, "fwer": acc["any_false"] / R,
+                         "fdr": float(np.mean(acc["fdp"])),
+                         "power": float(np.mean(acc["power"])) if acc["power"] else np.nan})
+    tab = pd.DataFrame(rows).set_index(["scenario", "method"])
+    return {"table": tab, "m": m,
+            "lesson": f"With {m} true nulls at 5% each, the chance of at least one 'significant' result is about "
+                      f"1 - 0.95^{m} = {1 - 0.95 ** m:.0%}. Holm keeps that chance at 5% (more power than Bonferroni); "
+                      "Benjamini-Hochberg keeps the share of false discoveries at 5% and keeps more power."}

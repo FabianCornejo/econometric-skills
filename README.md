@@ -22,6 +22,7 @@ The mode changes the form of the answer, never the computations: every number co
 
 | Area | Methods | Script |
 |---|---|---|
+| Statistics foundations | Describing data (skewness, kurtosis in both conventions, outliers), one- and two-sample t (Welch by default, paired), variances, proportions (Wilson, exact, Newcombe) and sample size, goodness of fit and normality, contingency tables with Fisher, Cramer's V and a Simpson's-paradox check, rank tests with Hodges-Lehmann intervals, correlations, power curves, multiple-testing adjustments | `inference.py` |
 | Regression and diagnostics | OLS with full test batteries, robust/HAC SEs, influence, FGLS, prediction intervals, omitted-variable bias, Oster and Cinelli-Hazlett sensitivity | `diagnostics.py`, `specification.py` |
 | Classical linear models | ANOVA and multiple comparisons, ANCOVA, robust and quantile regression, permutation tests, Box-Cox, lasso/ridge/PCR/PLS, post-double-selection | `linear_models.py` |
 | Estimation engine | Maximum likelihood from any likelihood, LR/Wald/LM, NLS, delta method, bootstrap, wild cluster bootstrap | `estimation.py` |
@@ -34,12 +35,12 @@ The mode changes the form of the answer, never the computations: every number co
 | Survival | Kaplan-Meier, Cox with clustered SEs, PH tests | `survival.py` |
 | Text as data | Regex coding, topics, classifiers, LLM coding with valid downstream inference (DSL) | `text_data.py` |
 | Segments | Logit leaf model with honest splits, temporal holdout and calibration | `segments.py` |
-| Teaching lab | Monte Carlo demos (omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD, DiD with covariates), power and MDE, including simulated power for DiD with serial correlation | `simulation.py` |
+| Teaching lab | Monte Carlo demos (central limit theorem, CI coverage, bias vs MSE, multiple testing, omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD, DiD with covariates), power and MDE, including simulated power for DiD with serial correlation | `simulation.py` |
 | Data and reporting | Awkward Brazilian files, audits, missing data, safe merges, PDFs, scraping; FRED, World Bank, IMF, OECD, BCB, IBGE, Ipeadata, NEFIN; publication tables, run manifests (data hashes, versions, seed) and independent cross-checks | `data_prep.py`, `reporting.py` |
 
 ### How it is validated
 
-- **522 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
+- **665 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, a curriculum map whose every function and section must exist, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
 - **Continuous integration** runs every test suite and worked example on the minimum and the latest supported dependency versions, and checks that `dist/econometrics.skill` matches the source.
 - **Blind evals** (`evals/`): plain-language prompts with objective must / must-not criteria, run in a fresh conversation before each release.
 - **Independent verification**: headline numbers are recomputed by a second route (DR vs outcome regression vs IPW inside `att_gt`, or `reporting.cross_check`), and deliverable scripts end with a run manifest, so a number can be traced and reproduced.
