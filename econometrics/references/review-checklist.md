@@ -29,11 +29,14 @@ Every check you request names the function of this skill that runs it (`estimati
 - [ ] Staggered DiD estimated with plain TWFE? Treatment dates verified?
 - [ ] Covariates added to a TWFE regression to rescue parallel trends? Hidden linearity bias (`causal.twfe_covariate_diagnostic`, their controls in `covariates`, valid ones in `cs_covariates`); forbidden comparisons (`causal.bacon_decomposition`); covariate effects equal across groups and periods (`causal.ccc_test`), and say what a rejection implies: TWFE and Callaway-Sant'Anna with covariates are biased, use intersection DiD (DID-INT); estimate with `causal.att_gt(covariates=..., cluster=<assignment level>)` and compare. Relay the diagnostic's verdict as printed, including "inconclusive (low power)".
 - [ ] Headline numbers reproducible? Ask the authors for the data source and a run manifest (data hashes, package versions, seed) and an independent recomputation of the headline number; produce both for your own re-analysis (`reporting.run_manifest`, `reporting.cross_check` with at least two routes).
-- [ ] IV: first-stage F (effective F), exclusion argued, LATE interpreted for compliers?
+- [ ] IV: first-stage F (effective F), exclusion argued, LATE interpreted for compliers? With F below about 100, an Anderson-Rubin interval? An overidentification test claimed for an exactly identified model, or read as proof of validity? (`diagnostics.iv_report`.)
+- [ ] Heckman: is there a variable in the selection equation excluded from the outcome equation? Are the second-step SEs corrected? Is Heckman called a Tobit estimator? (`discrete_choice.heckman`.)
 
 **Inference**
 - [ ] SEs robust to heteroskedasticity; clustered at the level where the regressor of interest varies; number of clusters reported; wild bootstrap with few clusters? With few **treated** clusters (a policy adopted by a handful of states), also randomization inference (`causal.randomization_inference`): the wild bootstrap itself becomes unreliable when treated clusters are very few.
-- [ ] Time series: HAC SEs, stationarity, spurious regression (R² > DW)?
+- [ ] Time series: HAC SEs, stationarity, spurious regression (R² > DW)? Prais-Winsten or Cochrane-Orcutt with a lagged y (inconsistent)?
+- [ ] A restriction F test computed from R² of models with different dependent variables? (`specification.linear_restriction_test`.)
+- [ ] Binary outcome: logit or probit coefficients read as changes in probability? Accuracy at a 0.5 cutoff reported without the base rate? (`discrete_choice.binary_effects`.)
 - [ ] Multiple testing: how many outcomes, subgroups, specifications were tried?
 - [ ] "We do not reject, therefore H0 is true" or "no difference"? (Compatible with H0 is not evidence for it; ask for the interval and the power, `inference.power_curve`.)
 - [ ] Two means compared with a pooled t when variances and group sizes differ, or paired data treated as independent? (`inference.two_sample`.) A proportion near 0 or 1 with a Wald interval? (`inference.proportion_ci`.) Variance tests or F tests on heavy-tailed data?

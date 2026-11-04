@@ -49,6 +49,8 @@ Costs of IV: less efficient than OLS (larger variance); biased in finite samples
 
 **Relevance**: F of the excluded instruments in the 1st stage (robust, if applicable). Always report it.
 
+**All of it in one call**: `diagnostics.iv_report("lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]", df)` (linearmodels syntax, one bracketed block) gives OLS and 2SLS side by side, the first-stage partial F and partial R² with a weak/acceptable/strong label, the endogeneity test, the overidentification test only when the model is overidentified, and, with one endogenous regressor, the Anderson-Rubin confidence set (§4). `cov_type="robust"` (default) uses the robust versions of the tests; `cov_type="unadjusted"` reproduces textbook tables (Wooldridge Example 15.1: 0.059, SE 0.035).
+
 **Endogeneity (Durbin-Wu-Hausman, regression version)**:
 1. Regress the suspect endogenous variable on all exogenous variables and instruments; keep the residual v̂.
 2. Add v̂ to the structural equation estimated by OLS (with robust errors if needed).
@@ -65,6 +67,7 @@ Costs of IV: less efficient than OLS (larger variance); biased in finite samples
 
 - Staiger-Stock rule of thumb: first-stage F > 10. The stricter criterion of Lee et al. (2022) for a t-test with correct 5% size: F > 104.7. With F between 10 and 100, also report Anderson-Rubin intervals.
 - Weak instruments: 2SLS biased toward OLS and intervals with wrong coverage; many weak instruments make the bias worse.
+- **Anderson-Rubin set**: for each candidate β₀, regress y − β₀x on the exogenous regressors and the instruments and test the instruments jointly; the set of β₀ not rejected is a confidence set with correct coverage however weak the instruments are. It can be unbounded (the data say almost nothing) or a union of intervals. `iv_report` computes it on a grid of ±20 SEs around 2SLS and labels its shape.
 - **LIML** is approximately median-unbiased in overidentified models and hardly suffers from extra useless instruments; exactly identified 2SLS is also approximately median-unbiased (Angrist-Pischke). With several instruments, compare 2SLS and LIML: if they diverge, be suspicious.
 
 ## 5. Simultaneous equations and identification
@@ -72,7 +75,7 @@ Costs of IV: less efficient than OLS (larger variance); biased in finite samples
 - **Structural form** (behavior: demand, supply) vs. **reduced form** (endogenous variables as functions of exogenous ones only). The reduced form can be estimated by OLS; structural parameters are recoverable only if the equation is identified.
 - **Order condition** (necessary): number of exogenous variables excluded from the equation ≥ number of included endogenous variables − 1. Equal → exactly identified (indirect least squares works); greater → overidentified (use 2SLS; ILS would give several solutions).
 - **Rank condition** (necessary and sufficient): from the coefficients of the variables excluded from the equation but present in the others, at least one non-zero determinant of order (M−1) can be formed.
-- Classic example: demand Q = a₁ + b₁P + c₁Income + u₁ and supply Q = a₂ + b₂P + c₂Rain + u₂ — income identifies supply, rain identifies demand. Retail applications in `demand-elasticities.md`.
+- Classic example: demand Q = a₁ + b₁P + c₁Income + u₁ and supply Q = a₂ + b₂P + c₂Rain + u₂ — income identifies supply, rain identifies demand. Retail applications in `demand-elasticities.md`. To teach it, `simulation.demo_simultaneity` shows OLS estimating neither curve and ILS = 2SLS recovering the supply slope.
 - Recursive models (triangular B, uncorrelated errors) can be estimated equation by equation by OLS.
 
 ## 6. Panel structure

@@ -63,6 +63,8 @@ Cautions:
 - General linear hypotheses: `res.f_test("x1 = x2")`, `res.t_test("x1 = 0.25")`, `res.wald_test(...)`.
 - With robust errors, `f_test`/`wald_test` automatically use the robust covariance (the classical SSR-based F is invalid under heteroskedasticity).
 - Maximum-likelihood models (logit/probit/tobit): likelihood ratio `LR = 2(llf_unrestricted − llf_restricted) ~ χ²(g)`.
+- **`specification.linear_restriction_test(formula, data, "x1 = x2")`** does it the textbook way and shows the pieces: SSR restricted and unrestricted, the restricted least-squares coefficients, F, and for one restriction the estimate of θ = Rβ − r with its SE, t (the t of the reparametrized model, t² = F) and CI. With `cov_type="HC3"` it switches to the robust Wald F.
+- **SSR, not R², when y changes.** The R² form of F equals the SSR form only when both models explain the same y. Imposing β1 = 1 by regressing y − x1 on the other regressors changes the total sum of squares, and that R² must not be compared with the unrestricted one. The SSR form is always right (classical errors).
 
 ## 5. Recommended order of diagnostics
 
@@ -95,7 +97,9 @@ R² is not affected by heteroskedasticity.
 
 - In a cross-section, autocorrelated residuals (ordered by some variable) signal a **wrong functional form or an omitted variable**.
 - Tests: Durbin-Watson (≈2 without autocorrelation; invalid with a lagged y), **Breusch-Godfrey** (LM = n·R² ~ χ²(p); valid with a lagged y), Ljung-Box on residuals.
-- Fixes: **HAC/Newey-West** (`cov_type="HAC", cov_kwds={"maxlags": L}`, L ≈ 4(T/100)^(2/9)); model the dynamics (add lags — ADL); GLS with AR(p) errors (`sm.GLSAR(y, X, rho=1).iterative_fit()`), equivalent to Cochrane-Orcutt/Prais-Winsten.
+- Fixes: **HAC/Newey-West** (`cov_type="HAC", cov_kwds={"maxlags": L}`, L ≈ 4(T/100)^(2/9)); model the dynamics (add lags — ADL); FGLS with AR(1) errors.
+- **`specification.prais_winsten(formula, data)`**: iterated Prais-Winsten (keeps the first observation, scaled by √(1 − ρ²)); `method="cochrane"` drops it (Cochrane-Orcutt). Reports ρ̂, iterations, OLS vs FGLS side by side and the DW statistic before and after. It reproduces Wooldridge Example 12.4 (BARIUM: ρ̂ = 0.293, lchempi 2.94 with SE 0.63). `sm.GLSAR(...).iterative_fit()` estimates ρ differently (an AR fit on demeaned residuals) and drops the first observation, so its numbers differ slightly.
+- FGLS needs **strictly exogenous** regressors: with a lagged y, or with x reacting to past y, it is inconsistent. Then keep OLS and use HAC errors.
 - Prefer modeling the dynamics over "fixing" the error: residual autocorrelation almost always hides omitted lags.
 
 ## 8. Multicollinearity
@@ -123,6 +127,7 @@ R² is not affected by heteroskedasticity.
 - General-to-specific: start with the broadest justifiable model and simplify with joint F tests, checking diagnostics at each step.
 - Adjusted R², AIC, BIC (BIC penalizes more and picks smaller models; preferable for identifying the model; AIC tends to be better for forecasting).
 - Never use isolated significance as the only inclusion criterion; report how many specifications were tried.
+- **Non-nested models** (log x vs x; two sets of regressors), same y: `specification.nonnested_test(f1, f2, data)` runs the Davidson-MacKinnon J test in both directions and the encompassing F test. Four outcomes: reject one model (the data favour the other), reject both (neither is adequate), reject neither (the data do not discriminate: choose by theory or simplicity). For y vs log y, compare predictions in the same units instead.
 - Tools: `linear_models.select_subsets` (best subsets by BIC/AIC/adjusted R²/Cp, descriptive), `linear_models.shrinkage_compare` (ridge, lasso, elastic net, PCR, PLS by nested CV, for prediction) and `linear_models.post_double_selection` (valid CI for one effect with many candidate controls). See §15.
 - **Bad controls** (Angrist-Pischke): do not control for variables that are themselves outcomes of the treatment (e.g., when measuring a promotion's effect on revenue, do not control for the number of customers, which the promotion affects).
 

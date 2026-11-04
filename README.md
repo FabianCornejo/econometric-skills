@@ -23,24 +23,24 @@ The mode changes the form of the answer, never the computations: every number co
 | Area | Methods | Script |
 |---|---|---|
 | Statistics foundations | Describing data (skewness, kurtosis in both conventions, outliers), one- and two-sample t (Welch by default, paired), variances, proportions (Wilson, exact, Newcombe) and sample size, goodness of fit and normality, contingency tables with Fisher, Cramer's V and a Simpson's-paradox check, rank tests with Hodges-Lehmann intervals, correlations, power curves, multiple-testing adjustments | `inference.py` |
-| Regression and diagnostics | OLS with full test batteries, robust/HAC SEs, influence, FGLS, prediction intervals, omitted-variable bias, Oster and Cinelli-Hazlett sensitivity | `diagnostics.py`, `specification.py` |
+| Regression and diagnostics | OLS with full test batteries, robust/HAC SEs, influence, linear restriction tests (SSR form, restricted estimates), Prais-Winsten/Cochrane-Orcutt, J and encompassing tests for non-nested models, FGLS, prediction intervals, omitted-variable bias, Oster and Cinelli-Hazlett sensitivity | `diagnostics.py`, `specification.py` |
 | Classical linear models | ANOVA and multiple comparisons, ANCOVA, robust and quantile regression, permutation tests, Box-Cox, lasso/ridge/PCR/PLS, post-double-selection | `linear_models.py` |
 | Estimation engine | Maximum likelihood from any likelihood, LR/Wald/LM, NLS, delta method, bootstrap, wild cluster bootstrap | `estimation.py` |
 | Causal graphs | Minimal and optimal adjustment sets, good vs bad controls (confounders, mediators, colliders, instruments), tests of the graph's implications | `dag.py` |
 | Causal inference | Matching, IPW, AIPW, double ML with omitted-confounder bounds and benchmarks, regression discontinuity, staggered DiD (Callaway-Sant'Anna) with timing checks and covariates (doubly robust, conditional parallel trends), the common causal covariates test, a TWFE hidden-linearity diagnostic, the Goodman-Bacon decomposition, cluster bootstrap at the assignment level, synthetic control, randomization inference for few treated units | `causal.py` |
 | Heterogeneous effects | CATE (DR-learner, linear DML, forests, meta-learners), BLP/GATES/CLAN, TOC/Qini, policy trees with costs | `hte.py` |
-| Panel, IV, limited dependent variables | FE/RE/Mundlak, IV/2SLS with weak-instrument checks, logit/probit/Tobit with marginal effects, count models | `diagnostics.py` + references |
+| Panel, IV, limited dependent variables | FE/RE/Mundlak, an IV report (first-stage strength, endogeneity and overidentification tests, Anderson-Rubin set), LPM/probit/logit side by side with marginal effects, odds ratios and classification against the base rate, Heckman two-step with corrected SEs, Tobit, count models | `diagnostics.py`, `discrete_choice.py` + references |
 | Time series and forecasting | Unit roots, breaks, ARIMA/ARIMAX, VAR/SVAR, cointegration, walk-forward evaluation, Diebold-Mariano | `forecasting.py` |
 | Finance and risk | Betas for WACC (rolling, Dimson, Blume/Vasicek, Hamada/Harris-Pringle), factor models (Fama-French, NEFIN), event studies, performance ratios, Markowitz, GARCH, VaR/ES with extreme value theory, VaR and ES backtests, copulas, Kalman, regimes, look-ahead-free backtests | `finance_empirics.py`, `risk.py`, `dependence.py`, `state_space.py`, `regimes.py`, `backtest.py` |
 | Survival | Kaplan-Meier, Cox with clustered SEs, PH tests | `survival.py` |
 | Text as data | Regex coding, topics, classifiers, LLM coding with valid downstream inference (DSL) | `text_data.py` |
 | Segments | Logit leaf model with honest splits, temporal holdout and calibration | `segments.py` |
-| Teaching lab | Monte Carlo demos (central limit theorem, CI coverage, bias vs MSE, multiple testing, omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD, DiD with covariates), power and MDE, including simulated power for DiD with serial correlation | `simulation.py` |
+| Teaching lab | Monte Carlo demos (central limit theorem, CI coverage, bias vs MSE, multiple testing, simultaneity, LPM bounds, multicollinearity, omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD, DiD with covariates), power and MDE, including simulated power for DiD with serial correlation | `simulation.py` |
 | Data and reporting | Awkward Brazilian files, audits, missing data, safe merges, PDFs, scraping; FRED, World Bank, IMF, OECD, BCB, IBGE, Ipeadata, NEFIN; publication tables, run manifests (data hashes, versions, seed) and independent cross-checks | `data_prep.py`, `reporting.py` |
 
 ### How it is validated
 
-- **692 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, a curriculum map whose every function and section must exist, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
+- **756 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, a curriculum map whose every function and section must exist, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
 - **Continuous integration** runs every test suite and worked example on the minimum and the latest supported dependency versions, and checks that `dist/econometrics.skill` matches the source.
 - **Blind evals** (`evals/`): plain-language prompts with objective must / must-not criteria, run in a fresh conversation before each release.
 - **Independent verification**: headline numbers are recomputed by a second route (DR vs outcome regression vs IPW inside `att_gt`, or `reporting.cross_check`), and deliverable scripts end with a run manifest, so a number can be traced and reproduced.
@@ -55,7 +55,9 @@ Release notes for every version are in [CHANGELOG.md](CHANGELOG.md).
 └── marketplace.json       Claude Code plugin marketplace (plugin source: econometrics/)
 econometrics/
 ├── SKILL.md               router: modes, routing table, rules, output contract
-├── scripts/               20 tested modules (see the table above)
+├── statistics/SKILL.md    entry point for statistics questions (Claude Code only)
+├── modes/                 /econometrics:consultor, :professor, :revisor commands (Claude Code only)
+├── scripts/               22 tested modules (see the table above) and workspace.py
 └── references/
     ├── workflow.md            Consultant mode: study card + 7 steps
     ├── interpretation-rules.md
@@ -89,6 +91,10 @@ dist/         econometrics.skill, the packaged skill
   *What happens the first time.* Before running anything, Claude checks your Python with `setup_env.py --check`. If packages are missing (numpy, pandas, statsmodels, linearmodels, arch, scikit-learn), it tells you which and asks before installing them. Excel files (.xlsx) also need openpyxl, which Claude lists in the same question (`setup_env.py --install --extra excel`). The scripts it gives you find the skill by themselves (the plugin folder, any copy under `~/.claude/skills`, including the one synced from the Claude app, or a clone) (removed skills, which Claude Code keeps in a hidden `.trash` folder, are skipped), so you run them as delivered, with no paths to edit. If a script ever reports a missing package, run the command it prints.
 
   *If Claude does not use the skill.* Type `/skills`: `econometrics` should be listed with its description. The plugin offers two entry points to the same skill: `econometrics:econometrics` and `econometrics:statistics` (for tests of means, proportions, variances, tables, normality and correlation); the second only sends Claude to the first, so the name alone points statistics questions to the skill. With hundreds of skills installed, Claude Code drops the descriptions to fit its listing budget and offers skills by name only (`claude --debug` logs "Skill listing over budget"); in the v2.4.0 test, 962 skills and 37,000 characters, and a basic-statistics request was answered without the skill. Three ways out: turn off the plugins you do not need in your analysis folder with a `.claude/settings.json` there holding `{"enabledPlugins": {"<plugin>@<marketplace>": false}}` (other folders keep them); raise the budget with the `skillListingBudgetFraction` setting; or ask for it by name: "use the econometrics skill".
+
+  *Commands that always reach the skill.* `/econometrics:consultor` (then the question), `/econometrics:professor` (the topic) and `/econometrics:revisor` (the material) load the skill in the Consultant, Teacher or Reviewer mode. They do not depend on Claude choosing the skill, so they work however many plugins are installed. Claude never calls them on its own (`disable-model-invocation`), so they do not compete with other skills for requests.
+
+  *A clean analysis folder.* `python <skill folder>/scripts/workspace.py <folder>` writes `<folder>/.claude/settings.json` turning off, in that folder only, every enabled plugin except econometrics (`--keep <plugin>@<marketplace>` keeps others; `--dry-run` shows the file first). Other plugins' skills then stop competing for statistics requests and their hooks stop running there, while the rest of the computer is unchanged. `claude plugin list`, run inside the folder, shows what is on.
 
   *Updates.* `/plugin` → Marketplaces → `econometric-skills` → `u`, then restart (or `claude plugin marketplace update econometric-skills` and `claude plugin update econometrics@econometric-skills`); `claude plugin list` shows the version. If you also uploaded the skill to the Claude app, Claude Code shows that copy too, synced from your account as `anthropic-skills:econometrics`: update both at every release, or keep the skill in only one place.
 

@@ -56,10 +56,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/pkg"
           unzip -q dist/econometrics.skill -d "$RUNNER_TEMP/pkg"
-          # statistics/ is the plugin's second entry point (Claude Code only); the app package carries one skill
-          diff -r -x __pycache__ -x statistics "$RUNNER_TEMP/pkg/econometrics" econometrics \
-            || { echo "dist/econometrics.skill is stale: rebuild it with 'zip -qrD dist/econometrics.skill econometrics -x \"*__pycache__*\" \"econometrics/statistics/*\"'"; exit 1; }
-          if unzip -l dist/econometrics.skill | grep -q "econometrics/statistics/"; then echo "dist must not contain statistics/"; exit 1; fi
+          # statistics/ and modes/ are the plugin's extra entry points (Claude Code only); the app package carries one skill
+          diff -r -x __pycache__ -x statistics -x modes "$RUNNER_TEMP/pkg/econometrics" econometrics \
+            || { echo "dist/econometrics.skill is stale: rebuild it with 'zip -qrD dist/econometrics.skill econometrics -x \"*__pycache__*\" \"econometrics/statistics/*\" \"econometrics/modes/*\"'"; exit 1; }
+          if unzip -l dist/econometrics.skill | grep -qE "econometrics/(statistics|modes)/"; then echo "dist must not contain statistics/ or modes/"; exit 1; fi
       - name: Plugin version matches the latest CHANGELOG version
         run: |
           python - <<'PY'
@@ -78,3 +78,45 @@ jobs:
           print(f"reporting.SKILL_VERSION {s}, CHANGELOG {c}")
           sys.exit(0 if s == c else "set SKILL_VERSION in econometrics/scripts/reporting.py to the CHANGELOG version")
           PY
+
+  windows:
+    # The user's machines run Windows, often with a space in the user folder ("C:\Users\First Last").
+    # Plugins that pass unquoted paths to bash or assume UTF-8 consoles break there; this job runs the
+    # whole suite and the worked examples from a checkout path with a space in it.
+    name: Windows, path with a space (Python 3.13)
+    runs-on: windows-latest
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      PYTHONWARNINGS: ignore
+    defaults:
+      run:
+        shell: bash
+        working-directory: "econometric skills"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: "econometric skills"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: "econometric skills/requirements*.txt"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Test suites
+        run: |
+          status=0
+          for t in tests/test_*.py; do
+            echo "::group::$t"
+            python "$t" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+      - name: Worked examples run end to end
+        working-directory: "econometric skills/examples"
+        run: |
+          for f in 0*.py; do echo "== $f"; python "$f" > /dev/null || exit 1; done

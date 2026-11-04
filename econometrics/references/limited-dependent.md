@@ -37,6 +37,8 @@ probit = smf.probit("default ~ income + age + C(region)", data=df).fit(disp=Fals
 
 ## 3. Marginal effects and odds ratios
 
+**The comparison in one call**: `discrete_choice.binary_effects("inlf ~ nwifeinc + educ + exper + I(exper**2) + age + kidslt6 + kidsge6", df)` fits the LPM (HC3), probit and logit and returns, per variable, the LPM average slope beside the probit and logit AMEs with delta-method SEs. Effects are computed by changing the variable in the data and predicting again, so x and x² move together and a factor gives each level against the base (statsmodels' `get_margeff` works column by column and gets both wrong). Also the logit odds ratios with the exact change in the odds, LR tests and pseudo-R², the share of LPM fitted values outside [0, 1], and classification at the base-rate cutoff with AUC. On MROZ it reproduces Wooldridge Example 17.1 (LPM: kidslt6 −0.262, educ 0.038).
+
 The coefficients are **not** effects on the probability. The effect of x_j is f(xβ)·β_j, which depends on x.
 
 ```python
@@ -50,7 +52,7 @@ logit.get_margeff(at="overall", dummy=True)
 
 - The **AME** (average of individual effects) is more robust than the effect at the mean (MEM), especially with dummies — the "average individual" may not exist.
 - For a specific profile (like Stata's `margins, at()`): compute `logit.predict(profile)` and `profile+Δ` and take the difference; for intervals, bootstrap or the delta method.
-- **Odds ratio (logit)**: exp(β_j) = multiplier of the odds when x_j increases by 1 unit. E.g., exp(0.11) = 1.116 → odds increase by 11.6% per unit. Do not confuse odds with probability.
+- **Odds ratio (logit)**: exp(β_j) = multiplier of the odds when x_j increases by 1 unit. E.g., exp(0.11) = 1.116 → odds increase by 11.6% per unit. Do not confuse odds with probability. The change in the odds is 100·(OR − 1)%: an OR of 1.39 means +39% in the odds, not 139%, and not +39 percentage points of probability.
 
 ## 4. Tests and goodness of fit
 
@@ -81,6 +83,7 @@ y* = xβ + ε, ε ~ N(0, σ²); y = max(0, y*). With a ceiling (top-coded income
 
 ## 6. Sample selection (Heckman) and two-part models
 
+- **`discrete_choice.heckman(outcome, selection, df)`** runs the two steps with Heckman's corrected SEs (Greene eq. 19-31), reports ρ, σ and the λ test, compares with OLS on the selected sample, and warns when no selection regressor is excluded from the outcome equation. On MROZ it reproduces Wooldridge Example 17.5 (educ 0.109, SE 0.016; λ 0.032, SE 0.134).
 - **Heckman (two-step)**: when y is observed only for a non-randomly selected sample (wages only for those who work). Step 1: probit of selection with all variables, including at least one that affects selection but not the outcome (exclusion restriction — without it, identification relies only on nonlinearity, which is fragile). Step 2: OLS of y on the subsample including λ̂ = φ(ẑγ)/Φ(ẑγ). A significant λ̂ coefficient indicates selection bias. Step-2 standard errors need correction (bootstrap the whole procedure).
 - **Two-part (hurdle) model**: part 1 = logit/probit of buying or not (extensive margin); part 2 = OLS/GLM of the amount among buyers (intensive margin). E(y\|x) = P(y>0\|x)·E(y\|y>0, x). Lets price affect the purchase decision and the quantity differently.
 - **Zeros and logs**: ln(y+1) is not a neutral fix (results depend on the scale). Prefer PPML — Poisson pseudo-maximum likelihood, `smf.glm("y ~ x", data, family=sm.families.Poisson()).fit(cov_type="HC1")` — which accepts zeros and gives coefficients interpretable as semi-elasticities.

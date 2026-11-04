@@ -77,7 +77,8 @@ def returns(prices, kind: str = "simple", dividends=None, freq: str | None = Non
 # =============================================================================
 # Betas and cost of equity
 # =============================================================================
-def market_model(r_i, r_m, rf=None, hac_lags: int | None = None, periods_per_year: int = 252) -> dict:
+def market_model(r_i, r_m, rf=None, hac_lags: int | None = None, periods_per_year: int = 252,
+                 beta_null: float = 1.0) -> dict:
     """OLS of the asset's return on the market's: r_i = alpha + beta r_m + e (market model);
     with rf, the CAPM regression in excess returns (alpha = Jensen's alpha). SEs are
     Newey-West HAC (default lag rule floor(4 (n/100)^(2/9))).
@@ -85,7 +86,11 @@ def market_model(r_i, r_m, rf=None, hac_lags: int | None = None, periods_per_yea
     Choices that move the beta more than the estimator does (Ang ch. 5; Damodaran): the market
     proxy (Ibovespa vs IBrX-100 vs MSCI), frequency (daily betas of illiquid stocks are biased
     toward zero by non-synchronous trading: use weekly or monthly), and window (2 years weekly or
-    5 years monthly are common). Report them with the beta."""
+    5 years monthly are common). Report them with the beta.
+
+    result["tests"]: t-tests (HAC) of H0: α = 0 (no abnormal return; Jensen's alpha with rf) and
+    H0: β = beta_null (default 1: the asset moves one-for-one with the market), plus the joint Wald test
+    of both. Not rejecting β = 1 is not evidence that β = 1: read the confidence interval."""
     import statsmodels.api as sm
     if rf is not None:
         ri, rm, f = _align(r_i, r_m, rf if isinstance(rf, pd.Series) else pd.Series(rf, index=r_i.index))
@@ -98,6 +103,16 @@ def market_model(r_i, r_m, rf=None, hac_lags: int | None = None, periods_per_yea
     ci = fit.conf_int(ALPHA)
     tab = pd.DataFrame({"estimate": fit.params, "se": fit.bse, "t": fit.tvalues, "p": fit.pvalues,
                         "ci_low": ci[:, 0], "ci_high": ci[:, 1]}, index=["alpha", "beta"])
+    R = np.eye(2)
+    t_rows = []
+    for name, i, null in (("alpha = 0", 0, 0.0), (f"beta = {beta_null:g}", 1, float(beta_null))):
+        tt = (fit.params[i] - null) / fit.bse[i]
+        t_rows.append({"H0": name, "estimate": float(fit.params[i]), "null": null, "statistic": float(tt),
+                       "p": float(2 * stats.norm.sf(abs(tt)))})
+    jw = fit.wald_test((R, np.array([0.0, float(beta_null)])), scalar=True)
+    t_rows.append({"H0": f"alpha = 0 and beta = {beta_null:g} (Wald χ²(2))", "estimate": np.nan, "null": np.nan,
+                   "statistic": float(jw.statistic), "p": float(jw.pvalue)})
+    tests = pd.DataFrame(t_rows).set_index("H0")
     resid_sd = float(np.std(fit.resid, ddof=2))
     warn = []
     if n < 36:
@@ -106,6 +121,7 @@ def market_model(r_i, r_m, rf=None, hac_lags: int | None = None, periods_per_yea
             "beta": float(fit.params[1]), "beta_se": float(fit.bse[1]), "r2": float(fit.rsquared),
             "alpha_annualized": float(fit.params[0] * periods_per_year),
             "idiosyncratic_vol_annualized": resid_sd * np.sqrt(periods_per_year), "hac_lags": lags, "n": n,
+            "tests": tests,
             "warnings": warn, "model": fit}
 
 

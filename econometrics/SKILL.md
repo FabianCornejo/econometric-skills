@@ -26,10 +26,10 @@ Answer four questions, then read only the files they point to: (1) the **goal**:
 | Situation | Reference | Main functions |
 |---|---|---|
 | One or two variables: compare means, proportions or variances, an association in a table, a distribution's fit, a correlation, describing data | `statistics-foundations.md` | `inference.describe_dist`, `two_sample`, `proportion_test`, `contingency`, `normality`, `power_curve` |
-| Cross-section, continuous y | `ols-regression.md` | `diagnostics.ols_diagnostics`, `specification.*` |
+| Cross-section, continuous y; restriction tests, AR(1) errors, non-nested models | `ols-regression.md` | `diagnostics.ols_diagnostics`, `specification.linear_restriction_test`, `prais_winsten`, `nonnested_test` |
 | Time series (levels, lags, cointegration, VAR) | `time-series.md` | `diagnostics.stationarity`, `cointegration` |
-| Panel data, endogeneity, instruments | `panel-iv.md` | `diagnostics.mundlak_test`, `endogeneity_test`, `overid_test` |
-| Binary, count, censored, fractional or ordered y | `limited-dependent.md` | `diagnostics.tobit`, `count_diagnostics` |
+| Panel data, endogeneity, instruments | `panel-iv.md` | `diagnostics.iv_report`, `mundlak_test`, `endogeneity_test`, `overid_test` |
+| Binary, count, censored, fractional or ordered y; sample selection | `limited-dependent.md` | `discrete_choice.binary_effects`, `heckman`, `diagnostics.tobit`, `count_diagnostics` |
 | Prices and quantities, elasticities, pass-through | `demand-elasticities.md` | IV recipes |
 | Effect of a policy, law, decision or program (non-random) | `causal-inference.md` | `causal.aipw`, `dml_plr`, `rdd`, `att_gt`, `synth` |
 | DiD that needs covariates (trends differ by income, size, region); someone's TWFE with controls | `causal-inference.md` §6.0 | `causal.att_gt(covariates=, cluster=)`, `ccc_test`, `twfe_covariate_diagnostic`, `bacon_decomposition` |
@@ -96,15 +96,16 @@ Import with `sys.path.insert(0, '<skill>/scripts')`. They are tested starting po
 
 | Script | Contents |
 |---|---|
-| `diagnostics.py` | OLS battery, influence, Chow, ADF/KPSS/DF-GLS, cointegration, endogeneity, overidentification, Hausman, panel LM, Mundlak/CRE, Tobit with three margins, count overdispersion, Diebold-Mariano |
-| `specification.py` | FGLS, CI vs prediction intervals with smearing, long-run effects, standardized coefficients, exact OVB, Oster delta, Cinelli-Hazlett robustness value |
+| `diagnostics.py` | OLS battery, influence, Chow, ADF/KPSS/DF-GLS, cointegration, IV report (first-stage strength, Anderson-Rubin set), endogeneity, overidentification, Hausman, panel LM, Mundlak/CRE, Tobit with three margins, count overdispersion, Diebold-Mariano |
+| `specification.py` | Linear restriction tests (SSR form, restricted estimates), Prais-Winsten/Cochrane-Orcutt, J and encompassing tests, FGLS, CI vs prediction intervals with smearing, long-run effects, standardized coefficients, exact OVB, Oster delta, Cinelli-Hazlett robustness value |
 | `estimation.py` | Generic MLE (Newton/BFGS; Hessian, OPG, sandwich, cluster SEs), LR/Wald/LM trinity, NLS, delta method, pairs/cluster bootstrap, wild cluster bootstrap-t with CI |
 | `causal.py` | Balance, propensity score, IPW, AIPW, matching, double ML with omitted-confounder bounds and benchmarks, RD with robustness, TWFE event study, Callaway-Sant'Anna (with covariates: DR/regression/IPW and an independent cross-check), CCC test and TWFE hidden-linearity diagnostic, DiD timing sensitivity, randomization inference for few treated units, synthetic control |
 | `dag.py` | Causal graphs: d-separation, minimal and optimal adjustment sets, role of each control (confounder, mediator, collider, instrument), tests of the graph's implications, Mermaid export |
 | `linear_models.py` | ANOVA (types I-III) and pairwise tests, ANCOVA, robust and quantile regression, Freedman-Lane permutation test, lack of fit, Box-Cox, partial residuals, shrinkage by nested CV, post-double-selection lasso, best subsets |
-| `finance_empirics.py` | Total/log returns, market model and CAPM, rolling and adjusted (Blume/Vasicek) betas, Hamada/Harris-Pringle unlever/relever, Dimson beta, factor models (FF, NEFIN), event studies (cross-sectional t, Patell, BMP, Corrado) and CAR regressions, performance ratios, Markowitz with Ledoit-Wolf |
+| `finance_empirics.py` | Total/log returns, market model and CAPM (tests of α = 0 and β = 1), rolling and adjusted (Blume/Vasicek) betas, Hamada/Harris-Pringle unlever/relever, Dimson beta, factor models (FF, NEFIN), event studies (cross-sectional t, Patell, BMP, Corrado) and CAR regressions, performance ratios, Markowitz with Ledoit-Wolf |
+| `discrete_choice.py` | LPM, probit and logit side by side (average marginal effects, odds ratios in exact %, classification against the base rate, AUC); Heckman two-step with corrected SEs |
 | `inference.py` | Statistics foundations: description (skewness, Excel's excess kurtosis, outliers), one- and two-sample t (Welch default, paired), variances (chi-square, F, Brown-Forsythe), proportions (Wilson, exact, Newcombe), sample size, chi-square goodness of fit, normality tests, contingency tables (Fisher, Cramer's V, Mantel-Haenszel, Simpson check), rank tests with Hodges-Lehmann, correlations with CIs, power curves, multiple-testing adjustments |
-| `simulation.py` | Teacher-mode Monte Carlo demos (CLT, CI coverage, estimator MSE, multiple testing, omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD), generic `monte_carlo`, `power_mde`, DiD power (analytic and simulated with AR(1) errors and clustered SEs) |
+| `simulation.py` | Teacher-mode Monte Carlo demos (CLT, CI coverage, estimator MSE, multiple testing, simultaneity, LPM bounds, multicollinearity, omitted variable, bad control, measurement error, heteroskedasticity, spurious regression, weak IV, few clusters, staggered DiD), generic `monte_carlo`, `power_mde`, DiD power (analytic and simulated with AR(1) errors and clustered SEs) |
 | `hte.py` | CATE (DR-learner, linear DML, forest, T/S/X-learners), BLP calibration test, GATES, CLAN, TOC/AUTOC/Qini, R-score, policy trees and policy value |
 | `forecasting.py`, `backtest.py` | Auto-ARIMA, ARIMAX, VAR forecasts, walk-forward, benchmarks, DM/PT tests; look-ahead-free backtests, momentum, Sharpe CI |
 | `risk.py`, `dependence.py` | VaR/ES (historical, parametric, EWMA, FHS, GARCH, EVT/POT and conditional EVT), VaR and ES backtests (Kupiec, Christoffersen, McNeil-Frey, Acerbi-Szekely, FZ0 loss); copulas, tail dependence, mutual information |
@@ -113,7 +114,7 @@ Import with `sys.path.insert(0, '<skill>/scripts')`. They are tested starting po
 | `text_data.py` | Regex coding, TF-IDF, LDA, classifiers, validation, LLM coding with probabilities and uncertainty, DSL regression |
 | `segments.py` | Logit leaf model with honest splits, benchmarks, temporal holdout, calibration, stability |
 | `data_prep.py`, `reporting.py` | Awkward files, audits, missing-data report, safe merges, Brazilian numbers, PDFs, scraping; regression tables, run manifests (hashes, versions, seed) and independent cross-checks |
-| `setup_env.py` | Environment check and install (Python version, missing packages, the skill folder for scripts), the same on Windows, macOS and Linux |
+| `setup_env.py`, `workspace.py` | Environment check and install (Python version, missing packages, the skill folder for scripts), the same on Windows, macOS and Linux; a clean analysis folder for Claude Code (other plugins off there) |
 
 ## 7. Environment
 

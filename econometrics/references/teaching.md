@@ -30,7 +30,7 @@ Every method is explained with the same eleven blocks, in this order. Skip a blo
 
 ## 3. Simulations that teach
 
-Ready-made demos are in `scripts/simulation.py` (each returns a table and a one-line lesson; show their code and let the student change one parameter): `demo_clt`, `demo_ci_coverage`, `demo_estimator_mse`, `demo_multiple_testing` (Module 0), `demo_omitted_variable`, `demo_bad_control`, `demo_measurement_error`, `demo_heteroskedasticity`, `demo_spurious_regression`, `demo_weak_iv`, `demo_few_clusters`, `demo_staggered_did`, `demo_did_covariates`; `monte_carlo(dgp, estimators, R, truth)` builds any other one, and `power_mde` answers "how large a sample?" or "how small an effect can we detect?" (for a DiD, `mde_did` and the simulation `power_did_sim`, which shows how serial correlation erodes power). Good and bad controls are taught with `dag.py`: draw the graph, let `adjustment_report` classify each variable, then simulate the linear model and show OLS with a minimal set recovering the effect while a collider or mediator biases it. The heterogeneity lesson uses `hte` (a linear CATE vs a forest on a symmetric effect).
+Ready-made demos are in `scripts/simulation.py` (each returns a table and a one-line lesson; show their code and let the student change one parameter): `demo_clt`, `demo_ci_coverage`, `demo_estimator_mse`, `demo_multiple_testing` (Module 0), `demo_simultaneity`, `demo_lpm_bounds`, `demo_multicollinearity` (classical regression), `demo_omitted_variable`, `demo_bad_control`, `demo_measurement_error`, `demo_heteroskedasticity`, `demo_spurious_regression`, `demo_weak_iv`, `demo_few_clusters`, `demo_staggered_did`, `demo_did_covariates`; `monte_carlo(dgp, estimators, R, truth)` builds any other one, and `power_mde` answers "how large a sample?" or "how small an effect can we detect?" (for a DiD, `mde_did` and the simulation `power_did_sim`, which shows how serial correlation erodes power). Good and bad controls are taught with `dag.py`: draw the graph, let `adjustment_report` classify each variable, then simulate the linear model and show OLS with a minimal set recovering the effect while a collider or mediator biases it. The heterogeneity lesson uses `hte` (a linear CATE vs a forest on a symmetric effect).
 
 Write them in a few lines of numpy with a fixed seed; repeat 500–1000 times; show the distribution of the estimate against the truth (histogram or a table of mean, bias, SD, coverage).
 
@@ -40,6 +40,9 @@ Write them in a few lines of numpy with a fixed seed; repeat 500–1000 times; s
 | What 95% means | `demo_ci_coverage`: thousands of intervals | About 95% contain the truth for a normal mean with t; fewer with z and an estimated SD, skewed data or the Wald interval for a proportion; Wilson stays close |
 | Bias, variance, MSE | `demo_estimator_mse`: S^2 vs the MLE of a variance; method of moments vs MLE for a uniform | The unbiased estimator is not the most precise; MSE = variance + bias^2 |
 | Many tests | `demo_multiple_testing`: 20 tests per study | About 64% of studies find a "significant" null without correction; Holm and Benjamini-Hochberg fix it |
+| Simultaneity | `demo_simultaneity`: supply and demand cleared by price | OLS of quantity on price estimates neither curve; a demand shifter (income) identifies the supply slope, and ILS = 2SLS |
+| LPM vs logit | `demo_lpm_bounds`: logit truth with a growing slope | The LPM slope stays close to the average marginal effect, while its fitted probabilities leave [0, 1] more often |
+| Multicollinearity | `demo_multicollinearity`: corr(x1, x2) from 0 to 0.99 | Still unbiased; the SE grows like sqrt(VIF), individual t-tests fail, the joint F and the sum b1 + b2 stay precise |
 | Unbiasedness and sampling variation | OLS on repeated samples (Colonescu 2.5; `monte_carlo`) | Estimates spread around the true beta; spread falls with n |
 | CI coverage in regression | 95% CIs over 1,000 samples (Colonescu 3.4; `demo_heteroskedasticity`) | About 950 contain the truth; with heteroskedasticity and classical SEs, fewer |
 | Omitted variable bias | Drop a confounder correlated with x | Bias = beta_z · delta, with the predicted sign |
@@ -98,20 +101,20 @@ Where each topic of a standard sequence (statistics, econometrics, time series: 
 | Exploratory analysis | 0 | `statistics-foundations.md §11`, `inference.describe_dist`, `data_prep.audit`, `data_prep.missing_report` |
 | Simple and multiple regression, Gauss-Markov | 1-2 | `ols-regression.md §1`, `diagnostics.ols_diagnostics`, `simulation.monte_carlo` |
 | Prediction vs confidence intervals | 1 | `ols-regression.md §12`, `specification.prediction_intervals` |
-| Linear restrictions, F tests | 2 | `ols-regression.md §4` |
+| Linear restrictions, F tests | 2 | `ols-regression.md §4`, `specification.linear_restriction_test` |
 | Dummies, interactions, Chow test | 3 | `ols-regression.md §3`, `diagnostics.chow` |
 | Functional forms | 3 | `ols-regression.md §2` |
-| Multicollinearity | 3 | `ols-regression.md §8`, `diagnostics.vif_table` |
+| Multicollinearity | 3 | `ols-regression.md §8`, `diagnostics.vif_table`, `simulation.demo_multicollinearity` |
 | Omitted variables, measurement error | 2-5 | `ols-regression.md §14`, `specification.ovb_decomposition`, `simulation.demo_omitted_variable`, `simulation.demo_measurement_error` |
 | Heteroskedasticity: tests, robust SEs, WLS/FGLS | 4 | `ols-regression.md §6`, `diagnostics.compare_standard_errors`, `specification.fgls_het`, `simulation.demo_heteroskedasticity` |
-| Serial correlation: DW, BG, HAC, GLS | 4 | `ols-regression.md §7`, `diagnostics.newey_west_lags` |
-| Specification: RESET, model selection | 4 | `ols-regression.md §11`, `diagnostics.ols_diagnostics` |
-| IV and 2SLS, endogeneity and overidentification tests | 5 | `panel-iv.md §2`, `panel-iv.md §3`, `diagnostics.endogeneity_test`, `diagnostics.overid_test`, `simulation.demo_weak_iv` |
-| Simultaneous equations, identification | 5 | `panel-iv.md §5` |
+| Serial correlation: DW, BG, HAC, GLS | 4 | `ols-regression.md §7`, `diagnostics.newey_west_lags`, `specification.prais_winsten` |
+| Specification: RESET, model selection, non-nested models | 4 | `ols-regression.md §11`, `diagnostics.ols_diagnostics`, `specification.nonnested_test` |
+| IV and 2SLS, endogeneity and overidentification tests, weak instruments | 5 | `panel-iv.md §2`, `panel-iv.md §3`, `panel-iv.md §4`, `diagnostics.iv_report`, `diagnostics.endogeneity_test`, `diagnostics.overid_test`, `simulation.demo_weak_iv` |
+| Simultaneous equations, identification | 5 | `panel-iv.md §5`, `simulation.demo_simultaneity` |
 | Panel data: FE, RE, Hausman, Mundlak | 7 | `panel-iv.md §7`, `panel-iv.md §9`, `diagnostics.hausman`, `diagnostics.mundlak_test` |
 | Dynamic panels | 7 | `panel-iv.md §11` |
-| LPM, logit, probit, marginal effects | 7 | `limited-dependent.md §1`, `limited-dependent.md §3` |
-| Tobit, Heckman | 7 | `limited-dependent.md §5`, `limited-dependent.md §6`, `diagnostics.tobit` |
+| LPM, logit, probit, marginal effects, odds ratios | 7 | `limited-dependent.md §1`, `limited-dependent.md §3`, `discrete_choice.binary_effects`, `simulation.demo_lpm_bounds` |
+| Tobit, Heckman | 7 | `limited-dependent.md §5`, `limited-dependent.md §6`, `diagnostics.tobit`, `discrete_choice.heckman` |
 | Counts | 7 | `limited-dependent.md §7`, `diagnostics.count_diagnostics` |
 | Likelihood tests, delta method, bootstrap | 8 | `estimation-theory.md §2`, `estimation.trinity_test`, `estimation.bootstrap`, `estimation.wild_cluster_bootstrap` |
 | Decomposition, filters, seasonality | TS | `time-series.md §2` |

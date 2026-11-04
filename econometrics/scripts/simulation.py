@@ -25,6 +25,11 @@ Statistics foundations (v2.4.0)
     demo_estimator_mse()           bias, variance and MSE: S^2 vs MLE of a variance; MoM vs MLE for a uniform(0, theta)
     demo_multiple_testing()        m tests: family-wise error and false discovery rate, raw vs Bonferroni/Holm/BH
 
+Classical regression (v2.4.2)
+    demo_simultaneity()            supply and demand: OLS mixes the curves; ILS = 2SLS with a demand shifter
+    demo_lpm_bounds()              logit truth: LPM slope ~ average marginal effect, fitted values leave [0, 1]
+    demo_multicollinearity()       corr(x1, x2) -> 1: unbiased, SE x sqrt(VIF), joint F still rejects
+
 Design
     power_mde(...)                 minimum detectable effect or sample size, two-sample or clustered
     mde_did(...)                   analytic MDE / units for a DiD with m pre and r post periods
@@ -665,3 +670,118 @@ def demo_multiple_testing(m: int = 20, n: int = 50, R: int = 1000, share_true: f
                       f"is about 1 - (1 - {alpha:g})^{m} = {1 - (1 - alpha) ** m:.0%}. Holm keeps that chance at most "
                       f"{alpha:.0%} (with more power than Bonferroni); Benjamini-Hochberg keeps the expected share of false "
                       f"discoveries at most {alpha:.0%} and keeps more power."}
+
+
+# =============================================================================
+# Classical regression (v2.4.2)
+# =============================================================================
+def demo_simultaneity(R: int = 1000, n: int = 200, b_demand: float = 1.0, d_supply: float = 0.5,
+                      c_income: float = 1.0, sd_d: float = 1.0, sd_s: float = 1.0, seed: int = 0) -> dict:
+    """Supply and demand: demand q = −b·p + c·income + u_d, supply q = d·p + u_s, prices clear the market.
+    OLS of q on p mixes the two curves (simultaneity bias). Income shifts demand only, so it traces out the
+    supply curve: indirect least squares (π_q/π_p from the two reduced forms) and 2SLS with income as the
+    instrument recover d and are the same number when exactly identified. The demand slope is not identified
+    without a variable that shifts supply only."""
+    rng = np.random.default_rng(seed)
+    rows, gap = [], []
+    for _ in range(R):
+        inc = rng.normal(size=n)
+        ud, us = rng.normal(0, sd_d, n), rng.normal(0, sd_s, n)
+        p = (c_income * inc + ud - us) / (b_demand + d_supply)
+        q = d_supply * p + us
+        X = np.column_stack([np.ones(n), p])
+        Z = np.column_stack([np.ones(n), inc])
+        b_ols = np.linalg.lstsq(X, q, rcond=None)[0][1]
+        pi_q = np.linalg.lstsq(Z, q, rcond=None)[0][1]
+        pi_p = np.linalg.lstsq(Z, p, rcond=None)[0][1]
+        ils = pi_q / pi_p
+        Pz = Z @ np.linalg.solve(Z.T @ Z, Z.T @ X)
+        tsls = np.linalg.solve(Pz.T @ X, Pz.T @ q)[1]
+        rows.append((b_ols, ils, tsls))
+        gap.append(abs(ils - tsls))
+    a = np.array(rows)
+    tab = pd.DataFrame({"median": np.median(a, 0), "mean": a.mean(0), "sd": a.std(0, ddof=1)},
+                       index=["OLS of q on p", "indirect least squares", "2SLS (income)"])
+    tab["truth (supply slope)"] = d_supply
+    tab["median_bias"] = tab["median"] - d_supply
+    var_p_d, var_p_s = sd_d ** 2, sd_s ** 2
+    plim = (d_supply * (c_income ** 2 + var_p_d) - b_demand * var_p_s) / (c_income ** 2 + var_p_d + var_p_s)
+    return {"table": tab, "ols_probability_limit": plim, "max_abs_ils_minus_2sls": float(max(gap)),
+            "lesson": "Price and quantity are set together, so OLS estimates neither curve: its limit is a weighted "
+                      "mix of the supply and demand slopes. A demand shifter excluded from supply (income) identifies "
+                      "the supply slope; ILS and 2SLS give the same estimate when exactly identified."}
+
+
+def demo_lpm_bounds(slopes=(0.5, 1.0, 2.0, 4.0), R: int = 500, n: int = 500, intercept: float = 0.0,
+                    seed: int = 0) -> dict:
+    """True model: logit P(y=1|x) = Λ(a + b·x), x ~ N(0, 1). For each slope b: the share of LPM fitted values
+    outside [0, 1], the LPM slope against the true average marginal effect E[b·Λ(1 − Λ)], and the logit AME.
+    The student sees that the LPM slope tracks the average effect well, while its predictions leave [0, 1]
+    as the true curve gets steeper: fine for average effects, poor for individual probabilities."""
+    import statsmodels.api as sm
+    rng = np.random.default_rng(seed)
+    rows = []
+    for b in slopes:
+        outside, lpm, true_ame, logit_ame = [], [], [], []
+        for _ in range(R):
+            x = rng.normal(size=n)
+            pr = 1 / (1 + np.exp(-(intercept + b * x)))
+            y = (rng.uniform(size=n) < pr).astype(float)
+            X = np.column_stack([np.ones(n), x])
+            coef = np.linalg.lstsq(X, y, rcond=None)[0]
+            fit = X @ coef
+            outside.append(np.mean((fit < 0) | (fit > 1)))
+            lpm.append(coef[1])
+            true_ame.append(np.mean(b * pr * (1 - pr)))
+            try:
+                m = sm.Logit(y, X).fit(disp=False)
+                ph = m.predict()
+                logit_ame.append(np.mean(m.params[1] * ph * (1 - ph)))
+            except Exception:                    # perfect separation in a draw: skip it
+                logit_ame.append(np.nan)
+        rows.append({"logit slope b": b, "LPM fitted outside [0,1]": np.mean(outside),
+                     "true AME": np.mean(true_ame), "LPM slope (mean)": np.mean(lpm),
+                     "logit AME (mean)": np.nanmean(logit_ame)})
+    tab = pd.DataFrame(rows).set_index("logit slope b")
+    return {"table": tab,
+            "lesson": "The LPM slope is close to the average marginal effect even when the truth is a logit; what "
+                      "breaks is the fitted probability, which leaves [0, 1] more often as the effect grows. Use the "
+                      "LPM (with robust SEs) for average effects and logit/probit for individual probabilities."}
+
+
+def demo_multicollinearity(rhos=(0.0, 0.5, 0.9, 0.99), R: int = 1000, n: int = 100, beta1: float = 1.0,
+                           beta2: float = 1.0, sd_u: float = 3.0, alpha: float = ALPHA, seed: int = 0) -> dict:
+    """y = β1·x1 + β2·x2 + u with corr(x1, x2) = ρ. OLS stays unbiased; the SE of β̂1 grows like √VIF,
+    VIF = 1/(1 − ρ²); individual t-tests stop rejecting while R² does not fall and the joint F still rejects. The remedy is
+    more data or a different question (the combined effect β1 + β2 is precise), not dropping a variable,
+    which brings omitted-variable bias."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    se0 = None
+    for rho in rhos:
+        b1, se1, rej1, rejF, r2, se_sum = [], [], [], [], [], []
+        for _ in range(R):
+            x1 = rng.normal(size=n)
+            x2 = rho * x1 + np.sqrt(1 - rho ** 2) * rng.normal(size=n)
+            y = beta1 * x1 + beta2 * x2 + rng.normal(0, sd_u, n)
+            X = np.column_stack([np.ones(n), x1, x2])
+            b, V, _, e = _ols(y, X)
+            b1.append(b[1]); se1.append(np.sqrt(V[1, 1]))
+            rej1.append(abs(b[1] / np.sqrt(V[1, 1])) > stats.t.ppf(1 - alpha / 2, n - 3))
+            Rm = np.array([[0, 1, 0], [0, 0, 1]], float)
+            F = (Rm @ b) @ np.linalg.solve(Rm @ V @ Rm.T, Rm @ b) / 2
+            rejF.append(F > stats.f.ppf(1 - alpha, 2, n - 3))
+            r2.append(1 - e @ e / np.sum((y - y.mean()) ** 2))
+            se_sum.append(np.sqrt(V[1, 1] + V[2, 2] + 2 * V[1, 2]))
+        row = {"rho": rho, "VIF": 1 / (1 - rho ** 2), "mean b1": np.mean(b1), "mean se(b1)": np.mean(se1),
+               "reject b1 = 0": np.mean(rej1), "reject b1 = b2 = 0 (F)": np.mean(rejF), "mean R2": np.mean(r2),
+               "mean se(b1 + b2)": np.mean(se_sum)}
+        if se0 is None:
+            se0 = row["mean se(b1)"]
+        row["se ratio vs rho=first"] = row["mean se(b1)"] / se0
+        rows.append(row)
+    tab = pd.DataFrame(rows).set_index("rho")
+    return {"table": tab, "truth": beta1,
+            "lesson": "Correlated regressors do not bias OLS; they make the separate effects imprecise (SE × √VIF), "
+                      "so individual t-tests fail while the joint F rejects. The sum β1 + β2 stays precise. Dropping "
+                      "one regressor trades imprecision for omitted-variable bias."}

@@ -85,7 +85,8 @@ check("the entry point holds no method instructions of its own (short body)", le
 mk = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
 plug = mk["plugins"][0]
 check("marketplace.json declares the main skill and the statistics entry point",
-      plug.get("source") == "./econometrics" and plug.get("skills") == [".", "./statistics"], str(plug.get("skills")))
+      plug.get("source") == "./econometrics" and (plug.get("skills") or [])[:2] == [".", "./statistics"],
+      str(plug.get("skills")))
 with zipfile.ZipFile(ROOT / "dist" / "econometrics.skill") as z:
     names = z.namelist()
 check("dist/econometrics.skill (the app upload) carries one skill: no statistics/ folder",

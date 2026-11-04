@@ -12,7 +12,7 @@ Use for the econometric inputs of valuation and transactions (the beta and the c
 
 ## 2. Beta and the cost of equity
 
-`market_model(r_i, r_m, rf=None)` gives alpha, beta, R², idiosyncratic volatility and Newey-West SEs; with `rf` it is the CAPM regression in excess returns.
+`market_model(r_i, r_m, rf=None)` gives alpha, beta, R², idiosyncratic volatility and Newey-West SEs; with `rf` it is the CAPM regression in excess returns. `result["tests"]` has the HAC t-tests of α = 0 and β = 1 (`beta_null=` changes the value) and their joint Wald test; not rejecting β = 1 is not evidence that β = 1, so read the interval.
 
 | Choice | Common practice | Why it matters |
 |---|---|---|
