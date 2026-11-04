@@ -136,8 +136,23 @@ def robust_regression(df: pd.DataFrame, formula: str, norm: str = "huber") -> di
             "downweighted": w[w < 0.5].sort_values(), "ols": ols, "rlm": rlm, "n": int(rlm.nobs)}
 
 
+def _quantreg_fit(model, q: float, max_iter: int):
+    """Fit one quantile; retry with 4x the iterations if the solver stops at its limit.
+    Returns (fit, converged)."""
+    from statsmodels.tools.sm_exceptions import IterationLimitWarning
+    fit = None
+    for it in (max_iter, 4 * max_iter):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            fit = model.fit(q=q, max_iter=it)
+        if not any(issubclass(x.category, IterationLimitWarning) for x in w):
+            return fit, True
+    return fit, False
+
+
 def quantile_regression(df: pd.DataFrame, formula: str, taus=(0.1, 0.25, 0.5, 0.75, 0.9), B: int = 200,
-                        seed: int = 0, test_coef: str | None = None) -> dict:
+                        seed: int = 0, test_coef: str | None = None, max_iter: int = 5000,
+                        show: bool = True) -> dict:
     """Linear quantile regressions (Koenker & Bassett 1978) across taus.
 
     Coefficients that change with tau mean the regressor shifts the spread or shape of the
@@ -146,10 +161,21 @@ def quantile_regression(df: pd.DataFrame, formula: str, taus=(0.1, 0.25, 0.5, 0.
     that its coefficient is equal at the lowest and highest tau (rows resampled jointly).
     statsmodels' default (kernel-based) SEs are slightly optimistic in the tails (in the skill's
     simulations, ~90% coverage of nominal 95% CIs at tau = 0.1 with n = 3000): for extreme taus
-    in a headline result, also report a pairs-bootstrap CI (estimation.bootstrap)."""
+    in a headline result, also report a pairs-bootstrap CI (estimation.bootstrap).
+
+    Convergence (v2.3.7): each tau is fitted with max_iter iterations (statsmodels' default of 1000
+    stops short in the tails with several regressors; in WAGE1 tau = 0.1 stopped at educ 0.0389
+    instead of 0.0386) and retried with 4x as many if the solver hits its limit. result["converged"]
+    and the table's "converged" column say which taus reached the solution; a tau that did not
+    converge is warned about and must not be reported. Bootstrap replications that did not converge
+    are dropped (equality_test["B_used"]); the test is flagged invalid ("valid": False) when the
+    lowest or highest tau did not converge."""
     import statsmodels.formula.api as smf
     taus = list(taus)
-    fits = {t: smf.quantreg(formula, df).fit(q=t) for t in taus}
+    model = smf.quantreg(formula, df)
+    fits, converged = {}, {}
+    for t in taus:
+        fits[t], converged[t] = _quantreg_fit(model, t, max_iter)
     names = list(fits[taus[0]].params.index)
     test_coef = test_coef or next(n for n in names if n != "Intercept")
     rows = []
@@ -157,8 +183,11 @@ def quantile_regression(df: pd.DataFrame, formula: str, taus=(0.1, 0.25, 0.5, 0.
         ci = f.conf_int(ALPHA)
         for n in names:
             rows.append({"tau": t, "term": n, "estimate": f.params[n], "se": f.bse[n],
-                         "ci_low": ci.loc[n, 0], "ci_high": ci.loc[n, 1]})
+                         "ci_low": ci.loc[n, 0], "ci_high": ci.loc[n, 1], "converged": converged[t]})
     tab = pd.DataFrame(rows)
+    warns = [f"tau {t}: the solver did not converge in {4 * max_iter} iterations; its coefficients are not "
+             "the solution and must not be reported (try a larger max_iter, fewer or rescaled regressors)."
+             for t in taus if not converged[t]]
     rng = np.random.default_rng(seed)
     lo, hi = min(taus), max(taus)
     diff0 = fits[hi].params[test_coef] - fits[lo].params[test_coef]
@@ -167,18 +196,30 @@ def quantile_regression(df: pd.DataFrame, formula: str, taus=(0.1, 0.25, 0.5, 0.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         for _ in range(B):
-            s = d.iloc[rng.integers(0, len(d), len(d))]
+            s = smf.quantreg(formula, d.iloc[rng.integers(0, len(d), len(d))])
             try:
-                diffs.append(smf.quantreg(formula, s).fit(q=hi).params[test_coef]
-                             - smf.quantreg(formula, s).fit(q=lo).params[test_coef])
+                f_hi, c_hi = _quantreg_fit(s, hi, max_iter)
+                f_lo, c_lo = _quantreg_fit(s, lo, max_iter)
             except Exception:
-                pass
-    se = float(np.std(diffs, ddof=1))
+                continue
+            if c_hi and c_lo:
+                diffs.append(f_hi.params[test_coef] - f_lo.params[test_coef])
+    se = float(np.std(diffs, ddof=1)) if len(diffs) > 1 else float("nan")
     z = diff0 / se
+    valid = converged[lo] and converged[hi] and len(diffs) > 1
+    if B and len(diffs) < 0.9 * B:
+        warns.append(f"only {len(diffs)} of {B} bootstrap replications converged; the equality test rests on those.")
+    if not valid:
+        warns.append(f"the equality test ({test_coef}: tau {hi} minus tau {lo}) is not valid: "
+                     "an end tau or the bootstrap did not converge.")
     test = {"estimand": f"{test_coef}: tau {hi} minus tau {lo}", "estimate": float(diff0), "se": se,
             "ci_low": float(diff0 - 1.96 * se), "ci_high": float(diff0 + 1.96 * se),
-            "p": float(2 * stats.norm.sf(abs(z))), "n": len(d)}
-    return {"method": "quantile regression", "table": tab, "fits": fits, "equality_test": test}
+            "p": float(2 * stats.norm.sf(abs(z))), "n": len(d), "B_used": len(diffs), "valid": bool(valid)}
+    if show:
+        for w in warns:
+            print("  WARNING (quantile_regression): " + w)
+    return {"method": "quantile regression", "table": tab, "fits": fits, "converged": converged,
+            "equality_test": test, "warnings": warns}
 
 
 def permutation_test(df: pd.DataFrame, formula: str, coef: str, n_perm: int = 4999, seed: int = 0) -> dict:
