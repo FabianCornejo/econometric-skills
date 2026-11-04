@@ -59,7 +59,7 @@ Tables: `reporting.regression_table({"(1)": m1, "(2)": m2}, keep=[...], fe_rows=
 - **Robust Wald tests with many restrictions** (dozens of cells or groups) over-reject with their χ² reference under heteroskedasticity; use a wild bootstrap imposed under the null (as `ccc_test` does by default) or say that the p-value is anticonservative.
 - **Basel traffic light**: the zones (green 0–4, yellow 5–9, red ≥ 10 violations in 250 days) and the 2.5 expected violations belong to the **99%** VaR. At 97.5% the expectation is 6.25 violations in 250 days and the traffic light does not apply; FRTB's desk-level backtesting sets its own limits at both levels (desks lose model approval with more than 12 exceptions at 99% or 30 at 97.5% in the last 250 days; Basel MAR32 — confirm the local rule).
 
-Script skeleton for every deliverable (v2.3.2; install message v2.3.5). The user should run it as received, with no paths to edit and no variables to set:
+Script skeleton for every deliverable (v2.3.2; install message v2.3.5; trash skipped v2.3.8). The user should run it as received, with no paths to edit and no variables to set:
 
 ```python
 import os, sys
@@ -69,8 +69,9 @@ def _skill_dir():
     """Find the econometrics skill: ECONOMETRICS_SKILL_DIR, the Claude Code plugin, ~/.claude/skills
     (including the copy synced from the Claude app), your clone."""
     skills = Path.home() / ".claude" / "skills"
-    synced = sorted(skills.glob("**/econometrics/scripts/causal.py"), key=lambda f: f.stat().st_mtime,
-                    reverse=True) if skills.is_dir() else []
+    synced = sorted((f for f in skills.glob("**/econometrics/scripts/causal.py")   # skip hidden folders: .trash
+                     if not any(p.startswith(".") for p in f.relative_to(skills).parts)),   # holds removed skills
+                    key=lambda f: f.stat().st_mtime, reverse=True) if skills.is_dir() else []
     for c in (os.environ.get("ECONOMETRICS_SKILL_DIR"),
               Path.home() / ".claude/plugins/marketplaces/econometric-skills/econometrics",
               *[f.parents[1] for f in synced],
