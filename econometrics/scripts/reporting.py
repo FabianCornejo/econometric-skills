@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
-SKILL_VERSION = "2.3.6"
+SKILL_VERSION = "2.3.7"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
@@ -224,7 +224,14 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
 
     estimates: a dict or a pandas Series of numbers, e.g. att_gt's res["cross_check"] passed as
     it is (a Series dr/reg/ipw). At least two routes are needed: with one, nothing was checked,
-    and the result says so instead of reporting agreement."""
+    and the result says so instead of reporting agreement.
+
+    What was checked (v2.3.7, result["kind"]): with se, routes are different methods or assumptions
+    (kind "method"), an independent check of the result. Without se they must agree to rel_tol, which
+    only two implementations of the same estimator do (kind "implementation"): that verifies the
+    arithmetic, not the method, and is printed as an implementation check, never as an independent
+    confirmation. For a headline number, add a route with a different method (robust vs OLS,
+    bootstrap vs analytic CI, DR vs outcome regression vs IPW, formula vs simulation)."""
     if isinstance(estimates, dict) and any(isinstance(v, dict) for v in estimates.values()):
         estimates = {k: (v.get("estimate") if isinstance(v, dict) else v) for k, v in estimates.items()}
     s = pd.Series(estimates, dtype=float).dropna()
@@ -237,19 +244,27 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
                 "warnings": [msg]}
     spread = float(s.max() - s.min())
     if se is not None and np.isfinite(se) and se > 0:
+        kind = "method"
         agree = spread <= tol_se * se
         crit = f"within {tol_se:g} SE ({se:.4g})"
     else:
+        kind = "implementation"
         scale = max(1.0, float(s.abs().max()))
         agree = spread <= rel_tol * scale
         crit = f"to a relative tolerance of {rel_tol:g}"
     warns = [] if agree else [f"Independent routes disagree on the {label}: " + ", ".join(
         f"{k} {v:.6g}" for k, v in s.items()) + f" (spread {spread:.4g}, required {crit})."]
+    note = ("" if kind == "method" else
+            "same estimator computed twice: this verifies the arithmetic, not the method, and is not an independent "
+            "confirmation; for a headline number add a route with a different method (pass se=).")
     out = {"table": s.rename(label).to_frame(), "spread": spread, "agree": bool(agree), "criterion": crit,
-           "warnings": warns}
+           "kind": kind, "note": note, "warnings": warns}
     if show:
-        print(f"\nIndependent check of the {label}: " + ", ".join(f"{k} {v:.6g}" for k, v in s.items())
+        head = "Independent check (different methods)" if kind == "method" else "Implementation check"
+        print(f"\n{head} of the {label}: " + ", ".join(f"{k} {v:.6g}" for k, v in s.items())
               + f" → {'agree' if agree else 'DISAGREE'} ({crit})")
+        if note:
+            print("  note: " + note)
         for w in warns:
             print("  WARNING: " + w)
     return out

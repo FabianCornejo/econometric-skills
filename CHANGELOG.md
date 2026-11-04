@@ -2,6 +2,15 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.3.7 — No number from an estimator that did not converge, and independent checks that are independent
+
+Two gaps found while reviewing the deliverable of the v2.3.6 clean-install test (return to education, WAGE1). The headline results were right (the textbook's Example 7.6 reproduced), but: (1) `linear_models.quantile_regression` used statsmodels' default of 1000 iterations and did not check convergence. At tau = 0.1 with eight regressors it stopped at the limit with educ 0.038897; the solution is 0.038610 (reached at 5000 iterations and stable at 20000). The report gave 4.0% instead of 3.9%, with only a footnote about the warning. (2) The agent passed the same OLS computed by statsmodels and by numpy to `reporting.cross_check` and reported it as an independent confirmation, which checks the arithmetic, not the method.
+
+- **`quantile_regression` reaches the solution or says it did not.** Each tau is fitted with `max_iter=5000` (new argument) and retried with 4x as many if the solver hits its limit. `result["converged"]` and a `converged` table column say which taus reached the solution, and a tau that did not converge is warned about (`warnings`, printed unless `show=False`). Bootstrap replications that did not converge are dropped and counted (`equality_test["B_used"]`); the equality test is flagged `valid: False` when an end tau did not converge. Converged results are unchanged.
+- **`cross_check` says what it checked** (`result["kind"]`). With `se`, the routes are different methods (kind `"method"`), printed as an independent check across methods. Without `se`, they must agree to numerical precision, which only two implementations of one estimator do (kind `"implementation"`): printed as an implementation check, with a note that it verifies the arithmetic, not the method, and is not an independent confirmation. Agreement verdicts are unchanged.
+- **Rules** (`SKILL.md` §4 and `interpretation-rules.md`, "Rules added in v2.3.7"): a number from an estimator that did not converge is not reported (resolve every optimizer warning first, or leave the number out); the independent route uses a different method or assumptions, and the same estimator computed twice is never reported as an independent confirmation.
+- New `tests/test_v237.py` (579 checks in total).
+
 ## v2.3.6 — Optional packages go through the same permission question
 
 In the v2.3.5 clean-install test Claude asked to install the eight core packages and then ran a separate `pip install openpyxl`, which the user had not approved, to write an Excel table. `setup_env.py` did not know optional packages, and without openpyxl the skill stopped with pandas' `Missing optional dependency`. openpyxl is needed in three places: `reporting.export_table` to `.xlsx`, `data_prep.read_any` on `.xlsx`/`.xlsm` files and the `diagnostics.py` command line with an Excel file. No change to estimators or results.
