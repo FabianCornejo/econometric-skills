@@ -78,6 +78,15 @@ jobs:
           print(f"reporting.SKILL_VERSION {s}, CHANGELOG {c}")
           sys.exit(0 if s == c else "set SKILL_VERSION in econometrics/scripts/reporting.py to the CHANGELOG version")
           PY
+      # The skill promises Python 3.10+: syntax that only 3.12 accepts (PEP 701 nested f-string quotes) must not
+      # slip in. Last step of the job, because setup-python changes the default interpreter.
+      - uses: actions/setup-python@v6
+        if: matrix.deps == 'minimum'
+        with:
+          python-version: "3.10"
+      - name: Scripts compile on Python 3.10 (the oldest supported)
+        if: matrix.deps == 'minimum'
+        run: python -m compileall -q econometrics/scripts examples tests
 
   windows:
     # The user's machines run Windows, often with a space in the user folder ("C:\Users\First Last").

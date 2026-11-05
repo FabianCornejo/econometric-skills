@@ -212,7 +212,9 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
     the leverage effect). Persistence: α + β (GARCH), α + γ/2 + β (GJR, symmetric errors), β (EGARCH);
     half-life of a variance shock ln 0.5 / ln(persistence); unconditional variance ω/(1 - persistence) for
     GARCH/GJR. Diagnostics on the standardized residuals z: Ljung-Box on z (mean) and z² (variance), the
-    Engle-Ng sign-bias tests. With variance_dummies (a DataFrame of regressors aligned with r, e.g. a Monday or
+    Engle-Ng sign-bias tests. For vol='garch' the asymmetry is tested by the LR of the GJR against the
+    symmetric GARCH (γ = 0, χ²(1)): the sign-bias tests are a complement with little power under fat tails, and
+    a sign-bias p-value above 0.05 does not show symmetry. With variance_dummies (a DataFrame of regressors aligned with r, e.g. a Monday or
     post-holiday dummy), the GARCH/GJR is estimated by its own likelihood with the regressors in the variance
     equation and Bollerslev-Wooldridge (QML sandwich) SEs; arch has no regressors in the variance."""
     from statsmodels.stats.diagnostic import acorr_ljungbox
@@ -270,6 +272,32 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
     lb_z = acorr_ljungbox(z, lags=[lags], return_df=True).iloc[0]
     lb_z2 = acorr_ljungbox(z ** 2, lags=[lags], return_df=True).iloc[0]
     sb = sign_bias_test(z, show=False)
+    asym = None
+    if vol == "garch" and variance_dummies is None:
+        # the asymmetry test that has power: LR of the GJR against this GARCH (γ = 0). The sign-bias tests lose
+        # power with fat tails (v2.4.7.1: Ibovespa 2010-2026, sign bias p = 0.77, LR p = 2e-8)
+        from arch import arch_model
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                rg = arch_model(s, mean=mean, dist=dist, vol="GARCH", p=1, o=1, q=1).fit(disp="off")
+            ok_fit = rg.convergence_flag == 0 and float(rg.loglikelihood) >= llf - 1e-4
+        except Exception:  # noqa: BLE001 — the asymmetry check must never break the main fit
+            rg, ok_fit = None, False
+        if ok_fit:
+            lr = max(0.0, 2 * (float(rg.loglikelihood) - llf))
+            p_lr = float(stats.chi2.sf(lr, 1))
+            asym = {"lr": lr, "p": p_lr, "gamma": float(rg.params["gamma[1]"]),
+                    "gamma_se": float(rg.std_err["gamma[1]"]), "gjr_bic": float(rg.bic)}
+        else:
+            asym = {"lr": np.nan, "p": np.nan, "gamma": np.nan, "gamma_se": np.nan, "gjr_bic": np.nan}
+            warn.append("asymmetry LR not available: the GJR fit did not converge (rescale the returns, e.g. to "
+                        "percent); rely on the sign-bias tests and fit 'gjr' directly")
+        if ok_fit and p_lr < alpha:
+            warn.append(f"asymmetry omitted: the GJR improves on this symmetric GARCH (LR = {lr:.2f}, p = {p_lr:.2g}, "
+                        f"γ = {asym['gamma']:.4f}); use 'gjr' or 'egarch'"
+                        + (f" — the sign-bias tests miss it here (joint p = {sb['joint_p']:.3f}): they have little "
+                           "power with fat tails" if sb["joint_p"] >= alpha else ""))
     if pers >= 1:
         warn.append(f"persistence {pers:.4f} ≥ 1: integrated (IGARCH-like); unconditional variance undefined. Check "
                     "for breaks, which inflate persistence")
@@ -280,7 +308,7 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
         warn.append("Ljung-Box rejects on z²: volatility dynamics not captured")
     if lb_z["lb_pvalue"] < alpha:
         warn.append("Ljung-Box rejects on z: autocorrelation left in the mean (add AR terms)")
-    if sb["joint_p"] < alpha and vol == "garch":
+    if sb["joint_p"] < alpha and vol == "garch" and (asym is None or not asym["p"] < alpha):
         warn.append("sign-bias tests reject: the symmetric GARCH misses an asymmetry; try 'gjr' or 'egarch'")
     if not conv:
         warn.append("the optimiser did not report convergence")
@@ -292,7 +320,7 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
            "ljung_box_z": {"stat": float(lb_z["lb_stat"]), "p": float(lb_z["lb_pvalue"])},
            "ljung_box_z2": {"stat": float(lb_z2["lb_stat"]), "p": float(lb_z2["lb_pvalue"])},
            "sign_bias": sb, "std_resid": pd.Series(z, index=s.index[-len(z):]), "conditional_variance": cond_var,
-           "variance_dummies": dummies, "warnings": warn,
+           "variance_dummies": dummies, "asymmetry_lr": asym, "warnings": warn,
            "method": {"garch": "GARCH(1,1)", "gjr": "GJR-GARCH(1,1) (threshold in the variance)",
                       "egarch": "EGARCH(1,1) (log-variance; not a threshold GARCH)"}[vol]
            + f", {dist} errors" + (", regressors in the variance by own QML (Bollerslev-Wooldridge SEs)"
@@ -304,6 +332,9 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
               + (f"; unconditional variance {uncond:.4f}" if np.isfinite(uncond) else ""))
         print(f"Ljung-Box({lags}) z: p = {lb_z['lb_pvalue']:.4f}; z²: p = {lb_z2['lb_pvalue']:.4f}; sign bias joint "
               f"p = {sb['joint_p']:.4f}; AIC {out['aic']:.2f}, BIC {out['bic']:.2f}")
+        if asym is not None:
+            print(f"Asymmetry (LR, GJR vs this GARCH): LR = {asym['lr']:.2f}, p = {asym['p']:.4g}; γ = {asym['gamma']:.4f} "
+                  f"(SE {asym['gamma_se']:.4f})")
         if dummies is not None:
             print("Regressors in the variance:\n" + dummies.to_string(float_format=_fmt))
         for w in warn:

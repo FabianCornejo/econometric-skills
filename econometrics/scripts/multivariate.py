@@ -163,8 +163,10 @@ def var_analysis(df, maxlags: int = 8, ic: str = "bic", lags: int | None = None,
     Stability: the largest modulus of the companion eigenvalues must be below 1. Residuals: the adjusted
     portmanteau test of whiteness and the Jarque-Bera test of normality. Granger matrix: p-values of the F test
     that the lags of the column variable do not enter the equation of the row variable (predictive precedence,
-    not causation). Warnings: parameters per equation against observations, and series whose ADF does not
-    reject a unit root (a VAR in levels with I(1) series: use vecm_fit if cointegrated, differences otherwise)."""
+    not causation). Warnings: parameters per equation against observations, and series that the joint verdict
+    of diagnostics.stationarity (ADF, DF-GLS, KPSS) does not classify as I(0) (a VAR in levels with I(1)
+    series: use vecm_fit if cointegrated, differences otherwise); when only the ADF fails to reject, that is
+    said separately."""
     from statsmodels.tsa.api import VAR
     from statsmodels.tsa.stattools import adfuller
     d = _frame(df)
@@ -205,21 +207,40 @@ def var_analysis(df, maxlags: int = 8, ic: str = "bic", lags: int | None = None,
     if white.pvalue < alpha:
         warn.append(f"the residuals are autocorrelated (portmanteau p = {white.pvalue:.4f}): add lags before "
                     "reading IRFs or Granger tests")
-    unit = []
+    # unit roots by the joint verdict of diagnostics.stationarity (ADF, DF-GLS, KPSS), the same one the rest of
+    # the skill uses; ADF alone has low power near the unit root (v2.4.7.1)
+    from diagnostics import stationarity
+    unit, adf_only, trend_only, orders = [], [], [], {}
     for c in names:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            if adfuller(d[c].to_numpy(), autolag="AIC")[1] > 0.10:
-                unit.append(c)
+            st = stationarity(d[c], c, show=False)
+            orders[c] = st.attrs.get("suggested_order", "")
+            p_adf = adfuller(d[c].to_numpy(), autolag="AIC")[1]
+        if "I(0)" not in orders[c]:
+            unit.append(c)
+        elif orders[c].startswith("I(0) around a deterministic trend") and "t" not in trend:
+            trend_only.append(c)
+        elif p_adf > 0.10:
+            adf_only.append(c)
     if unit:
-        warn.append(f"ADF does not reject a unit root for {', '.join(unit)}: a VAR in levels is consistent but "
-                    "Granger tests and long-horizon IRFs are unreliable; test cointegration (vecm_fit) or use "
-                    "differences")
+        listed = ", ".join(c + " (" + orders[c].split(" —")[0] + ")" for c in unit)
+        warn.append(f"the unit-root tests (ADF, DF-GLS, KPSS) do not classify {listed} "
+                    "as stationary: a VAR in levels is consistent but Granger tests and long-horizon IRFs are "
+                    "unreliable; test cointegration (vecm_fit) or use differences")
+    if trend_only:
+        warn.append(f"{', '.join(trend_only)} is stationary only around a deterministic trend, and this VAR has trend "
+                    f"'{trend}': add the trend (trend='ct') or detrend the series before reading the VAR")
+    if adf_only:
+        warn.append(f"ADF alone does not reject a unit root for {', '.join(adf_only)}, but the joint verdict of ADF, "
+                    "DF-GLS and KPSS is I(0): a persistent series; a VAR in levels is reasonable, and a Toda-Yamamoto "
+                    "Granger test is the safe check")
     out = {"results": res, "lag_order": p, "ic_table": ic_tab, "selected": chosen, "max_root": root,
            "stable": root < 1, "whiteness": {"statistic": float(white.test_statistic), "p": float(white.pvalue),
                                               "lags": wl},
            "normality": {"statistic": float(normal.test_statistic), "p": float(normal.pvalue)},
-           "granger_pvalues": gr, "nobs": T, "params_per_equation": per_eq, "warnings": warn,
+           "granger_pvalues": gr, "nobs": T, "params_per_equation": per_eq, "integration_order": orders,
+           "warnings": warn,
            "method": f"VAR({p}) by OLS, trend '{trend}'"}
     if show:
         print(f"\nVAR lag selection (p = 0..{maxlags}); chosen by each criterion: {chosen}; using p = {p} ({ic.upper() if lags is None else 'given'})")

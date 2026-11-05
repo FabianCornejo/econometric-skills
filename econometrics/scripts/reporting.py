@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
-SKILL_VERSION = "2.4.7"
+SKILL_VERSION = "2.4.7.1"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
@@ -236,7 +236,9 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
     A tolerance can be too loose to test anything (v2.4.6.1): when tol_se·se exceeds weak_ratio (25%) of the
     estimate's size, "agree" would have been printed for routes far apart in practical terms (in a 12-month
     inflation forecast of 5.3% with SE 2.1, anything from 3.2% to 7.4% "agreed"). The result then says the check
-    is weak and reports the actual spread, which is the number to judge."""
+    is weak and reports the actual spread, which is the number to judge. When every route is within 1.96 SE of
+    zero (v2.4.7.1), the agreement is flagged as uninformative: two estimates compatible with zero agree with
+    each other trivially."""
     if isinstance(estimates, dict) and any(isinstance(v, dict) for v in estimates.values()):
         estimates = {k: (v.get("estimate") if isinstance(v, dict) else v) for k, v in estimates.items()}
     s = pd.Series(estimates, dtype=float).dropna()
@@ -246,7 +248,7 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
         if show:
             print("\n  WARNING: " + msg)
         return {"table": s.rename(label).to_frame(), "spread": np.nan, "agree": None, "criterion": "not checked",
-                "warnings": [msg]}
+                "kind": None, "weak": False, "null": False, "warnings": [msg]}
     spread = float(s.max() - s.min())
     if se is not None and np.isfinite(se) and se > 0:
         kind = "method"
@@ -260,10 +262,16 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
     warns = [] if agree else [f"Independent routes disagree on the {label}: " + ", ".join(
         f"{k} {v:.6g}" for k, v in s.items()) + f" (spread {spread:.4g}, required {crit})."]
     weak = False
+    null = False
     size = float(s.abs().mean())
+    # every route compatible with zero (|estimate| < 1.96 SE): agreeing then says nothing about the effect
+    if kind == "method" and agree and float(s.abs().max()) < 1.96 * se:
+        null = True
+        warns.append(f"uninformative agreement: every route is compatible with zero (|{label}| < 1.96 SE = "
+                     f"{1.96 * se:.4g}); the routes agree, but the effect itself is not measured")
     # weak only for an agreement on an estimate clearly away from zero: for a statistically null estimate
     # (|estimate| below the tolerance) the relative size of the tolerance means nothing
-    if kind == "method" and agree and size > tol_se * se and tol_se * se > weak_ratio * size:
+    if kind == "method" and agree and not null and size > tol_se * se and tol_se * se > weak_ratio * size:
         weak = True
         warns.append(f"weak check: the tolerance ({tol_se:g} SE = {tol_se * se:.4g}) is {tol_se * se / size:.0%} of the "
                      f"{label}, so routes far apart in practice would still 'agree'; judge the spread ({spread:.4g}) "
@@ -271,7 +279,7 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
     note = ("" if kind == "method" else
             "same estimator computed twice: this verifies the arithmetic, not the method, and is not an independent "
             "confirmation; for a headline number add a route with a different method (pass se=).")
-    out = {"table": s.rename(label).to_frame(), "spread": spread, "agree": bool(agree), "criterion": crit,
+    out = {"table": s.rename(label).to_frame(), "spread": spread, "agree": bool(agree), "criterion": crit, "null": null,
            "kind": kind, "weak": weak, "note": note, "warnings": warns}
     if show:
         head = "Independent check (different methods)" if kind == "method" else "Implementation check"
