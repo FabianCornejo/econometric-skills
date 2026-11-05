@@ -169,6 +169,7 @@ vecm.beta, vecm.alpha
 - **α** = adjustment speed; −0.2 → 20% of the deviation corrected per period; half-life = ln 0.5 / ln(1 − 0.2) ≈ 3.1 periods. The sign must correct the deviation.
 - The ECM separates short and long run and reveals long-horizon predictability that simple regressions miss (Campbell-Shiller: dividend yield predicting returns).
 - `scripts/diagnostics.py cointegration` runs Engle-Granger and Johansen (trace and max-eigenvalue).
+- `multivariate.johansen_trace(df, k_ar_diff, deterministic="ci")` runs the trace test for the stated case with critical values simulated for it. statsmodels' `select_coint_rank` has no restricted-constant case: with `det_order=0` (unrestricted constant) on two cointegrated random walks without drift, it declared full rank ("stationary") in 9 of 20 samples; the simulated case-'ci' test rejected the true rank in 5% of 300. Cases: 'ci' (restricted constant), 'co' (unrestricted constant, levels drift; critical values simulated with the data's drift, slightly oversized in samples of a few hundred), 'li' (trend in the relation, constant outside: statsmodels' `"coli"`; statsmodels' `"li"` has no constant), 'n'. `multivariate.vecm_fit(df)` chooses the lags and rank, then checks that the system returns to β'y = 0: the implied levels VAR must have exactly k − r unit roots and the rest inside the unit circle (eig(I + β'α) inside the unit circle is the special case without lagged differences; with them it is neither necessary nor sufficient). Weak exogeneity is a joint Wald test that all loadings of a variable's equation are zero. With one relation, α_iβ_i < 0 means variable i moves to close the gap; with r > 1, β is identified only up to a rotation, so single α and β values depend on the normalisation until restrictions with economic meaning are imposed.
 
 ## 8. VAR
 
@@ -193,6 +194,7 @@ res.fevd(24).summary()
 - **Generalized IRF (Pesaran-Shin)**: does not depend on ordering, but does not allow reading "a 1% shock to x causes β% in y". Formula: ψ_j(h) = Φ_h Σ e_j / √σ_jj (not built into statsmodels; compute with `res.ma_rep(h)` and `res.sigma_u`).
 - **IRF intervals**: `res.irf(h).plot(orth=True, stderr_type="mc", repl=1000)` (Monte Carlo) or bootstrap. Simple bootstrap intervals for IRFs can have poor coverage in small samples; prefer the bias-corrected bootstrap (Kilian, 1998) when the conclusion depends on it.
 - **Variance decomposition**: which shocks explain the forecast-error variance of each variable; also depends on the orthogonalization.
+- `multivariate.var_analysis(df)` runs the selection, stability, whiteness, normality and the Granger matrix, and warns on parameters per observation and on unit roots; `irf_bands(res, h, ordering=[...])` gives Kilian bias-corrected bootstrap bands; `fevd_table(res, h, orderings=[...])` repeats the decomposition under each ordering and flags the shares that move by more than 10 points.
 - **Price puzzle**: rates rise and prices rise afterwards, because the central bank anticipates inflation; adding commodity prices (or expectations) to the VAR mitigates it.
 - A VAR with I(1) series in levels estimates consistently, but Granger tests and long-horizon IRFs become problematic; with cointegration, use a VECM; without it, use differences.
 
@@ -208,6 +210,8 @@ Structural form: B Y_t = A₀ + A₁Y_{t−1} + … + u_t, with uncorrelated str
 | Sign restrictions (Faust, Uhlig) | Demand shock: p↑ and q↑; supply: p↑ and q↓ | Manual: orthogonal rotations Q (QR decomposition of normal matrices), keep those satisfying the signs | Only set-identified; the pointwise median does not correspond to any model (Kilian); report the set or the most likely model |
 | Exogenous regressors | Variables entering one equation and not another | VAR with `exog` | Exogeneity in macro is controversial (Sims, 1980) |
 | Heteroskedasticity, external instruments (proxy-SVAR) | Volatility changes or an external shock series | Manual | Advanced literature |
+
+`multivariate.svar_identify(k, A, B)` counts free parameters (order condition) and checks the rank of the Jacobian of vech(Σ) at random values (a model can pass the count and still not be identified); `svar_longrun(res)` does Blanchard-Quah; `svar_sign(res, {"demand": {"p": 1, "q": 1}})` keeps the rotations that satisfy the signs and reports the acceptance share, the pointwise median and the Fry-Pagan median-target model.
 
 Example of a justified recursive identification (fuel market): gasoline price (most exogenous, set by policy) → sugar price → ethanol quantity → ethanol price (most endogenous).
 

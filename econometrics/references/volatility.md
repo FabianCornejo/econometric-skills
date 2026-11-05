@@ -35,7 +35,11 @@ print(res.summary())
 | AR mean / with regressors | `mean="AR", lags=1` or `mean="ARX", x=...` | Autocorrelation or day-of-week effect in the mean |
 | Distribution | `dist="normal" / "t" / "skewt" / "ged"` | Compare by AIC/BIC; `t` usually beats the normal |
 
-`arch` does not accept regressors in the variance equation; to test a day-of-week effect on variance (fact 5), use a custom model or compare the average conditional variance by weekday.
+`arch` does not accept regressors in the variance equation; `volatility.garch_fit(r, "garch" | "gjr", variance_dummies=D)` estimates GARCH/GJR with regressors in the variance (day of week, post-holiday, an event) by its own likelihood with Bollerslev-Wooldridge SEs; without regressors it reproduces `arch` (parameters within 0.002, SEs within 3%).
+
+`volatility.stylized_facts(r)` checks the facts of section 1 (Jarque-Bera, Ljung-Box on r and r², ARCH-LM, leverage correlations); `volatility.garch_fit(r, vol)` reports persistence, half-life, the unconditional variance, Ljung-Box on z and z², the Engle-Ng sign-bias tests (`sign_bias_test`) and AIC/BIC, and warns on persistence ≥ 0.99.
+
+**Names**: GJR-GARCH is the threshold GARCH in the variance; Zakoian's TGARCH models the conditional SD; EGARCH (Nelson) models the log-variance. Calling EGARCH a TGARCH is wrong.
 
 Diagnostics:
 - Persistence α + β (+ γ/2 in GJR) < 1; close to 1 = very persistent shocks. Half-life = ln 0.5 / ln(α + β).
