@@ -61,7 +61,7 @@ check("SKILL.md tells every mode to avoid LaTeX and HTML in a terminal",
 
 # ---------------------------------------------------------------- 3. where scripts are saved in Claude Code
 check("SKILL.md: scripts go to the user's working folder; a system folder means asking, never a temporary folder",
-      "save the script in the user's working folder" in skill_md and "System32" in skill_md
+      re.search(r"save the script[^.]*in the user's working folder", skill_md) is not None and "System32" in skill_md
       and "instead of using a temporary or scratchpad folder" in skill_md)
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")

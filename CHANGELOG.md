@@ -2,6 +2,16 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.4.5 — Quick and conceptual questions reach the skill; deliverables stay in the working folder
+
+Measured with the routing evals of v2.4.4. No change to estimators or results.
+
+- **Descriptions** (`SKILL.md` and the `econometrics:statistics` entry point). The v2.4.4 baseline showed requests that never reached the skill, even with the plugin alone: a quick interval for a proportion and the review of a "not significant, so no effect" conclusion (0%), and a lesson (50%). Claude answered them from general knowledge. The descriptions now ask for the skill before answering any question that tests, estimates or judges numbers, "even a quick one you could do by hand (an interval for a proportion, a sample size, a p-value) or a conceptual one", and to review a conclusion, report or paper, and they say why: the tested functions and rules catch errors of answers from memory (the statistics entry names the Wald interval). The main description stays within 1,024 characters ("Applied", "LLM coding" and EVT were dropped from its method list; VaR/ES and documents-into-variables requests are still named or routed by the `SKILL.md` table).
+- **Result** (2 runs per case and setting, Claude Code 2.1.318, same harness as the baseline): the skill was reached in **100%** of the 8 positive cases with the plugin alone (baseline 62%) and **100% in the crowded listing** (baseline 50%; the two-groups comparison went from 0% to 100% there). The crowded setting is over Claude Code's listing budget (debug log: "69 skills, 45,907 chars > 30,000 budget — descriptions will be truncated"); the clean one is not. **No false triggers**: two new unrelated requests, plain arithmetic (a 15% tip) and a spreadsheet formula (SUMIF), join the e-mail; none fired the skill in either setting. A clean-listing check with 3 runs on the five changed cases gave the same 100% / 0%.
+- **Deliverables in the working folder.** In the v2.4.4 test on Windows the `econometrician` agent computed every number right but saved its script and run manifest in its scratchpad, a temporary folder Claude Code offers for intermediate files. The agent and `SKILL.md` now say that a delivered script and its manifest are the product, not scratch files: they go to the working folder even when a scratchpad is offered, and a system or read-only folder means asking where to save.
+- `tools/routing_evals.py`: `--arm clean|crowded` to measure one setting, and any case with a `skill-not-fired` grader counts as an unrelated request, reported as a false-trigger rate.
+- New `tests/test_v245.py` (13 checks): the save rule in the agent and `SKILL.md`; the descriptions' triggers, reasons and length; the three unrelated requests and their graders; the false-trigger summary (805 checks in total).
+
 ## v2.4.4 — A dedicated agent and routing evals in a crowded skill listing
 
 Layers 4 and 5 of the robustness plan: a way into the skill that does not depend on the skill listing, and a repeatable measurement of how often Claude reaches the skill, with the plugin alone and in a crowded installation. No change to estimators or results.

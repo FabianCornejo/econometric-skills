@@ -134,7 +134,7 @@ def set_frontmatter(text: str, name: str, plugins: list[str], extra_tag: str) ->
     return "---\n" + "\n".join(lines) + "\n---\n" + m.group(2)
 
 
-def build(harness: Path, cases: list[str] | None = None) -> dict:
+def build(harness: Path, cases: list[str] | None = None, arms=("clean", "crowded")) -> dict:
     """Write the harness plugin; returns {"cases": [...], "crowd_chars": int}."""
     (harness / ".claude-plugin").mkdir(parents=True, exist_ok=True)
     (harness / ".claude-plugin" / "plugin.json").write_text(json.dumps(
@@ -148,7 +148,7 @@ def build(harness: Path, cases: list[str] | None = None) -> dict:
     crowd_chars = 0
     built = []
     for n in names:
-        for arm in ("clean", "crowded"):
+        for arm in arms:
             d = harness / "evals" / f"{arm}-{n}"
             shutil.copytree(CASES / n / "graders", d / "graders")
             write_plugin_copy(d / "econometrics")
@@ -173,10 +173,13 @@ def summarize(result: dict) -> tuple[str, list[dict]]:
         fired = rate("skill-fired")
         if fired is None:                         # delegation case: the skill or the econometrician agent
             fired = rate("reached")
+        negative = False
         if fired is None:                         # negative case: the skill must NOT fire
             nf = rate("skill-not-fired")
             fired = None if nf is None else 1 - nf
-        rows.setdefault(base, {"case": base})
+            negative = nf is not None
+        rows.setdefault(base, {"case": base, "negative": False})
+        rows[base]["negative"] |= negative
         rows[base][f"{arm} skill fired"] = fired
         rows[base][f"{arm} answer ok"] = rate("answer")
         rows[base][f"{arm} runs"] = len(runs)
@@ -185,14 +188,18 @@ def summarize(result: dict) -> tuple[str, list[dict]]:
     out = ["| Case | Skill fired: clean | Skill fired: crowded | Answer ok: clean | Answer ok: crowded |",
            "|---|---|---|---|---|"]
     for r in rows.values():
-        neg = " (must not fire)" if r["case"] == "unrelated-email" else ""
+        neg = " (must not fire)" if r["negative"] else ""
         out.append(f"| {r['case']}{neg} | {fmt(r.get('clean skill fired'))} | {fmt(r.get('crowded skill fired'))} | "
                    f"{fmt(r.get('clean answer ok'))} | {fmt(r.get('crowded answer ok'))} |")
-    pos = [r for r in rows.values() if r["case"] != "unrelated-email"]
+    pos = [r for r in rows.values() if not r["negative"]]
+    neg_rows = [r for r in rows.values() if r["negative"]]
     for arm in ("clean", "crowded"):
         v = [r[f"{arm} skill fired"] for r in pos if r.get(f"{arm} skill fired") is not None]
         if v:
             out.append(f"\nRouting rate, {arm}: {sum(v) / len(v):.0%} over {len(v)} cases")
+        w = [r[f"{arm} skill fired"] for r in neg_rows if r.get(f"{arm} skill fired") is not None]
+        if w:
+            out.append(f"False triggers, {arm}: {sum(w) / len(w):.0%} over {len(w)} unrelated requests")
     return "\n".join(out), list(rows.values())
 
 
@@ -204,6 +211,8 @@ def main(argv=None) -> int:
     ap.add_argument("--max-cost-usd", type=float)
     ap.add_argument("-j", "--concurrency", type=int, default=1)
     ap.add_argument("--out", type=Path, default=Path("routing-results") / datetime.now().strftime("%Y%m%d-%H%M%S"))
+    ap.add_argument("--arm", choices=("both", "clean", "crowded"), default="both",
+                    help="run only the clean or the crowded listing (default: both)")
     ap.add_argument("--build-only", type=Path, metavar="DIR", help="write the harness to DIR and stop")
     a = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):      # Windows consoles: never crash on "≈" or "—"
@@ -212,7 +221,7 @@ def main(argv=None) -> int:
         except (AttributeError, ValueError):
             pass
     if a.build_only:
-        info = build(a.build_only, a.case)
+        info = build(a.build_only, a.case, ("clean", "crowded") if a.arm == "both" else (a.arm,))
         print(f"Harness written to {a.build_only}: {len(info['cases'])} cases; decoy descriptions "
               f"{info['crowd_chars']} characters")
         return 0
@@ -222,8 +231,8 @@ def main(argv=None) -> int:
     a.out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="econ-routing-") as tmp:
         harness = Path(tmp) / "harness"
-        info = build(harness, a.case)
-        print(f"{len(info['cases'])} cases (clean and crowded); decoy descriptions {info['crowd_chars']} characters")
+        info = build(harness, a.case, ("clean", "crowded") if a.arm == "both" else (a.arm,))
+        print(f"{len(info['cases'])} cases ({a.arm}); decoy descriptions {info['crowd_chars']} characters")
         out_json = (a.out / "routing.json").resolve()
         cmd = [exe, "plugin", "eval", str(harness), "--trust-plugin", "--ablation", "none", "--runs", str(a.runs),
                "--no-publish", "-j", str(a.concurrency), "--output-dir", str(a.out.resolve()), "--json", str(out_json)]

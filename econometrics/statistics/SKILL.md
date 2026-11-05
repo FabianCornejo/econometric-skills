@@ -1,6 +1,6 @@
 ---
 name: statistics
-description: "Statistics and hypothesis tests in Python: describe a variable, compare two groups or means (t test, Welch, paired, Mann-Whitney), proportions, variances, chi-square and Fisher tests on tables, normality, correlation, confidence intervals, power and sample size, multiple testing, or teaching basic statistics. Entry point to the econometrics skill's statistics module; load it instead of answering from general knowledge or with a data-analysis skill."
+description: "Statistics and hypothesis tests in Python, including quick calculations you could do by hand: a confidence interval for a proportion or a mean, a sample size, a p-value; compare two groups or means (t test, Welch, paired, Mann-Whitney), proportions, variances, chi-square and Fisher tests on tables, normality, correlation, power, multiple testing, whether a 'not significant' result means no effect, or teaching basic statistics. Entry point to the econometrics skill's statistics module: load it instead of answering from general knowledge (hand formulas such as the Wald interval are often the wrong ones) or with a data-analysis skill."
 ---
 
 # Statistics (entry point)
