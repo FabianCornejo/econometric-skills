@@ -204,9 +204,19 @@ check("vecm_fit: the stability check uses the levels VAR (exactly k − r unit r
 
 # ---------------------------------------------------------------- 5. volatility
 from arch import arch_model  # noqa: E402
-sim = arch_model(None, vol="GARCH", p=1, o=1, q=1, dist="t").simulate([0.05, 0.05, 0.02, 0.15, 0.86, 7.0], 3000,
-                                                                       burn=500)
-r = pd.Series(sim["data"].to_numpy(), index=pd.bdate_range("2012-01-02", periods=3000))
+
+def gjr_sim(seed, n=4000, om=0.05, a=0.0, g=0.2, b=0.86, nu=7):   # seeded here: arch's simulate is not
+    rng_ = np.random.default_rng(seed)
+    e_ = rng_.standard_t(nu, size=n + 500) / np.sqrt(nu / (nu - 2))
+    x_ = np.empty(n + 500)
+    s2_ = om / (1 - a - g / 2 - b)
+    for t in range(n + 500):
+        x_[t] = np.sqrt(s2_) * e_[t]
+        s2_ = om + a * x_[t] ** 2 + g * x_[t] ** 2 * (x_[t] < 0) + b * s2_
+    return pd.Series(x_[500:], index=pd.bdate_range("2010-01-04", periods=n))
+
+
+r = gjr_sim(0)
 for gjr in (False, True):
     th, se_, llf, s2, names, _conv = vo._garch_mle(r.to_numpy(), np.empty((len(r), 0)), gjr, "t")
     ref = arch_model(r, vol="GARCH", p=1, o=int(gjr), q=1, dist="t").fit(disp="off")
