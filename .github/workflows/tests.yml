@@ -56,10 +56,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/pkg"
           unzip -q dist/econometrics.skill -d "$RUNNER_TEMP/pkg"
-          # statistics/ and modes/ are the plugin's extra entry points (Claude Code only); the app package carries one skill
-          diff -r -x __pycache__ -x statistics -x modes "$RUNNER_TEMP/pkg/econometrics" econometrics \
-            || { echo "dist/econometrics.skill is stale: rebuild it with 'zip -qrD dist/econometrics.skill econometrics -x \"*__pycache__*\" \"econometrics/statistics/*\" \"econometrics/modes/*\"'"; exit 1; }
-          if unzip -l dist/econometrics.skill | grep -qE "econometrics/(statistics|modes)/"; then echo "dist must not contain statistics/ or modes/"; exit 1; fi
+          # statistics/, modes/, agents/ and evals/ are Claude Code plugin parts; the app package carries one skill
+          diff -r -x __pycache__ -x statistics -x modes -x agents -x evals "$RUNNER_TEMP/pkg/econometrics" econometrics \
+            || { echo "dist/econometrics.skill is stale: rebuild it with 'zip -qrD dist/econometrics.skill econometrics -x \"*__pycache__*\" \"econometrics/statistics/*\" \"econometrics/modes/*\" \"econometrics/agents/*\" \"econometrics/evals/*\"'"; exit 1; }
+          if unzip -l dist/econometrics.skill | grep -qE "econometrics/(statistics|modes|agents|evals)/"; then echo "dist must not contain statistics/, modes/, agents/ or evals/"; exit 1; fi
       - name: Plugin version matches the latest CHANGELOG version
         run: |
           python - <<'PY'

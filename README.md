@@ -40,9 +40,10 @@ The mode changes the form of the answer, never the computations: every number co
 
 ### How it is validated
 
-- **766 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, a curriculum map whose every function and section must exist, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
+- **790 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, a curriculum map whose every function and section must exist, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
 - **Continuous integration** runs every test suite and worked example on the minimum and the latest supported dependency versions, and checks that `dist/econometrics.skill` matches the source.
 - **Blind evals** (`evals/`): plain-language prompts with objective must / must-not criteria, run in a fresh conversation before each release.
+- **Routing evals** (`econometrics/evals/routing/`, run with `python tools/routing_evals.py`): `claude plugin eval` sends nine plain requests (two groups, a quick proportion interval, controls, a weak instrument, VaR validation, a null result to review, a lesson, a larger analysis, and an unrelated e-mail that must not trigger the skill), each twice: with the plugin alone and with 48 decoy data and statistics skills that overflow Claude Code's skill listing, the situation seen on real installations. The summary reports how often the skill was reached in each setting. The cases need no shell tools, so they also run on native Windows; each run is a real model call on your account (about $0.10).
 - **Independent verification**: headline numbers are recomputed by a second route (DR vs outcome regression vs IPW inside `att_gt`, or `reporting.cross_check`), and deliverable scripts end with a run manifest, so a number can be traced and reproduced.
 - **Look-ahead discipline**: every rolling estimate uses only data available at the time; the usual traps (contemporaneous regressors, full-sample scaling, smoothed probabilities, signal/return misalignment) are avoided in code and documented.
 
@@ -57,6 +58,8 @@ econometrics/
 ├── SKILL.md               router: modes, routing table, rules, output contract
 ├── statistics/SKILL.md    entry point for statistics questions (Claude Code only)
 ├── modes/                 /econometrics:consultant, :teacher, :reviewer commands (Claude Code only)
+├── agents/                econometrician subagent with the skill preloaded (Claude Code only)
+├── evals/routing/         routing cases for `claude plugin eval` (Claude Code only)
 ├── scripts/               22 tested modules (see the table above) and workspace.py
 └── references/
     ├── workflow.md            Consultant mode: study card + 7 steps
@@ -76,6 +79,7 @@ econometrics/
 tests/        test suites (python3 tests/test_<name>.py)
 examples/     five worked analyses on Wooldridge data (scripts and notebooks)
 evals/        blind-test prompts and results history
+tools/        routing_evals.py: routing evals in a clean and a crowded skill listing
 dist/         econometrics.skill, the packaged skill
 ```
 
@@ -93,6 +97,8 @@ dist/         econometrics.skill, the packaged skill
   *If Claude does not use the skill.* Type `/skills`: `econometrics` should be listed with its description. The plugin offers two entry points to the same skill: `econometrics:econometrics` and `econometrics:statistics` (for tests of means, proportions, variances, tables, normality and correlation); the second only sends Claude to the first, so the name alone points statistics questions to the skill. With hundreds of skills installed, Claude Code drops the descriptions to fit its listing budget and offers skills by name only (`claude --debug` logs "Skill listing over budget"); in the v2.4.0 test, 962 skills and 37,000 characters, and a basic-statistics request was answered without the skill. Three ways out: turn off the plugins you do not need in your analysis folder with a `.claude/settings.json` there holding `{"enabledPlugins": {"<plugin>@<marketplace>": false}}` (other folders keep them); raise the budget with the `skillListingBudgetFraction` setting; or ask for it by name: "use the econometrics skill".
 
   *Commands that always reach the skill.* `/econometrics:consultant` (then the question), `/econometrics:teacher` (the topic) and `/econometrics:reviewer` (the material) load the skill in the Consultant, Teacher or Reviewer mode. They do not depend on Claude choosing the skill, so they work however many plugins are installed. Claude never calls them on its own (`disable-model-invocation`), so they do not compete with other skills for requests.
+
+  *A dedicated agent.* `@agent-econometrics:econometrician <task>` hands a self-contained piece of work (an analysis on a file, a model check, a forecast, VaR, a review) to a subagent that starts with the whole skill preloaded, in its own context, so it does not depend on the skill listing either; it returns the main table, the diagnostics and the paths of the scripts it wrote. Claude may also delegate to it by itself. Teaching works better in the main conversation (`/econometrics:teacher`). Use the @-mention or delegation: `claude --agent econometrics:econometrician` starts a session *as* the agent, which does not preload skills (the agent then loads the skill itself).
 
   *A clean analysis folder.* `python <skill folder>/scripts/workspace.py <folder>` writes `<folder>/.claude/settings.json` turning off, in that folder only, every enabled plugin except econometrics (`--keep <plugin>@<marketplace>` keeps others; `--dry-run` shows the file first). Other plugins' skills then stop competing for statistics requests and their hooks stop running there, while the rest of the computer is unchanged. `claude plugin list`, run inside the folder, shows what is on.
 
