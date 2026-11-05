@@ -40,11 +40,17 @@ def _relabel_by(values: pd.Series, labels: np.ndarray) -> tuple[np.ndarray, dict
 # ---------------------------------------------------------------------------
 def markov_switching(y: pd.Series, k_regimes: int = 2, order: int = 0, trend: str = "c",
                      switching_variance: bool = True, exog=None, search_reps: int = 20,
-                     show: bool = True):
+                     seed: int = 0, show: bool = True):
     """Markov-switching mean/variance (order=0) or autoregression (order>0).
 
     Returns dict with the fitted result, transition matrix, expected durations and
     filtered/smoothed probabilities (columns ordered from lowest to highest variance).
+
+    statsmodels draws the `search_reps` random starting values from fresh OS entropy (0.15) or NumPy's global
+    generator (0.14), so results changed from run to run, and an unlucky start can make the EM step fail ("SVD did not converge",
+    seen on Windows CI; "Steady-state probabilities could not be constructed" too). The search now runs under `seed` (passed as `rng`, or as the global seed on 0.14, whose state is restored afterwards); if the
+    fit still fails it is retried with other seeds and then without the random search, and the result
+    records which attempt worked (`fit_attempt`).
     """
     import statsmodels.api as sm
     y = pd.Series(y).dropna().astype(float)
@@ -56,7 +62,28 @@ def markov_switching(y: pd.Series, k_regimes: int = 2, order: int = 0, trend: st
         else:
             mod = sm.tsa.MarkovAutoregression(y, k_regimes=k_regimes, order=order, trend=trend,
                                               switching_variance=switching_variance)
-        res = mod.fit(search_reps=search_reps, disp=False)
+        attempts = [(seed + i, search_reps) for i in range(3)] + [(seed, 0)]
+        res, errors, used = None, [], None
+        import inspect
+        takes_rng = "rng" in inspect.signature(mod.fit).parameters   # statsmodels >= 0.15; 0.14 uses np.random
+        state = np.random.get_state()
+        try:
+            for sd, reps in attempts:
+                np.random.seed(sd)
+                kw = {"rng": np.random.default_rng(sd)} if takes_rng else {}
+                try:
+                    cand = mod.fit(search_reps=reps, disp=False, **kw)
+                except (np.linalg.LinAlgError, ValueError, RuntimeError) as e:   # EM/SVD or steady-state failures
+                    errors.append(f"seed {sd}, search_reps {reps}: {e}")
+                    continue
+                if np.all(np.isfinite(np.asarray(cand.params))) and np.isfinite(cand.llf):
+                    res, used = cand, {"seed": sd, "search_reps": reps}
+                    break
+                errors.append(f"seed {sd}, search_reps {reps}: non-finite estimates")
+        finally:
+            np.random.set_state(state)
+        if res is None:
+            raise RuntimeError("Markov-switching fit failed for every starting strategy: " + "; ".join(errors))
     names = list(res.model.param_names)
     prm = np.asarray(res.params)
     sig = [prm[names.index(f"sigma2[{i}]")] if f"sigma2[{i}]" in names else prm[names.index("sigma2")]
@@ -82,7 +109,7 @@ def markov_switching(y: pd.Series, k_regimes: int = 2, order: int = 0, trend: st
         print(pd.DataFrame(P).to_string(float_format=lambda v: f"{v:.3f}"))
         print("Use filtered probabilities for anything real-time; smoothed ones look into the future.")
     return {"result": res, "summary": summary, "transition": pd.DataFrame(P),
-            "filtered": filt, "smoothed": smth}
+            "filtered": filt, "smoothed": smth, "fit_attempt": used}
 
 
 # ---------------------------------------------------------------------------
