@@ -2,6 +2,32 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.4.6 — Univariate time series
+
+A new module for one series, four Teacher-mode demos, and the sample size for a given effect.
+
+- **`scripts/ts_univariate.py`**:
+  - `ts_identify`: correlogram with Bartlett bands for the ACF and ±1.96/√n for the PACF, Ljung-Box, the orders the correlogram suggests and a BIC grid of small ARMA models.
+  - `detrend` (settings from the frequency; daily or weekly data need them passed explicitly): polynomial trend, HP (λ from the frequency; two-sided or one-sided, the real-time version), Hamilton, Baxter-King, Christiano-Fitzgerald. It reports what each filter loses or revises at the end of the sample; for the two-sided HP, the average gap between the real-time and the final trend.
+  - `adf_lags` and `adf_bootstrap`: ADF with lags by AIC (default), BIC, the general-to-specific t ≥ 1.645 rule or the modified AIC, all on a common sample, and a sieve-bootstrap p-value under H0 next to MacKinnon's. AIC is the default because, in simulations with the bootstrap (n = 150), it kept the size (6%; 2.5% with MA(−0.5) errors) with full power against AR(0.5), while BIC over-rejected with MA errors (10%) and the t rule and MAIC lost a third of the power.
+  - `ar_bootstrap_forecast`: AR(p) forecasts with bootstrap intervals that re-estimate the coefficients (parameter uncertainty), with residuals rescaled for the degrees of freedom and Kilian's bias correction of the slopes, next to the analytic normal interval. In simulations (AR(1), φ = 0.8, n = 30, h = 4) the 95% interval covered 92% of outcomes; the analytic interval and the uncorrected bootstrap covered 86%. Forecast labels continue the series' dates, periods or years.
+  - `sup_wald`: Andrews sup-F test for one break at an unknown date, with a sieve-bootstrap p-value (AR order by BIC on a common sample, so it does not depend on the units of y), plus OLS-CUSUM and recursive coefficients. It warns when the residuals are as persistent as a random walk, because a break test in levels assumes stationarity.
+  - Long memory: `long_memory` (GPH and local Whittle d with SEs), `frac_diff`, two-step `arfima`.
+  - `combine_forecasts`: equal weights (default), inverse MSE, Bates-Granger (with the matrix of mean squared errors, so a biased forecast is penalised) and Granger-Ramanathan, estimated on a training window and evaluated after it.
+- **Demos** (`simulation.py`):
+  - `demo_trend_vs_difference`: detrending a random walk vs differencing a trend-stationary series.
+  - `demo_ar1_forecast_variance`: the h-step variance of an AR(1) and of a random walk.
+  - `demo_unit_root_power`: the ADF against φ from 1 to 0.8.
+  - `demo_break_unit_root`: a mean shift that makes a stationary series look I(1), and the ADF with the break modelled.
+- **`inference.n_for_power(effect, sd)`**: the smallest n whose exact t-test power reaches the target, for the effect asked. In the v2.4.5 Windows test the agent quoted 26 per group, read off a 0.8-SD power table, for an observed difference of d ≈ 0.94; the right number is 19. A new interpretation rule says to compute n for the effect, never read it off a table.
+- **References**:
+  - `time-series.md` §2–5 and §11 point to the new functions.
+  - `forecasting-backtesting.md` gains Armstrong's forecasting checklist (be conservative, simple first, damp trends, combine, validate out of sample, honest intervals, disclose).
+  - `workflow.md` sets the order for a series: clean it, look for breaks (on the differences if it may be I(1)), then test for unit roots with the break modelled.
+  - Also updated: the interpretation rules for v2.4.6, the curriculum map and simulation table in `teaching.md`, `software-equivalents.md` and the bibliography.
+- An independent review before release found and fixed: Bates-Granger weights that used the centred covariance, a sieve BIC that depended on the units of y, bootstrap forecast intervals narrower than claimed, `sup_wald` failing on an X array with dated y, daily data given quarterly settings, a negative d read as "no long memory", and future labels that restarted at the row count.
+- New `tests/test_v246.py`: every estimator against statsmodels or a closed form written in the test (ADF τ, AIC lags, AutoReg forecasts and SEs, hpfilter, Hamilton by OLS, Chow F at the estimated date, Bates-Granger and constrained-LS weights, `TTestIndPower`). The bootstrap procedures are checked for size, power and coverage, and long memory by recovering d from an ARFIMA built by its MA(∞) weights (66 checks; 872 in total).
+
 ## v2.4.5 — Quick and conceptual questions reach the skill; deliverables stay in the working folder
 
 Measured with the routing evals of v2.4.4. No change to estimators or results.

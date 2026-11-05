@@ -32,7 +32,7 @@ Every method is explained with the same eleven blocks, in this order. Skip a blo
 
 ## 3. Simulations that teach
 
-Ready-made demos are in `scripts/simulation.py` (each returns a table and a one-line lesson; show their code and let the student change one parameter): `demo_clt`, `demo_ci_coverage`, `demo_estimator_mse`, `demo_multiple_testing` (Module 0), `demo_simultaneity`, `demo_lpm_bounds`, `demo_multicollinearity` (classical regression), `demo_omitted_variable`, `demo_bad_control`, `demo_measurement_error`, `demo_heteroskedasticity`, `demo_spurious_regression`, `demo_weak_iv`, `demo_few_clusters`, `demo_staggered_did`, `demo_did_covariates`; `monte_carlo(dgp, estimators, R, truth)` builds any other one, and `power_mde` answers "how large a sample?" or "how small an effect can we detect?" (for a DiD, `mde_did` and the simulation `power_did_sim`, which shows how serial correlation erodes power). Good and bad controls are taught with `dag.py`: draw the graph, let `adjustment_report` classify each variable, then simulate the linear model and show OLS with a minimal set recovering the effect while a collider or mediator biases it. The heterogeneity lesson uses `hte` (a linear CATE vs a forest on a symmetric effect).
+Ready-made demos are in `scripts/simulation.py` (each returns a table and a one-line lesson; show their code and let the student change one parameter): `demo_clt`, `demo_ci_coverage`, `demo_estimator_mse`, `demo_multiple_testing` (Module 0), `demo_simultaneity`, `demo_lpm_bounds`, `demo_multicollinearity` (classical regression), `demo_trend_vs_difference`, `demo_ar1_forecast_variance`, `demo_unit_root_power`, `demo_break_unit_root` (univariate time series), `demo_omitted_variable`, `demo_bad_control`, `demo_measurement_error`, `demo_heteroskedasticity`, `demo_spurious_regression`, `demo_weak_iv`, `demo_few_clusters`, `demo_staggered_did`, `demo_did_covariates`; `monte_carlo(dgp, estimators, R, truth)` builds any other one, and `power_mde` answers "how large a sample?" or "how small an effect can we detect?" (for a DiD, `mde_did` and the simulation `power_did_sim`, which shows how serial correlation erodes power). Good and bad controls are taught with `dag.py`: draw the graph, let `adjustment_report` classify each variable, then simulate the linear model and show OLS with a minimal set recovering the effect while a collider or mediator biases it. The heterogeneity lesson uses `hte` (a linear CATE vs a forest on a symmetric effect).
 
 Write them in a few lines of numpy with a fixed seed; repeat 500–1000 times; show the distribution of the estimate against the truth (histogram or a table of mean, bias, SD, coverage).
 
@@ -45,6 +45,10 @@ Write them in a few lines of numpy with a fixed seed; repeat 500–1000 times; s
 | Simultaneity | `demo_simultaneity`: supply and demand cleared by price | OLS of quantity on price estimates neither curve; a demand shifter (income) identifies the supply slope, and ILS = 2SLS |
 | LPM vs logit | `demo_lpm_bounds`: logit truth with a growing slope | The LPM slope stays close to the average marginal effect, while its fitted probabilities leave [0, 1] more often |
 | Multicollinearity | `demo_multicollinearity`: corr(x1, x2) from 0 to 0.99 | Still unbiased; the SE grows like sqrt(VIF), individual t-tests fail, the joint F and the sum b1 + b2 stay precise |
+| Trend or unit root? | `demo_trend_vs_difference`: a line removed from a random walk, a trend-stationary series differenced | A persistent spurious cycle in one; a lag-1 autocorrelation of (φ − 1)/2 in the other |
+| Forecast uncertainty | `demo_ar1_forecast_variance`: φ = 0.5, 0.9, 0.99, 1 | The error variance stops at σ²/(1 − φ²) for a stationary AR and grows like h·σ² under a unit root |
+| Power of unit-root tests | `demo_unit_root_power`: ADF against φ from 1 to 0.8, T = 50 to 250 | About 5% rejections at φ = 1, but few against φ = 0.95 with 100 observations |
+| A break that mimics a unit root | `demo_break_unit_root`: a stationary AR with a mean shift | The ADF stops rejecting as the shift grows; with the break modelled it rejects again |
 | Unbiasedness and sampling variation | OLS on repeated samples (Colonescu 2.5; `monte_carlo`) | Estimates spread around the true beta; spread falls with n |
 | CI coverage in regression | 95% CIs over 1,000 samples (Colonescu 3.4; `demo_heteroskedasticity`) | About 950 contain the truth; with heteroskedasticity and classical SEs, fewer |
 | Omitted variable bias | Drop a confounder correlated with x | Bias = beta_z · delta, with the predicted sign |
@@ -91,7 +95,7 @@ Where each topic of a standard sequence (statistics, econometrics, time series: 
 | Sampling distributions, CLT | 0 | `statistics-foundations.md §3`, `simulation.demo_clt` |
 | Bias, variance, MSE; method of moments; maximum likelihood | 0 | `statistics-foundations.md §4`, `simulation.demo_estimator_mse`, `estimation.mle`, `estimation.delta_method` |
 | Confidence intervals: mean, proportion, variance; sample size | 0 | `statistics-foundations.md §5`, `inference.one_sample`, `inference.proportion_ci`, `inference.variance_test`, `inference.n_for_proportion`, `simulation.demo_ci_coverage` |
-| Tests: logic, errors, power | 0 | `statistics-foundations.md §6`, `inference.power_curve`, `simulation.power_mde` |
+| Tests: logic, errors, power | 0 | `statistics-foundations.md §6`, `inference.power_curve`, `inference.n_for_power`, `simulation.power_mde` |
 | Two means: Welch, pooled, paired | 0 | `inference.two_sample` |
 | Rank tests | 0 | `inference.nonparametric` |
 | Two variances | 0 | `inference.variance_test` |
@@ -119,11 +123,12 @@ Where each topic of a standard sequence (statistics, econometrics, time series: 
 | Tobit, Heckman | 7 | `limited-dependent.md §5`, `limited-dependent.md §6`, `diagnostics.tobit`, `discrete_choice.heckman` |
 | Counts | 7 | `limited-dependent.md §7`, `diagnostics.count_diagnostics` |
 | Likelihood tests, delta method, bootstrap | 8 | `estimation-theory.md §2`, `estimation.trinity_test`, `estimation.bootstrap`, `estimation.wild_cluster_bootstrap` |
-| Decomposition, filters, seasonality | TS | `time-series.md §2` |
-| Stationarity, unit roots | TS | `time-series.md §3`, `diagnostics.stationarity`, `simulation.demo_spurious_regression` |
-| Structural breaks | TS | `time-series.md §4`, `diagnostics.chow` |
-| ARMA and Box-Jenkins | TS | `time-series.md §5`, `forecasting.auto_arima`, `forecasting.select_d` |
-| Forecast evaluation, combination | TS | `time-series.md §11`, `forecasting.rolling_origin`, `forecasting.evaluate`, `diagnostics.diebold_mariano` |
+| Decomposition, filters, seasonality | TS | `time-series.md §2`, `ts_univariate.detrend`, `simulation.demo_trend_vs_difference` |
+| Stationarity, unit roots | TS | `time-series.md §3`, `diagnostics.stationarity`, `ts_univariate.adf_bootstrap`, `simulation.demo_spurious_regression`, `simulation.demo_unit_root_power`, `simulation.demo_break_unit_root` |
+| Structural breaks | TS | `time-series.md §4`, `diagnostics.chow`, `ts_univariate.sup_wald` |
+| ARMA and Box-Jenkins | TS | `time-series.md §5`, `ts_univariate.ts_identify`, `forecasting.auto_arima`, `forecasting.select_d`, `simulation.demo_ar1_forecast_variance` |
+| Long memory, ARFIMA | TS | `time-series.md §5`, `ts_univariate.long_memory`, `ts_univariate.arfima` |
+| Forecast evaluation, combination | TS | `time-series.md §11`, `forecasting.rolling_origin`, `forecasting.evaluate`, `diagnostics.diebold_mariano`, `ts_univariate.ar_bootstrap_forecast`, `ts_univariate.combine_forecasts` |
 | Cointegration, ECM/VECM | TS | `time-series.md §7`, `diagnostics.cointegration` |
 | VAR, SVAR, impulse responses | TS | `time-series.md §8`, `time-series.md §9`, `forecasting.rolling_var` |
 | ARCH/GARCH, stylized facts | TS | `volatility.md §1`, `volatility.md §3`, `risk.var_garch` |

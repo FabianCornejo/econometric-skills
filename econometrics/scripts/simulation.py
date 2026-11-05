@@ -30,6 +30,15 @@ Classical regression (v2.4.2)
     demo_lpm_bounds()              logit truth: LPM slope ~ average marginal effect, fitted values leave [0, 1]
     demo_multicollinearity()       corr(x1, x2) -> 1: unbiased, SE x sqrt(VIF), joint F still rejects
 
+Univariate time series (v2.4.6)
+    demo_trend_vs_difference()     detrending a random walk leaves a persistent "cycle"; differencing a
+                                   trend-stationary series creates an MA unit root (lag-1 ACF -> -0.5)
+    demo_ar1_forecast_variance()   AR(1) h-step error variance s2(1 - phi^2h)/(1 - phi^2): bounded if |phi| < 1,
+                                   h*s2 under a unit root
+    demo_unit_root_power()         ADF rejection rate against phi = 1, 0.99, 0.95, 0.9, 0.8: low power near 1
+    demo_break_unit_root()         a stationary series with a mean shift: ADF stops rejecting; with the break
+                                   modelled it rejects again (Perron 1989)
+
 Design
     power_mde(...)                 minimum detectable effect or sample size, two-sample or clustered
     mde_did(...)                   analytic MDE / units for a DiD with m pre and r post periods
@@ -785,3 +794,146 @@ def demo_multicollinearity(rhos=(0.0, 0.5, 0.9, 0.99), R: int = 1000, n: int = 1
             "lesson": "Correlated regressors do not bias OLS; they make the separate effects imprecise (SE × √VIF), "
                       "so individual t-tests fail while the joint F rejects. The sum β1 + β2 stays precise. Dropping "
                       "one regressor trades imprecision for omitted-variable bias."}
+
+
+# =============================================================================
+# Univariate time series (v2.4.6)
+# =============================================================================
+def _adf_tau(y, p=0, trend="c", break_at=None):
+    """t of gamma in Dy_t = c [+ d*t] [+ shift dummies] + gamma*y_{t-1} + sum phi_i Dy_{t-i} + e."""
+    dy = np.diff(y)
+    T = len(dy) - p
+    cols = [y[p:-1]] + [dy[p - i:len(dy) - i] for i in range(1, p + 1)] + [np.ones(T)]
+    if trend == "ct":
+        cols.append(np.arange(T, dtype=float))
+    if break_at is not None:                      # level-shift dummy at a known date (Perron 1989)
+        t_idx = np.arange(p + 1, p + 1 + T)
+        cols.append((t_idx >= break_at).astype(float))
+    X = np.column_stack(cols)
+    b, V, _, _ = _ols(dy[p:], X)
+    return b[0] / np.sqrt(V[0, 0])
+
+
+def _ar1(rng, T, phi, sd=1.0, burn=200, c=0.0):
+    e = rng.normal(0, sd, T + burn)
+    y = np.zeros(T + burn)
+    for t in range(1, T + burn):
+        y[t] = c + phi * y[t - 1] + e[t]
+    return y[burn:]
+
+
+def demo_trend_vs_difference(R: int = 500, T: int = 200, drift: float = 0.1, phi: float = 0.5, seed: int = 0) -> dict:
+    """Two series that look alike: trend-stationary y = a + b*t + AR(1)(phi), and difference-stationary
+    y = y(-1) + drift + e. Remove the trend the wrong way and see the damage: a linear trend fitted to the random
+    walk leaves a residual that wanders (lag-1 ACF near 1, a spurious "cycle"); first-differencing the
+    trend-stationary series leaves an over-differenced MA with a unit root (lag-1 ACF of the differences
+    (phi - 1)/2, which is -0.5 for white noise around the trend). And a shock dies out in one, lasts forever in the other."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(T, dtype=float)
+    X = np.column_stack([np.ones(T), t])
+    r = {"ts_detrended": [], "ts_differenced": [], "ds_detrended": [], "ds_differenced": []}
+
+    def acf1(x):
+        x = x - x.mean()
+        return float(x[1:] @ x[:-1] / (x @ x))
+    for _ in range(R):
+        ts = 1.0 + drift * t + _ar1(rng, T, phi)
+        ds = np.cumsum(drift + rng.normal(size=T))
+        for name, y in (("ts", ts), ("ds", ds)):
+            _, _, _, e = _ols(y, X)
+            r[f"{name}_detrended"].append(acf1(e))
+            r[f"{name}_differenced"].append(acf1(np.diff(y)))
+    tab = pd.DataFrame({"trend-stationary (AR(1) around a line)": [np.mean(r["ts_detrended"]), np.mean(r["ts_differenced"]),
+                                                                   (phi - 1) / 2, f"phi^h = {phi}^h -> 0"],
+                        "difference-stationary (random walk + drift)": [np.mean(r["ds_detrended"]), np.mean(r["ds_differenced"]),
+                                                                        0.0, "1 for every h"]},
+                       index=["lag-1 ACF after removing a linear trend", "lag-1 ACF after first differencing",
+                              "theory: lag-1 ACF of the differences", "effect of a shock after h periods"])
+    return {"table": tab, "phi": phi,
+            "lesson": "Removing a line from a random walk leaves a residual as persistent as the walk (a spurious "
+                      "cycle; regressions on it are spurious too). Differencing a trend-stationary series leaves a "
+                      "negative lag-1 autocorrelation of (phi - 1)/2, an MA root at one. Test first (adf_bootstrap "
+                      "with trend 'ct', KPSS), and remember the two models give opposite answers on whether shocks last."}
+
+
+def demo_ar1_forecast_variance(phis=(0.5, 0.9, 0.99, 1.0), horizons=(1, 4, 12, 40), sigma: float = 1.0, R: int = 4000,
+                               seed: int = 0) -> dict:
+    """h-step forecast error of y_t = phi*y_{t-1} + e: sum_{j<h} phi^j e_{T+h-j}, variance
+    sigma^2 (1 - phi^{2h})/(1 - phi^2) (h*sigma^2 if phi = 1). Checked by simulation with known phi. For |phi| < 1
+    the variance converges to the unconditional variance sigma^2/(1 - phi^2): far ahead you forecast the mean, with
+    the series' own uncertainty. Under a unit root it grows without bound: intervals fan out like sqrt(h)."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    H = max(horizons)
+    for phi in phis:
+        e = rng.normal(0, sigma, (R, H))
+        err = np.zeros((R, H))
+        acc = np.zeros(R)
+        for h in range(H):
+            acc = phi * acc + e[:, h]
+            err[:, h] = acc
+        for h in horizons:
+            theory = h * sigma ** 2 if phi == 1 else sigma ** 2 * (1 - phi ** (2 * h)) / (1 - phi ** 2)
+            rows.append({"phi": phi, "h": h, "simulated var": float(err[:, h - 1].var()), "theory": theory,
+                         "unconditional var": (np.inf if phi == 1 else sigma ** 2 / (1 - phi ** 2)),
+                         "95% half-width": 1.96 * np.sqrt(theory)})
+    tab = pd.DataFrame(rows).set_index(["phi", "h"])
+    return {"table": tab,
+            "lesson": "Forecast uncertainty of a stationary AR grows with h but stops at the series' unconditional "
+                      "variance; the closer phi is to 1, the slower it gets there. Under a unit root it grows like h "
+                      "forever. These intervals assume phi is known: with estimated phi they are wider "
+                      "(ts_univariate.ar_bootstrap_forecast)."}
+
+
+def demo_unit_root_power(phis=(1.0, 0.99, 0.95, 0.9, 0.8), T_values=(50, 100, 250), R: int = 500, alpha: float = ALPHA,
+                         seed: int = 0) -> dict:
+    """ADF (constant, no lags; DGP is AR(1) with no lags) rejection rate of H0: unit root. With phi = 1 it is
+    the size; below 1, the power. Near-unit-root stationary series are rarely told apart from random walks
+    in samples of usual length, so "the ADF does not reject" is weak evidence of a unit root."""
+    from statsmodels.tsa.adfvalues import mackinnoncrit
+    rng = np.random.default_rng(seed)
+    rows = []
+    for T in T_values:
+        crit = mackinnoncrit(N=1, regression="c", nobs=T)[{0.01: 0, 0.05: 1, 0.10: 2}[alpha]]
+        row = {"T": T}
+        for phi in phis:
+            rej = [_adf_tau(_ar1(rng, T, phi) if phi < 1 else np.cumsum(rng.normal(size=T)), 0, "c") < crit
+                   for _ in range(R)]
+            row[f"phi = {phi}"] = float(np.mean(rej))
+        rows.append(row)
+    tab = pd.DataFrame(rows).set_index("T")
+    return {"table": tab, "alpha": alpha,
+            "lesson": "With phi = 1 the ADF rejects about alpha of the time (size); with phi = 0.95 and 100 "
+                      "observations it rejects only a small fraction of the time. Not rejecting a unit root is not "
+                      "evidence of one; report a test with the opposite null (KPSS) and think about the half-life the "
+                      "data allow."}
+
+
+def demo_break_unit_root(R: int = 300, T: int = 100, phi: float = 0.7, shifts=(0.0, 2.0, 4.0, 8.0), alpha: float = ALPHA,
+                         seed: int = 0) -> dict:
+    """A stationary AR(1) (phi = 0.7) whose mean jumps by `shift` SDs of the errors at mid-sample. The ADF
+    that ignores the jump stops rejecting the unit root as the jump grows: one permanent shift looks like
+    the permanent shocks of a random walk. Adding the level-shift dummy (Perron 1989, known date) restores the
+    rejection. With an unknown date, test for the break first (ts_univariate.sup_wald) or use Zivot-Andrews."""
+    from statsmodels.tsa.adfvalues import mackinnoncrit
+    rng = np.random.default_rng(seed)
+    crit = mackinnoncrit(N=1, regression="c", nobs=T)[{0.01: 0, 0.05: 1, 0.10: 2}[alpha]]
+    tb = T // 2
+    # critical value of the ADF with a level dummy at the known date, simulated under H0 (a random walk)
+    crit_b = float(np.quantile([_adf_tau(np.cumsum(rng.normal(size=T)), 1, "c", break_at=tb) for _ in range(2000)],
+                               alpha))
+    rows = []
+    for shift in shifts:
+        no, yes = [], []
+        for _ in range(R):
+            y = _ar1(rng, T, phi) + shift * (np.arange(T) >= tb)
+            no.append(_adf_tau(y, 1, "c") < crit)
+            yes.append(_adf_tau(y, 1, "c", break_at=tb) < crit_b)
+        rows.append({"shift (error SDs)": shift, "ADF ignoring the break": float(np.mean(no)),
+                     "ADF with the break dummy": float(np.mean(yes))})
+    tab = pd.DataFrame(rows).set_index("shift (error SDs)")
+    return {"table": tab, "phi": phi, "critical_values": {"ADF": float(crit), "ADF with break dummy (simulated)": crit_b},
+            "lesson": "Every series here is stationary. The larger the shift, the less often the ADF rejects the unit "
+                      "root when it ignores the break; with the break in the regression it rejects again. Look for "
+                      "breaks before testing for unit roots, and read a non-rejection on a series with an event in "
+                      "it as a question, not an answer."}
