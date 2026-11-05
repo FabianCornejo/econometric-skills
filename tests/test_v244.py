@@ -10,6 +10,10 @@ Layer 5, routing evals: `econometrics/evals/routing/` holds cases for `claude pl
 `tools/routing_evals.py` runs each one with the plugin alone and with 48 decoy skills that overflow the
 listing. These tests check the files and build the harness without calling a model.
 
+Also a fix found by the new Windows CI job: `regimes.markov_switching` drew its random starting values from
+fresh OS entropy (statsmodels 0.15) or NumPy's global generator (0.14), so a run could fail ("SVD did not
+converge", "Steady-state probabilities could not be constructed") at random.
+
 Run from the repository root:  python3 tests/test_v244.py
 """
 import importlib.util
@@ -137,6 +141,47 @@ neg_row = next(r for r in rows if r["case"] == "unrelated-email")
 check("summary: per-arm rates; the negative case reports how often the skill wrongly fired",
       ra["clean skill fired"] == 1 and ra["crowded skill fired"] == 0 and neg_row["clean skill fired"] == 0
       and "Routing rate, clean: 100%" in table)
+
+# ---------------------------------------------------------------- Windows CI fix: Markov switching independent of global RNG state
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import regimes as rg  # noqa: E402
+rng = np.random.default_rng(5)
+n = 800
+st = np.zeros(n, int)
+for t in range(1, n):
+    st[t] = st[t - 1] if rng.random() < 0.98 else 1 - st[t - 1]
+y = pd.Series(np.where(st == 0, rng.normal(0.0005, 0.007, n), rng.normal(-0.001, 0.025, n)),
+              index=pd.bdate_range("2010-01-04", periods=n))
+fits = []
+for g in (1, 99, 12345):
+    np.random.seed(g)
+    before = np.random.get_state()[1].copy()
+    fits.append(rg.markov_switching(y, 2, show=False))
+    after = np.random.get_state()[1]
+    restored = np.array_equal(before, after)
+check("markov_switching: same estimates on every call and whatever the global NumPy state, which is restored",
+      all(np.allclose(f["summary"].to_numpy(), fits[0]["summary"].to_numpy()) for f in fits) and restored
+      and all(f["fit_attempt"] == fits[0]["fit_attempt"] for f in fits))
+import statsmodels.api as sm  # noqa: E402
+orig = sm.tsa.MarkovRegression.fit
+calls = {"n": 0}
+
+
+def flaky(self, *a, **k):
+    calls["n"] += 1
+    if calls["n"] == 1:
+        raise np.linalg.LinAlgError("SVD did not converge")
+    return orig(self, *a, **k)
+
+
+sm.tsa.MarkovRegression.fit = flaky
+try:
+    ms_retry = rg.markov_switching(y, 2, show=False)
+finally:
+    sm.tsa.MarkovRegression.fit = orig
+check("markov_switching: an EM failure ('SVD did not converge') is retried with the next starting strategy",
+      ms_retry["fit_attempt"] != {"seed": 0, "search_reps": 20} and calls["n"] >= 2, str(ms_retry["fit_attempt"]))
 
 # ---------------------------------------------------------------- packaging
 with zipfile.ZipFile(ROOT / "dist" / "econometrics.skill") as z:
