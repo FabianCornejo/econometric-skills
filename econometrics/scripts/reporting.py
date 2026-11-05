@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
-SKILL_VERSION = "2.4.6"
+SKILL_VERSION = "2.4.6.1"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
@@ -213,7 +213,7 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
 
 
 def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol: float = 1e-6,
-                label: str = "estimate", show: bool = True) -> dict:
+                label: str = "estimate", weak_ratio: float = 0.25, show: bool = True) -> dict:
     """Independent verification of a headline number (the dynare-mcp idea of solving the same
     model twice): pass the same quantity computed by different routes, e.g. {"DR": ..., "outcome
     regression": ..., "IPW": ...}, {"statsmodels": ..., "linearmodels": ...} or {"formula": ...,
@@ -231,7 +231,12 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
     only two implementations of the same estimator do (kind "implementation"): that verifies the
     arithmetic, not the method, and is printed as an implementation check, never as an independent
     confirmation. For a headline number, add a route with a different method (robust vs OLS,
-    bootstrap vs analytic CI, DR vs outcome regression vs IPW, formula vs simulation)."""
+    bootstrap vs analytic CI, DR vs outcome regression vs IPW, formula vs simulation).
+
+    A tolerance can be too loose to test anything (v2.4.6.1): when tol_se·se exceeds weak_ratio (25%) of the
+    estimate's size, "agree" would have been printed for routes far apart in practical terms (in a 12-month
+    inflation forecast of 5.3% with SE 2.1, anything from 3.2% to 7.4% "agreed"). The result then says the check
+    is weak and reports the actual spread, which is the number to judge."""
     if isinstance(estimates, dict) and any(isinstance(v, dict) for v in estimates.values()):
         estimates = {k: (v.get("estimate") if isinstance(v, dict) else v) for k, v in estimates.items()}
     s = pd.Series(estimates, dtype=float).dropna()
@@ -254,15 +259,24 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
         crit = f"to a relative tolerance of {rel_tol:g}"
     warns = [] if agree else [f"Independent routes disagree on the {label}: " + ", ".join(
         f"{k} {v:.6g}" for k, v in s.items()) + f" (spread {spread:.4g}, required {crit})."]
+    weak = False
+    size = float(s.abs().mean())
+    # weak only for an agreement on an estimate clearly away from zero: for a statistically null estimate
+    # (|estimate| below the tolerance) the relative size of the tolerance means nothing
+    if kind == "method" and agree and size > tol_se * se and tol_se * se > weak_ratio * size:
+        weak = True
+        warns.append(f"weak check: the tolerance ({tol_se:g} SE = {tol_se * se:.4g}) is {tol_se * se / size:.0%} of the "
+                     f"{label}, so routes far apart in practice would still 'agree'; judge the spread ({spread:.4g}) "
+                     "against the difference that matters for the decision")
     note = ("" if kind == "method" else
             "same estimator computed twice: this verifies the arithmetic, not the method, and is not an independent "
             "confirmation; for a headline number add a route with a different method (pass se=).")
     out = {"table": s.rename(label).to_frame(), "spread": spread, "agree": bool(agree), "criterion": crit,
-           "kind": kind, "note": note, "warnings": warns}
+           "kind": kind, "weak": weak, "note": note, "warnings": warns}
     if show:
         head = "Independent check (different methods)" if kind == "method" else "Implementation check"
         print(f"\n{head} of the {label}: " + ", ".join(f"{k} {v:.6g}" for k, v in s.items())
-              + f" → {'agree' if agree else 'DISAGREE'} ({crit})")
+              + f" → {'agree' if agree else 'DISAGREE'} ({crit}; spread {spread:.4g})")
         if note:
             print("  note: " + note)
         for w in warns:

@@ -2,6 +2,23 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.4.6.1 — Fixes from the first real-series test (monthly IPCA)
+
+The v2.4.6 functions were tested in Claude Code on the monthly IPCA (BCB/SGS 433, 2000–2026) with `/econometrics:consultant`. The analysis was sound, and every headline number was reproduced independently. In several places, though, the skill relied on the agent to notice a problem, and the independent review of this patch found that one of the test's findings was itself an artefact.
+
+- **`ts_univariate.long_memory`**: it read d = 0.285 (local Whittle) as "stationary long memory", although ordinary AR(1) persistence (φ ≈ 0.58) produces a d that large in about 12% of samples; the agent had to run that Monte Carlo by hand.
+  - **The check:** when 0 < d < 0.5, the function now fits a short-memory AR(p) by BIC, simulates it, and reports the p-value of the observed d. It reads long memory only when short memory is rejected. It never overrides a non-stationary reading, and it skips series whose AR is near a unit root.
+  - **How it performs (simulations):** it is conservative: about 1 in 100 AR(1) series with φ = 0.6 was read as long memory. Its power is modest: about 25% for d = 0.35 with n = 320, 40–50% with n = 1,000, and about 70% for d = 0.3 with n = 2,000.
+- **`ts_univariate.sup_wald`**:
+  - **OLS-CUSUM:** it is now scaled by the long-run SD of the errors, taken from the sieve AR. With autocorrelated errors the iid version rejects stable series most of the time: about 60% for AR(0.6) at n = 320, against 2.5% for the new version. On the IPCA mean, the "CUSUM rejects, p = 0.0025" seen in the test was this artefact. With the long-run SD, p = 0.34. Both statistics are reported. The verdict says when a valid CUSUM rejects and the sup-F does not.
+  - **Window edge:** it warns when the estimated date is at the edge of the trimmed window, as the 2022 break in the IPCA AR(1) was, and points to an end-of-sample test.
+  - **Unit-root warning:** the warning that y may have a unit root comes from Zivot-Andrews, which allows one break, when there are no regressors. In 30 simulations it fired for 97% of random walks and for none of the stationary series with a break.
+  - **Sieve:** it stays fitted to the residuals under no break. Fitting it to the residuals of the model with the break was tried and rejected in review: the size under AR(0.8) errors rose to 12% at n = 150 and 24% at n = 60. With the null sieve it was about 4%.
+- **`reporting.cross_check`**: it flags an agreement as weak when the tolerance is more than a quarter of an estimate that is clearly away from zero, and always prints the spread. On the IPCA, two forecasts "agreed" within an SE of 2.1 points on 5.3%. Disagreements and statistically null estimates are not flagged.
+- **`setup_env`**: new optional extra `plots` (matplotlib). Following `SKILL.md`, a delivered script asks for it in the same install question, or says that its chart is optional instead of promising a PNG it cannot write.
+- **References**: `time-series.md`, `workflow.md` and three interpretation rules for v2.4.6.1.
+- New `tests/test_v2461.py` (27 checks, with the IPCA series as a fixture; 899 in total).
+
 ## v2.4.6 — Univariate time series
 
 A new module for one series, four Teacher-mode demos, and the sample size for a given effect.
