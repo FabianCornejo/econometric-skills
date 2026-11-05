@@ -226,7 +226,7 @@ def var_analysis(df, maxlags: int = 8, ic: str = "bic", lags: int | None = None,
     if unit:
         listed = ", ".join(c + " (" + orders[c].split(" —")[0] + ")" for c in unit)
         warn.append(f"the unit-root tests (ADF, DF-GLS, KPSS) do not classify {listed} "
-                    "as stationary: a VAR in levels is consistent but Granger tests and long-horizon IRFs are "
+                    "as stationary (a unit root is not ruled out): a VAR in levels is consistent but Granger tests and long-horizon IRFs are "
                     "unreliable; test cointegration (vecm_fit) or use differences")
     if trend_only:
         warn.append(f"{', '.join(trend_only)} is stationary only around a deterministic trend, and this VAR has trend "
