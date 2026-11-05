@@ -365,8 +365,8 @@ check("multicollinearity: SE ratio ≈ √VIF (10%), estimates unbiased up to ρ
 mk = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
 skills = mk["plugins"][0]["skills"]
 check("marketplace.json declares the main skill, statistics and the three mode commands",
-      skills == [".", "./statistics", "./modes/consultor", "./modes/professor", "./modes/revisor"], str(skills))
-for mode in ("consultor", "professor", "revisor"):
+      skills == [".", "./statistics", "./modes/consultant", "./modes/teacher", "./modes/reviewer"], str(skills))
+for mode in ("consultant", "teacher", "reviewer"):
     text = (SKILL / "modes" / mode / "SKILL.md").read_text(encoding="utf-8")
     mm = re.match(r"---\r?\n(.*?)\r?\n---\r?\n(.*)", text, re.S)
     meta = yaml.safe_load(mm.group(1)) if mm else {}

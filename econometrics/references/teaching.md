@@ -19,7 +19,7 @@ Every method is explained with the same eleven blocks, in this order. Skip a blo
 1. **Intuition**: the problem the method solves, in two or three sentences and one everyday example.
 2. **Model**: the equation, every symbol defined.
 3. **Assumptions**: numbered, each with what goes wrong if it fails.
-4. **Estimator**: the formula (display LaTeX) and what it computes in words.
+4. **Estimator**: the formula (display math, rendered for the medium: see *Rendering* below) and what it computes in words.
 5. **Short derivation**: the two or three steps that show why the estimator works under the assumptions (e.g. OLS unbiasedness from E[u|X] = 0; the IV estimator as a ratio of two reduced forms; the DR score's double robustness).
 6. **Simulation**: a small Monte Carlo that shows the method working and then failing when one assumption is broken (§3). Seeing the bias appear is what makes the assumption stick.
 7. **Code**: the skill's function on real or simulated data, with the output. The code itself appears in the answer (or is delivered as a downloadable file): the student must be able to rerun the simulation and change its parameters. Never cite a path inside the sandbox.
@@ -27,6 +27,8 @@ Every method is explained with the same eleven blocks, in this order. Skip a blo
 9. **Interpretation**: one sentence for each number that matters, with units and the interval.
 10. **Pitfalls**: the three most common mistakes.
 11. **Exercise**: one problem with data or a scenario, and **always** its complete worked solution below a separator ("Solution"). A closing comprehension question does not replace the solved exercise.
+
+**Rendering.** Write for the place where the answer is read. In a terminal (Claude Code), LaTeX and HTML are printed raw: write formulas in plain text with Unicode symbols (Var(β̂ⱼ) = σ² / [SSTⱼ (1 − Rⱼ²)], √VIF, Σ, ρ), one formula per line, and put the solution under a plain heading "Solution" (never `<details>` or other HTML). In the Claude app, a notebook (.ipynb) or a Markdown/PDF deliverable, display LaTeX is fine.
 
 ## 3. Simulations that teach
 

@@ -40,7 +40,7 @@ The mode changes the form of the answer, never the computations: every number co
 
 ### How it is validated
 
-- **756 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, a curriculum map whose every function and section must exist, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
+- **766 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, a curriculum map whose every function and section must exist, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
 - **Continuous integration** runs every test suite and worked example on the minimum and the latest supported dependency versions, and checks that `dist/econometrics.skill` matches the source.
 - **Blind evals** (`evals/`): plain-language prompts with objective must / must-not criteria, run in a fresh conversation before each release.
 - **Independent verification**: headline numbers are recomputed by a second route (DR vs outcome regression vs IPW inside `att_gt`, or `reporting.cross_check`), and deliverable scripts end with a run manifest, so a number can be traced and reproduced.
@@ -56,7 +56,7 @@ Release notes for every version are in [CHANGELOG.md](CHANGELOG.md).
 econometrics/
 ├── SKILL.md               router: modes, routing table, rules, output contract
 ├── statistics/SKILL.md    entry point for statistics questions (Claude Code only)
-├── modes/                 /econometrics:consultor, :professor, :revisor commands (Claude Code only)
+├── modes/                 /econometrics:consultant, :teacher, :reviewer commands (Claude Code only)
 ├── scripts/               22 tested modules (see the table above) and workspace.py
 └── references/
     ├── workflow.md            Consultant mode: study card + 7 steps
@@ -92,7 +92,7 @@ dist/         econometrics.skill, the packaged skill
 
   *If Claude does not use the skill.* Type `/skills`: `econometrics` should be listed with its description. The plugin offers two entry points to the same skill: `econometrics:econometrics` and `econometrics:statistics` (for tests of means, proportions, variances, tables, normality and correlation); the second only sends Claude to the first, so the name alone points statistics questions to the skill. With hundreds of skills installed, Claude Code drops the descriptions to fit its listing budget and offers skills by name only (`claude --debug` logs "Skill listing over budget"); in the v2.4.0 test, 962 skills and 37,000 characters, and a basic-statistics request was answered without the skill. Three ways out: turn off the plugins you do not need in your analysis folder with a `.claude/settings.json` there holding `{"enabledPlugins": {"<plugin>@<marketplace>": false}}` (other folders keep them); raise the budget with the `skillListingBudgetFraction` setting; or ask for it by name: "use the econometrics skill".
 
-  *Commands that always reach the skill.* `/econometrics:consultor` (then the question), `/econometrics:professor` (the topic) and `/econometrics:revisor` (the material) load the skill in the Consultant, Teacher or Reviewer mode. They do not depend on Claude choosing the skill, so they work however many plugins are installed. Claude never calls them on its own (`disable-model-invocation`), so they do not compete with other skills for requests.
+  *Commands that always reach the skill.* `/econometrics:consultant` (then the question), `/econometrics:teacher` (the topic) and `/econometrics:reviewer` (the material) load the skill in the Consultant, Teacher or Reviewer mode. They do not depend on Claude choosing the skill, so they work however many plugins are installed. Claude never calls them on its own (`disable-model-invocation`), so they do not compete with other skills for requests.
 
   *A clean analysis folder.* `python <skill folder>/scripts/workspace.py <folder>` writes `<folder>/.claude/settings.json` turning off, in that folder only, every enabled plugin except econometrics (`--keep <plugin>@<marketplace>` keeps others; `--dry-run` shows the file first). Other plugins' skills then stop competing for statistics requests and their hooks stop running there, while the rest of the computer is unchanged. `claude plugin list`, run inside the folder, shows what is on.
 
