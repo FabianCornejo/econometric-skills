@@ -100,6 +100,7 @@ from risk import var_garch, var_ewma, backtest_var            # VaR models + Kup
 from dependence import fit_copulas                            # tail dependence beyond correlation
 from state_space import fit_kalman_regression                 # time-varying beta / hedge ratio
 from regimes import markov_switching                          # regimes with filtered probabilities
+from ts_univariate import ts_identify, detrend, adf_bootstrap, sup_wald, long_memory, ar_bootstrap_forecast
 from backtest import run_backtest, performance                # one-bar lag, costs, Sharpe, drawdown
 from specification import fgls_het, prediction_intervals, long_run_effect, oster, sensitivity
 from diagnostics import mundlak_test, count_diagnostics       # FE vs RE (clustered); Poisson variance
@@ -121,6 +122,8 @@ Order (heteroskedasticity and autocorrelation are often symptoms of a wrong spec
 | Exogeneity | Theory + Durbin-Wu-Hausman with an instrument | IV/2SLS, panel FE, quasi-experiment |
 | FE vs. RE (panel) | Mundlak/CRE with clustered Wald (`mundlak_test`); classical Hausman only as a check | FE, or report the CRE model |
 | Poisson variance (counts) | Pearson dispersion, Cameron-Trivedi (`count_diagnostics`) | Robust or quasi-Poisson SEs; NB if count probabilities matter |
+
+**Time series: clean the series, then test for breaks before testing for unit roots.** Fix data errors, method changes and seasonality first; then look for breaks (known events, Chow at a known date, `ts_univariate.sup_wald`); then test for unit roots with the break modelled (`ts_univariate.adf_bootstrap` with a dummy, Zivot-Andrews). A break test in levels assumes a stationary series and over-rejects on a random walk (`sup_wald` warns when the residuals are that persistent): for a series that may be I(1), test the differences (a break in the drift) or use a test that allows a break under both hypotheses (Zivot-Andrews; Perron-Yabu). An unmodelled break makes a stationary series look like a unit root (`simulation.demo_break_unit_root`), and the wrong choice between differencing and detrending changes every forecast after it.
 
 **Spurious regression**: trending series (revenue and GDP in levels) almost always yield a high R² and significant t-statistics with no real relationship. Warning sign: R² > Durbin-Watson.
 

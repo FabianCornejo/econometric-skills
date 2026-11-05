@@ -112,15 +112,16 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 
 | EViews | Python |
 |---|---|
-| Correlogram (ACF/PACF) | `statsmodels.graphics.tsaplots.plot_acf / plot_pacf`; `acf`, `pacf` |
+| Correlogram (ACF/PACF) | `statsmodels.graphics.tsaplots.plot_acf / plot_pacf`; `acf`, `pacf`; `ts_univariate.ts_identify` (bands, Q-stats, suggested orders) |
 | `ls y c ar(1) ma(1)` | `SARIMAX(y, order=(1,0,1), trend="c")` |
-| Unit root test ADF / PP / KPSS / DF-GLS | `arch.unitroot.ADF / PhillipsPerron / KPSS / DFGLS` |
+| Unit root test ADF / PP / KPSS / DF-GLS | `arch.unitroot.ADF / PhillipsPerron / KPSS / DFGLS`; `ts_univariate.adf_bootstrap` (bootstrap p-value) |
 | Breakpoint test (Chow) | `chow` in `scripts/diagnostics.py` |
 | Multiple breakpoints (Bai-Perron) | `ruptures` (detection) |
-| Recursive estimates / CUSUM | `dg.recursive_olsresiduals`, `dg.breaks_cusumolsresid` |
-| Hodrick-Prescott filter | `statsmodels.tsa.filters.hp_filter.hpfilter(y, lamb=129600)` |
+| Quandt-Andrews unknown breakpoint test | `ts_univariate.sup_wald` (sieve-bootstrap p-value) |
+| Recursive estimates / CUSUM | `dg.recursive_olsresiduals`, `dg.breaks_cusumolsresid`; `ts_univariate.sup_wald` returns both |
+| Hodrick-Prescott filter / BK / CF | `statsmodels.tsa.filters.hp_filter.hpfilter(y, lamb=129600)`; `ts_univariate.detrend(y, "hp" \| "bk" \| "cf" \| "hamilton")` |
 | ARCH/GARCH/TARCH/EGARCH | `arch.arch_model` |
-| ARFIMA | GPH + fractional filtering (see `time-series.md`) |
+| ARFIMA | `ts_univariate.long_memory` (GPH, local Whittle), `frac_diff`, `arfima` |
 | VAR, lag length criteria | `VAR(data).select_order(12)` |
 | Granger causality (pairwise) | `res.test_causality(...)` or `grangercausalitytests` |
 | Impulse response (Cholesky / generalized) | `res.irf(h).orth_irfs` / Pesaran-Shin formula |

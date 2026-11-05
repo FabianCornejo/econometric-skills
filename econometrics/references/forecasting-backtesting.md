@@ -13,6 +13,7 @@ Use when the goal is an out-of-sample forecast (yields, sales, returns, macro se
 8. Time-series momentum
 9. Reading a backtest honestly
 10. Checklist
+11. Armstrong's forecasting checklist (before trusting any forecast)
 
 ## 1. The two rules
 
@@ -125,3 +126,18 @@ The threshold avoids trading on forecasts smaller than costs: set it at least at
 - [ ] Costs and turnover included; threshold ≥ round-trip cost.
 - [ ] Number of variants tried reported; Sharpe with a confidence interval.
 - [ ] Results by subperiod or regime.
+
+## 11. Armstrong's forecasting checklist
+
+From the evidence-based principles of Armstrong (2001, *Principles of Forecasting*) and the "golden rule" of Armstrong, Green and Graefe (2015): **be conservative**, that is, stay close to what is known unless strong, validated evidence says otherwise. Go through it before a forecast leaves the conversation.
+
+- [ ] **Problem**: the decision the forecast serves, the horizon and the loss (which errors cost more) are written down; the metric matches the loss (RMSE for a mean, MAE for a median, MASE across series).
+- [ ] **Knowledge**: what is known about the causal forces (growth, decay, mean reversion, policy) is used; a forecast that contradicts them needs a reason.
+- [ ] **Simple first**: a naive, seasonal naive or damped-trend benchmark was run; a complex model is kept only if it beats them out of sample (Green and Armstrong 2015: complexity rarely pays).
+- [ ] **Conservative trends**: trends are damped at long horizons and when the causal forces conflict or the series is volatile; no filtered trend (HP) is extrapolated (`time-series.md` §2).
+- [ ] **Combine**: forecasts from methods that differ in data or assumptions are combined, with equal weights unless an evaluation window clearly favours others (`ts_univariate.combine_forecasts`).
+- [ ] **Breaks and regimes**: the sample was checked for breaks (`ts_univariate.sup_wald`); a model estimated across a regime change is not extrapolated as if nothing happened.
+- [ ] **Out-of-sample validation**: rolling-origin errors on data not used for fitting, at the horizons of the decision (`forecasting.rolling_origin`), with a test against the benchmark (Diebold-Mariano).
+- [ ] **Uncertainty**: prediction intervals from the out-of-sample errors or a bootstrap with parameter uncertainty (`ts_univariate.ar_bootstrap_forecast`), not only the analytic normal ones; their coverage was checked. Intervals are usually too narrow: say so.
+- [ ] **Judgement**: any manual adjustment is recorded with its reason and kept separate from the model forecast.
+- [ ] **Disclosure**: data vintage, method, parameters and code are given so that someone else can reproduce the forecast (`reporting.run_manifest`).

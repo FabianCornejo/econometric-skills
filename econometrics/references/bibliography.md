@@ -130,6 +130,16 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Petropoulos et al. (2022), "Forecasting: theory and practice", *International Journal of Forecasting* — a review of methods and forecast evaluation.
 - Hyndman and Athanasopoulos, *Forecasting: Principles and Practice* (free online).
 - Hamilton (2018), "Why you should never use the Hodrick-Prescott filter"; Phillips and Jin (2015) on the HP filter.
+- Ravn and Uhlig (2002), "On adjusting the Hodrick-Prescott filter for the frequency of observations", *Review of Economics and Statistics*; Baxter and King (1999) and Christiano and Fitzgerald (2003) band-pass filters.
+- Ng and Perron (1995), "Unit root tests in ARMA models with data-dependent methods for the selection of the truncation lag", *JASA*; Ng and Perron (2001), "Lag length selection and the construction of unit root tests with good size and power", *Econometrica*; Perron and Qu (2007) on the modified AIC with OLS detrending.
+- Park (2003), "Bootstrap unit root tests", *Econometrica*; Chang and Park (2003), "A sieve bootstrap for the test of a unit root", *Journal of Time Series Analysis*.
+- Perron (1989), "The great crash, the oil price shock, and the unit root hypothesis", *Econometrica*; Zivot and Andrews (1992).
+- Andrews (1993), "Tests for parameter instability and structural change with unknown change point", *Econometrica*; Ploberger and Krämer (1992) on the OLS-CUSUM test.
+- Geweke and Porter-Hudak (1983), "The estimation and application of long memory time series models", *Journal of Time Series Analysis*; Robinson (1995), "Gaussian semiparametric estimation of long range dependence", *Annals of Statistics* (local Whittle).
+- Thombs and Schucany (1990), "Bootstrap prediction intervals for autoregression", *JASA*; Stine (1987) on rescaling residuals; Kilian (1998), "Small-sample confidence intervals for impulse response functions", *Review of Economics and Statistics* (bootstrap-after-bootstrap bias correction); Pascual, Romo and Ruiz (2004) on bootstrap forecast densities.
+- Vogelsang (1997, 1999) and Perron and Yabu (2009) on break tests that are valid whether the series is I(0) or I(1).
+- Bates and Granger (1969), "The combination of forecasts", *Operational Research Quarterly*; Granger and Ramanathan (1984), "Improved methods of combining forecasts", *Journal of Forecasting*; Smith and Wallis (2009) on the forecast combination puzzle.
+- Armstrong (ed., 2001), *Principles of Forecasting*; Armstrong, Green and Graefe (2015), "Golden rule of forecasting: be conservative", *Journal of Business Research*; Green and Armstrong (2015), "Simple versus complex forecasting: the evidence", *Journal of Business Research*.
 
 ## Demand, prices and industrial organization
 - Huse and Salvo (2006), "Estimação e identificação de demanda e de oferta" (Ipea/Anpec/SDE, in Portuguese) — instruments for price, retail data, logit/BLP, AIDS.

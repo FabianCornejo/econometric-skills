@@ -38,6 +38,8 @@ Series = deterministic component (trend, seasonality — no statistics needed) +
 
 - Seasonality: seasonal dummies in the regression; `statsmodels.tsa.seasonal.STL` to decompose; X-13 (`x13_arima_analysis`, requires the Census binary) for official adjustment.
 - **HP filter** (`statsmodels.tsa.filters.hp_filter.hpfilter(y, lamb=...)`): λ = 1600 quarterly, 129600 monthly, 6.25 annual (Ravn-Uhlig). Widely used by central banks for the output gap. Important caveats: it distorts the end of the sample (the last point depends on unobserved future data — bad for real-time decisions), can generate spurious cycles and fails to properly remove stochastic trends (Phillips and Jin, 2015; Hamilton, 2018). Alternative: Hamilton's filter — regress y_{t+h} on y_t, …, y_{t−3} (h = 8 quarters or 24 months) and use the residual as the cycle.
+- `ts_univariate.detrend(y, method="hp" | "hamilton" | "bk" | "cf" | "poly")` returns trend and cycle with λ (or h, or the band) set from the frequency. With `one_sided=True` the HP trend at each date uses only data up to that date (what a decision maker had); for the two-sided filter it reports the end-point revision, the average gap between the real-time and the final trend, next to the SD of the cycle. Baxter-King loses K observations at each end; Christiano-Fitzgerald and the two-sided HP revise their last values. None of them forecasts: do not extrapolate a filtered trend.
+- Detrending and differencing are not interchangeable: a line removed from a random walk leaves a persistent, spurious "cycle"; differencing a trend-stationary series leaves a negative lag-1 autocorrelation of (φ − 1)/2 (`simulation.demo_trend_vs_difference`).
 - Year-over-year change (ln y_t − ln y_{t−12}) removes stable seasonality and is intuitive for business, but introduces MA(11) autocorrelation in the changes.
 
 ## 3. Stationarity and unit roots
@@ -56,10 +58,11 @@ Use **ADF and KPSS together**, because they have opposite nulls:
 Choosing tests (Stock, *Handbook of Econometrics* ch. 46):
 - **DF-GLS (Elliott-Rothenberg-Stock)** has much more power than the ADF (e.g., 60% vs. 22% against ρ = 0.9) while keeping good size control → use it as the main unit-root test (`arch.unitroot.DFGLS`).
 - ADF: correct size, low power. Phillips-Perron: large size distortions when there is a negative MA component (Schwert) — avoid it as the only test.
-- ADF lags: by BIC/modified AIC (`autolag="AIC"`/`"BIC"`) or the general-to-specific rule (start with a large p and reduce until the t-statistic of the last lag is ≥ 1.6). Too few lags distort size; too many reduce power.
+- ADF lags: by AIC, BIC, the modified AIC (Ng-Perron) or the general-to-specific rule (start with a large p and reduce until the t-statistic of the last lag is ≥ 1.645), always on the sample of the largest model (`ts_univariate.adf_lags(y, rule=...)`). Too few lags distort size; too many reduce power. In simulations with the sieve bootstrap (n = 150), AIC kept the size (6%; 2.5% with MA(−0.5) errors) with full power against AR(0.5); BIC over-rejected with MA errors (10%); the t rule and MAIC kept the size but often stopped at long lags and lost a third of the power. AIC is the default.
 - Deterministics: a constant if the series fluctuates around a level; constant + trend if it has a visible trend. Getting this wrong changes the result.
-- Bootstrap critical values in small samples: estimate under H0 (Δy_t AR(p)), resample centered residuals, rebuild y*, recompute the statistic B times (5,000+).
-- An unmodeled structural break makes a stationary series look I(1) → Zivot-Andrews (`arch.unitroot.ZivotAndrews`).
+- Bootstrap critical values in small samples: estimate under H0 (Δy_t AR(p)), resample centered residuals, rebuild y*, recompute the statistic B times (5,000+ for a final report). `ts_univariate.adf_bootstrap(y, trend="c" | "ct", B=...)` does it and shows the asymptotic MacKinnon p-value next to the bootstrap one.
+- **Power is low near the unit root**: against φ = 0.95 with 100 observations the ADF rejects in about 15% of samples (`simulation.demo_unit_root_power`). "Does not reject" is not evidence of a unit root; the forecast consequences differ (a stationary AR's forecast variance stops at σ²/(1 − φ²); a random walk's grows like h·σ², `simulation.demo_ar1_forecast_variance`).
+- An unmodeled structural break makes a stationary series look I(1) → Zivot-Andrews (`arch.unitroot.ZivotAndrews`). Order: clean the series, look for breaks (section 4; on the differences if the series may be I(1), since a break test in levels assumes stationarity), then test for unit roots with the break modelled (`simulation.demo_break_unit_root`: a mean shift of 4 error SDs makes the ADF reject a stationary AR(0.7) in under 10% of samples; with the level dummy, in over 90%).
 
 Practical view: for the most common macro series, the order of integration is usually known from the literature (interest rates and inflation often treated as persistent I(0) under inflation targeting; GDP, price levels and exchange rates in logs as I(1)) — do not reinvent the wheel. The choice is more methodological than statistical; report robustness under both versions.
 
@@ -72,13 +75,13 @@ Breaks (pandemic, exchange-rate regime change, methodology change, a new product
 | Situation | Test | Python |
 |---|---|---|
 | Known date | Chow (F comparing subsamples); Wald with HAC covariances (robust) | `scripts/diagnostics.py chow` |
-| Unknown date | Andrews sup-Wald (maximum Wald over all dates in [0.15T, 0.85T]; non-standard critical values) | manual loop + Andrews (1993) critical values or bootstrap |
+| Unknown date | Andrews sup-Wald (maximum Wald over all dates in [0.15T, 0.85T]; non-standard critical values) | `ts_univariate.sup_wald(y, X)` (sieve-bootstrap p-value, CUSUM, recursive coefficients) |
 | Several breaks | Bai-Perron | `ruptures` package (detection) |
 | Gradual instability | CUSUM / CUSUM-squared | `statsmodels.stats.diagnostic.breaks_cusumolsresid`, `recursive_olsresiduals` |
 | Break near the end of the sample | Andrews (2003) end-of-sample test via subsampling | manual implementation |
 | Unit root with a break | Zivot-Andrews | `arch.unitroot.ZivotAndrews` |
 
-With autocorrelated residuals, use a **sieve bootstrap**: estimate the trend with the break, fit an AR(p) by BIC to the residuals, generate bootstrap residuals from the AR, rebuild the series and recompute the statistic.
+With autocorrelated residuals, use a **sieve bootstrap**: estimate the model without the break (the null), fit an AR(p) by BIC to the residuals, generate bootstrap residuals from the AR, rebuild the series and recompute the statistic; `sup_wald` does this, choosing the AR order on a common sample. The date of the maximum is the break-date estimate only when the test rejects. In levels the test assumes a stationary series: on a random walk it rejects "no break" far too often (`sup_wald` warns when the residual AR root is above 0.9); test the differences or use Zivot-Andrews.
 
 Treatment: level/slope dummies, estimating only on the current regime, or regime-switching models (Markov switching: `statsmodels.tsa.regime_switching.markov_regression.MarkovRegression`).
 
@@ -87,7 +90,7 @@ Treatment: level/slope dummies, estimating only on the current regime, or regime
 **Box-Jenkins protocol**:
 1. Transform (log if the variance grows with the level; Box-Cox).
 2. Determine d (section 3) and seasonal D.
-3. ACF/PACF of the stationary series:
+3. ACF/PACF of the stationary series (`ts_univariate.ts_identify(y)`: Bartlett bands for the ACF, ±1.96/√n for the PACF, Ljung-Box, cutoff suggestions and a BIC grid):
 
 | Model | ACF | PACF |
 |---|---|---|
@@ -106,7 +109,7 @@ m = SARIMAX(y, order=(p, d, q), seasonal_order=(P, D, Q, 12)).fit(disp=False)
 
 - A pure AR(p) can be estimated by OLS; with MA terms, maximum likelihood is needed. A long AR approximates any invertible ARMA — a practical shortcut.
 - **ETS / exponential smoothing** (`statsmodels.tsa.exponential_smoothing.ets.ETSModel` or `holtwinters.ExponentialSmoothing`): in the M competitions (Makridakis and Hibon, 2000), simple methods such as damped-trend exponential smoothing and the Theta method matched or beat sophisticated models. Always compare.
-- **ARFIMA (long memory)**: when neither ADF nor KPSS rejects (a classic case is monthly CPI inflation) and the ACF decays hyperbolically. (1 − L)^d y_t with −0.5 < d < 0.5 is stationary and invertible. In Python: estimate d with the Geweke-Porter-Hudak method (log-periodogram regression at low frequencies), filter (1 − L)^d with weights b_0 = 1, b_j = b_{j−1}(j − 1 − d)/j, and fit the ARMA on the filtered series.
+- **ARFIMA (long memory)**: when neither ADF nor KPSS rejects (a classic case is monthly CPI inflation) and the ACF decays hyperbolically. (1 − L)^d y_t with −0.5 < d < 0.5 is stationary and invertible. In Python: estimate d with the Geweke-Porter-Hudak method (log-periodogram regression at low frequencies) or the local Whittle estimator (more efficient), filter (1 − L)^d with weights b_0 = 1, b_j = b_{j−1}(j − 1 − d)/j, and fit the ARMA on the filtered series: `ts_univariate.long_memory(y)` (both estimates with SEs π/√(24m) and 1/(2√m)), `frac_diff(y, d)` and `arfima(y, order=(p, q))`. The bandwidth trades bias against variance; compare a few.
 
 ## 6. Time-series regression
 
@@ -237,11 +240,12 @@ rmse_by_horizon = np.sqrt(np.mean(np.square(errors), axis=0))
 
 **Forecast intervals**
 - Analytical formula: Var(e_{T+h}) = σ²(1 + ψ₁² + … + ψ²_{h−1}) — converges to the unconditional variance; assumes normality and ignores parameter uncertainty (tends to be too narrow).
-- **Bootstrap**: estimate the AR(p), resample residuals, generate artificial series, re-estimate and forecast B times; the α/2 and 1 − α/2 percentiles form the interval. Captures non-normality and parameter uncertainty.
+- **Bootstrap**: estimate the AR(p), resample residuals, generate artificial series, re-estimate and forecast B times; the α/2 and 1 − α/2 percentiles form the interval. Captures non-normality and parameter uncertainty. `ts_univariate.ar_bootstrap_forecast(y, h)` shows it next to the analytic interval, with residuals rescaled for the degrees of freedom and Kilian's (1998) bias correction of the AR slopes (OLS slopes are biased toward zero in short samples, so plain bootstrap paths revert too fast). In simulations for v2.4.6 (AR(1), φ = 0.8, h = 4, n = 30) the 95% bootstrap interval covered 92% of outcomes, against 86% for the analytic interval and for the bootstrap without the correction; at h = 1 all were near 95%.
 
 **Forecast combination**
 - Combining forecasts from different methods usually beats the best individual method (M3; Petropoulos et al.). Equal weights are hard to beat in practice ("forecast combination puzzle").
 - Alternatives: weights minimizing the combined error variance (Bates-Granger), Granger-Ramanathan regression (y on forecasts, with weights summing to 1), BIC/Akaike weights (a Bayesian approximation), including consensus forecasts (surveys of professional forecasters).
+- `ts_univariate.combine_forecasts(actual, forecasts, method="equal" | "inverse_mse" | "min_variance" | "granger_ramanathan")` estimates the weights on a training window and reports every model and the combination on the rows after it; estimated weights can be negative and noisy, so keep equal weights unless the evaluation window says otherwise.
 
 ## 12. Common pitfalls
 

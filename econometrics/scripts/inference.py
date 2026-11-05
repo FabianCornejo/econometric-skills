@@ -32,6 +32,7 @@ Ranks and correlation
     correlation_test(x, y, method)            Pearson, Spearman or Kendall with a Fisher-z CI
 Planning and many tests
     power_curve(effect, n)                    power and beta of z/t tests (one-sample, paired, two-sample)
+    n_for_power(effect, sd, power=0.8)        smallest n reaching the target power for a given true difference
     adjust_pvalues(p, method)                 Bonferroni, Holm, Benjamini-Hochberg, Benjamini-Yekutieli
 
 Conventions (SKILL.md section 5): a test returns a dict with estimand, estimate, se, ci_low, ci_high, p, n,
@@ -984,6 +985,39 @@ def power_curve(effect, n, sd: float = 1.0, test: str = "t", design: str = "two_
     if show:
         print(f"\nPower of a {design.replace('_', '-')} {test} test ({alternative}, alpha = {alpha:g}, sd = {sd:g})")
         print(out.to_string(index=False, float_format=lambda v: f"{v:.4g}"))
+    return out
+
+
+def n_for_power(effect: float, sd: float = 1.0, power: float = 0.8, design: str = "two_sample",
+                alternative: str = "two-sided", alpha: float = ALPHA, ratio: float = 1.0, test: str = "t",
+                max_n: int = 1_000_000, show: bool = True) -> dict:
+    """Smallest sample size (per group for two_sample, pairs for paired) whose power for a true difference
+    `effect` reaches `power`, from the same exact noncentral-t calculation as power_curve.
+
+    Use it for "how many would we need to detect a difference this size?": compute the n for that effect,
+    never read it off a power table built for other effect sizes. The effect is a guess about the truth;
+    plugging in the observed difference answers "if the truth were what we saw", not "what is the truth"."""
+    if effect == 0:
+        raise ValueError("effect must be non-zero")
+    f = lambda nn: power_curve(effect, nn, sd=sd, test=test, design=design, alternative=alternative,  # noqa: E731
+                               alpha=alpha, ratio=ratio, show=False)["power"].iloc[0]
+    lo, hi = 2, 2
+    while f(hi) < power:
+        lo, hi = hi, hi * 2
+        if hi > max_n:
+            raise ValueError(f"power {power} not reached below n = {max_n}")
+    while hi - lo > 1:                            # power increases with n: bisect on integers
+        mid = (lo + hi) // 2
+        lo, hi = (mid, hi) if f(mid) < power else (lo, mid)
+    n = hi if f(hi) >= power else hi + 1
+    out = {"n": int(n), "n_total": int(n + (np.ceil(ratio * n) if design == "two_sample" else 0)),
+           "effect": effect, "d": effect / sd, "power": float(f(n)), "target_power": power, "alpha": alpha,
+           "design": design, "alternative": alternative,
+           "method": f"exact {test} power ({design}, {alternative}), smallest n with power >= {power:g}"}
+    if show:
+        unit = "per group" if design == "two_sample" else ("pairs" if design == "paired" else "observations")
+        print(f"\nTo detect a difference of {effect:g} (d = {effect / sd:.3f}) with power {power:.0%} at alpha "
+              f"{alpha:g}: n = {out['n']} {unit} (power {out['power']:.3f})")
     return out
 
 
