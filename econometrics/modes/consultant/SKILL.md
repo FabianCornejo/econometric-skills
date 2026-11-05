@@ -1,6 +1,6 @@
 ---
-name: consultor
-description: "Econometrics skill in Consultant mode: estimate, test, forecast or evaluate a policy. Type /econometrics:consultor followed by the question."
+name: consultant
+description: "Econometrics skill in Consultant mode: estimate, test, forecast or evaluate a policy. Type /econometrics:consultant followed by the question."
 disable-model-invocation: true
 ---
 

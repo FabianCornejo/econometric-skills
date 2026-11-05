@@ -1,6 +1,6 @@
 ---
-name: revisor
-description: "Econometrics skill in Reviewer mode: audit a paper, report or model. Type /econometrics:revisor followed by the material or its path."
+name: reviewer
+description: "Econometrics skill in Reviewer mode: audit a paper, report or model. Type /econometrics:reviewer followed by the material or its path."
 disable-model-invocation: true
 ---
 

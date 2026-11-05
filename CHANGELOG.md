@@ -2,6 +2,16 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.4.3 — English command names; answers that read well in a terminal
+
+From the v2.4.2 validation on Windows, where `/econometrics:professor multicolinearidade` produced a correct lesson (numbers from `demo_multicollinearity`, checked against the closed-form formulas) with three problems in how it was delivered. No change to estimators or results.
+
+- **Commands renamed to English**, matching the modes in `SKILL.md` and the rest of the repository: `/econometrics:consultant`, `/econometrics:teacher` and `/econometrics:reviewer` (were `consultor`, `professor`, `revisor`). Answers still come in the user's language.
+- **Terminal rendering**: in Claude Code, formulas in plain text with Unicode symbols, not LaTeX, and no HTML (the lesson printed `$$\operatorname{Var}...$$` and a `<details>` block literally). LaTeX stays for the app, notebooks and documents. Rule in `SKILL.md` and a *Rendering* paragraph in the method card (`teaching.md` §2).
+- **Where scripts are saved**: in Claude Code, in the user's working folder, with the full path; when that is a system folder (Claude Code had been started in `C:\Windows\System32`) or not writable, ask, instead of using a temporary folder the system may delete.
+- **Found in the same test, outside the skill**: another plugin's PreToolUse hook (ECC's "Fact-Forcing Gate") denied the first shell command and file write. A folder prepared with `scripts/workspace.py` keeps such hooks out of the analysis; README already explains it.
+- New `tests/test_v243.py` (10 checks): command names equal the `SKILL.md` modes, no Portuguese command names left, the rendering and save-location rules (766 checks in total).
+
 ## v2.4.2 — Classical regression and discrete choice; three commands and a clean workspace
 
 Second step of the v2.4 plan, plus the first three layers of the robustness plan for crowded Claude Code installations (the v2.4.0 and v2.4.1 validations found other plugins hiding the skill's description and running broken hooks in every session). No change to existing estimators or results.

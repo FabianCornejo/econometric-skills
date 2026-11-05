@@ -1,6 +1,6 @@
 ---
-name: professor
-description: "Econometrics skill in Teacher mode: explain or teach a statistics or econometrics method. Type /econometrics:professor followed by the topic."
+name: teacher
+description: "Econometrics skill in Teacher mode: explain or teach a statistics or econometrics method. Type /econometrics:teacher followed by the topic."
 disable-model-invocation: true
 ---
 
