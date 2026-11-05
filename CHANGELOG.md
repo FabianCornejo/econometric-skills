@@ -2,6 +2,22 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.4.6.2 — Fixes from the v2.4.6.1 validation (IPCA, second run)
+
+The same IPCA request, run again on v2.4.6.1, confirmed the five fixes:
+- the short-memory check gave p = 0.126;
+- the CUSUM with the long-run SD gave p = 0.34;
+- the edge warning fired on the 2022 break;
+- the weak-agreement warning fired, and the agent explained it to the user;
+- the answer reported the bias, the 91.7% coverage and the sensitivity to the window.
+
+It also found three small issues, fixed here:
+
+- **`ts_univariate.sup_wald` with X that already contains a constant.** The agent passed all 12 month dummies; the function added its own constant, which made the design rank deficient and the Chow F use 13 restrictions instead of 12. The bootstrap p-value was unaffected (0.028), but the reported sup-F was wrong (3.89 instead of 4.24). The function now drops its constant when X spans it, says so, and refuses other collinear designs; the ranks are computed on column-normalised matrices, so a regressor in large units (nominal GDP) does not make the constant look redundant.
+- **`_console`: logs written to a file are UTF-8.** On Windows, `py script.py > log.txt` wrote cp1252: arrows and ≥ became "?", and an editor showed —, ± and • as "�". The agent also stripped the accents from its Portuguese output. When stdout or stderr is a regular file (`>` in cmd or in Git Bash, the shell Claude Code uses on Windows), it is now switched to UTF-8, keeping its error handler; pipes and consoles keep the previous behaviour, and so does PowerShell, which redirects through a pipe.
+- **Language.** One progress message came out in Spanish in a Portuguese session; the final answer was in Portuguese. `SKILL.md` now says the user's language applies to progress messages too, and to the accents in scripts and logs.
+- New `tests/test_v2462.py` (10 checks; 909 in total).
+
 ## v2.4.6.1 — Fixes from the first real-series test (monthly IPCA)
 
 The v2.4.6 functions were tested in Claude Code on the monthly IPCA (BCB/SGS 433, 2000–2026) with `/econometrics:consultant`. The analysis was sound, and every headline number was reproduced independently. In several places, though, the skill relied on the agent to notice a problem, and the independent review of this patch found that one of the test's findings was itself an artefact.

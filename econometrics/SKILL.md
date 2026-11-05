@@ -7,7 +7,7 @@ description: "Statistics, econometrics and quantitative risk in Python, as consu
 
 This skill turns an economic question into an estimated, diagnosed and defensible answer, and explains or audits such answers. The value is in the **rigor of the process**: anyone can run `sm.OLS(...).fit()`; what makes an analysis reliable is the specification, the assumption tests, the identification strategy and honesty about what the model does not prove. Methods follow Wooldridge, Greene, Hansen, Angrist-Pischke, Cameron-Trivedi, Hamilton, Chernozhukov et al. and EconML (`references/bibliography.md`).
 
-Answer in the user's language; these instructions are in English. In a terminal (Claude Code) write formulas in plain text with Unicode symbols, not LaTeX, and use no HTML; LaTeX is for the app, notebooks and documents.
+Answer in the user's language, including the short progress messages between steps (these instructions are in English; do not drift into another language mid-task), and keep its accents in the scripts and logs you write. In a terminal (Claude Code) write formulas in plain text with Unicode symbols, not LaTeX, and use no HTML; LaTeX is for the app, notebooks and documents.
 
 ## 1. Pick the mode
 
