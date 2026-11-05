@@ -523,6 +523,15 @@ def _chow_F(yv, X, k, trim_lo, trim_hi):
     return Fs
 
 
+def _break_verdict(p_sup: float, p_cusum: float, alpha: float, date) -> str:
+    verdict = ((f"evidence of a break (most likely at {date})" if p_sup < alpha else
+                "no evidence of a single break at an unknown date (not proof of stability)") + f" at {alpha:.0%}")
+    if p_sup >= alpha and p_cusum < alpha:
+        verdict += (f"; but the OLS-CUSUM rejects stability (p = {p_cusum:.4f}): the parameters may change gradually "
+                    "or in several steps; look at the recursive coefficients and do not report the series as stable")
+    return verdict
+
+
 def sup_wald(y, X=None, trim: float = 0.15, B: int = 499, ar_max: int = 4, seed: int = 0, alpha: float = ALPHA,
              show: bool = True) -> dict:
     """Test for one break at an unknown date in y = Xβ + u (X = constant only: a break in the mean).
@@ -531,7 +540,8 @@ def sup_wald(y, X=None, trim: float = 0.15, B: int = 499, ar_max: int = 4, seed:
     the sample; its maximum has a non-standard distribution, so the p-value comes from a sieve bootstrap under
     H0 (no break): fit an AR(p) by BIC to the residuals of the full-sample regression, rebuild errors from
     resampled AR residuals, add them to the fitted values and recompute sup-F B times. Also the OLS-CUSUM test
-    (Ploberger-Krämer) and the recursive coefficients, for gradual change. The date of the maximum is the
+    (Ploberger-Krämer) scaled by the long-run SD from the same AR, and the recursive coefficients, for gradual
+    change. When the sup-F does not reject but the CUSUM does, the verdict says so. The date of the maximum is the
     break-date estimate; with no evidence of a break, it means nothing."""
     from statsmodels.stats.diagnostic import breaks_cusumolsresid
     s = _series(y)
@@ -562,7 +572,10 @@ def sup_wald(y, X=None, trim: float = 0.15, B: int = 499, ar_max: int = 4, seed:
     supF = float(np.nanmax(Fs))
     tb = int(np.nanargmax(Fs))
     b0, u = _ols(yv, Xv)
-    # sieve AR(p) for the errors under H0
+    # Sieve fitted to the residuals under H0 (no break). Residuals of the model with the break at the argmax date
+    # absorb low-frequency variation and understate persistence: tried in v2.4.6.1 and rejected, the size under
+    # AR(0.8) errors rose to 12% at n = 150 and 24% at n = 60. The price of the H0 sieve is some power when a
+    # real break is present (the break looks like persistence).
     # sieve order by BIC, every candidate on the common sample u[ar_max:] (otherwise the comparison depends on
     # the units of y), then re-fitted on all the residuals it can use
     T_c = len(u) - ar_max
@@ -579,11 +592,24 @@ def sup_wald(y, X=None, trim: float = 0.15, B: int = 499, ar_max: int = 4, seed:
         a, r = np.zeros(0), u.copy()
     r = r - r.mean()
     warn = []
+    # Is y possibly I(1)? A break test in levels assumes stationarity. Without regressors: Zivot-Andrews (unit root
+    # against stationarity with one break), so that a real break does not trigger the warning; with regressors:
+    # the persistence of the residuals of the model with the break.
     root = float(np.max(np.abs(np.roots(np.r_[1, -a])))) if pp else 0.0
-    if root > 0.9:
-        warn.append(f"the residuals are very persistent (largest AR root {root:.2f}): a break test in levels assumes "
-                    "a stationary series, and a random walk looks like a series with breaks; test the differences "
-                    "or use a unit-root test that allows a break (Zivot-Andrews)")
+    unit_root_like, why = False, ""
+    if X is None:
+        try:
+            from arch.unitroot import ZivotAndrews
+            za_p = float(ZivotAndrews(yv, trend="c").pvalue)
+            unit_root_like, why = za_p > 0.10, f"Zivot-Andrews does not reject a unit root, p = {za_p:.2f}"
+        except Exception:                       # arch missing or ZA failing: fall back on the residual root
+            unit_root_like, why = root > 0.9, f"largest AR root of the residuals {root:.2f}"
+    else:
+        unit_root_like, why = root > 0.9, f"largest AR root of the residuals {root:.2f}"
+    if unit_root_like:
+        warn.append(f"y may have a unit root ({why}): a break test in levels assumes a stationary series, and a "
+                    "random walk looks like a series with breaks; test the differences or use a unit-root test that "
+                    "allows a break (Zivot-Andrews)")
     rng = np.random.default_rng(seed)
     fitted = Xv @ b0
     sups = np.empty(B)
@@ -595,24 +621,38 @@ def sup_wald(y, X=None, trim: float = 0.15, B: int = 499, ar_max: int = 4, seed:
             ustar[t_] = eps[t_] + sum(a[i] * ustar[t_ - 1 - i] for i in range(pp) if t_ - 1 - i >= 0)
         sups[bb] = np.nanmax(_chow_F(fitted + ustar[burn:], Xv, k, lo, hi))
     p_boot = float((np.sum(sups >= supF) + 1) / (B + 1))
-    cus_stat, cus_p, _ = breaks_cusumolsresid(u, ddof=k)
+    # OLS-CUSUM scaled by the long-run SD of the errors (from the same sieve), not the iid SD: with AR errors the
+    # iid version rejects stability most of the time (AR(0.6), n = 320: 62% at 5%). Same limiting distribution
+    # (sup of a Brownian bridge, Kolmogorov).
+    lr_sd = float(np.sqrt(r @ r / max(len(r) - pp, 1)) / abs(1 - a.sum())) if pp else float(np.sqrt(u @ u / (n - k)))
+    cus_stat = float(np.max(np.abs(np.cumsum(u))) / (lr_sd * np.sqrt(n)))
+    cus_p = float(stats.kstwobign.sf(cus_stat))
+    cus_iid, cus_iid_p, _ = breaks_cusumolsresid(u, ddof=k)
     rec = []
     for t_ in range(max(k + 5, lo // 2), n + 1):
         b_t, _ = _ols(yv[:t_], Xv[:t_])
         rec.append(b_t)
     rec = pd.DataFrame(rec, columns=names, index=s.index[max(k + 5, lo // 2) - 1:n])
     date = s.index[tb]
+    verdict = _break_verdict(p_boot, cus_p, alpha, date)
+    edge = max(2, int(round(0.02 * n)))
+    if p_boot < alpha and (tb - lo < edge or hi - tb < edge):
+        side = "end" if hi - tb < edge else "start"
+        warn.append(f"the estimated date is at the {side} of the searched window ({trim:.0%} trimming): the {side} of "
+                    f"the sample differs from the rest, but the date is imprecise and the {'last' if side == 'end' else 'first'} "
+                    "regime is short; "
+                    + ("for a break near the end use an end-of-sample test (Andrews 2003) or wait for more data"
+                       if side == "end" else "check the first observations for data problems"))
     out = {"estimand": "sup-F (H0: no break)", "statistic": supF, "p_bootstrap": p_boot, "break_date": date,
-           "break_position": tb, "F_path": pd.Series(Fs, index=s.index), "cusum": {"statistic": float(cus_stat),
-           "p": float(cus_p)}, "recursive_coefficients": rec, "sieve_ar_order": pp, "trim": trim, "n": n, "B": B,
+           "break_position": tb, "F_path": pd.Series(Fs, index=s.index), "cusum": {"statistic": cus_stat,
+           "p": cus_p, "scale": "long-run SD (sieve)", "statistic_iid": float(cus_iid), "p_iid": float(cus_iid_p)}, "recursive_coefficients": rec, "sieve_ar_order": pp, "trim": trim, "n": n, "B": B,
            "bootstrap_critical_values": {f"{q:.0%}": float(np.quantile(sups, 1 - q)) for q in (0.10, 0.05, 0.01)},
-           "verdict": ((f"evidence of a break (most likely at {date})" if p_boot < alpha else
-                        "no evidence of a break at an unknown date (not proof of stability; check CUSUM and the "
-                        "recursive coefficients)") + f" at {alpha:.0%}"),
-           "warnings": warn, "method": "Andrews sup-F with sieve bootstrap; OLS-CUSUM"}
+           "verdict": verdict,
+           "warnings": warn, "method": "Andrews sup-F with sieve bootstrap; OLS-CUSUM with long-run variance"}
     if show:
         print(f"\nsup-F test for one break (trim {trim:.0%}, k = {k}, n = {n}): sup-F = {supF:.3f} at {date}")
-        print(f"p bootstrap (B = {B}, sieve AR({pp})) = {p_boot:.4f}; OLS-CUSUM = {cus_stat:.3f}, p = {cus_p:.4f}")
+        print(f"p bootstrap (B = {B}, sieve AR({pp})) = {p_boot:.4f}; OLS-CUSUM (long-run SD) = {cus_stat:.3f}, "
+              f"p = {cus_p:.4f}")
         print("→", out["verdict"])
         for w in warn:
             print("Warning:", w)
@@ -632,7 +672,25 @@ def _periodogram(x: np.ndarray, m: int):
     return lam, I
 
 
-def long_memory(y, power_gph: float = 0.5, power_lw: float = 0.65, alpha: float = ALPHA, show: bool = True) -> dict:
+def _d_gph(x: np.ndarray, m: int) -> float:
+    lam, I = _periodogram(x, m)
+    reg = -2 * np.log(2 * np.sin(lam / 2))
+    b, _ = _ols(np.log(I), np.column_stack([np.ones(m), reg]))
+    return float(b[1])
+
+
+def _d_lw(x: np.ndarray, m: int) -> float:
+    lam, I = _periodogram(x, m)
+    loglam = np.mean(np.log(lam))
+
+    def R(d):
+        return np.log(np.mean(lam ** (2 * d) * I)) - 2 * d * loglam
+    return float(optimize.minimize_scalar(R, bounds=(-0.49, 1.49), method="bounded").x)
+
+
+def long_memory(y, power_gph: float = 0.5, power_lw: float = 0.65, alpha: float = ALPHA,
+                short_memory_check: bool = True, B: int = 199, max_ar: int = 8, seed: int = 0,
+                show: bool = True) -> dict:
     """Fractional integration order d of a series (y ~ (1 − L)^{−d}·short-memory).
 
     GPH (Geweke-Porter-Hudak 1983): regress log I(λ_j) on −2·log(2 sin(λ_j/2)) for the first m = n^0.5
@@ -640,24 +698,25 @@ def long_memory(y, power_gph: float = 0.5, power_lw: float = 0.65, alpha: float 
     log(mean(λ_j^{2d} I_j)) − 2d·mean(log λ_j) over m = n^0.65 frequencies; SE = 1/(2 sqrt(m)), more efficient.
     d ≈ 0: short memory; 0 < d < 0.5: stationary long memory (hyperbolic ACF decay; ARFIMA); 0.5 ≤ d < 1:
     non-stationary but mean-reverting; d ≈ 1: unit root. The bandwidth trades bias (short-run dynamics leak in
-    as m grows) against variance; compare both estimators and a few bandwidths."""
+    as m grows) against variance; compare both estimators and a few bandwidths.
+
+    Short-run persistence biases both estimators upward: an AR(1) with φ = 0.6 and n = 320 gives a local
+    Whittle d near 0.2 on average. With short_memory_check=True (v2.4.6.1) an AR(p) with short memory is fitted
+    (p by BIC up to max_ar), B series are simulated from it with resampled residuals, and the p-value is the
+    share of simulated d at or above the observed one. A positive d is read as long memory only when short
+    memory is rejected; otherwise the reading says that d is what short-run persistence alone produces. The
+    check runs only when 0 < d < 0.5 and the fitted AR is not near a unit root (a non-stationary reading is never
+    overridden). It is conservative (simulated for v2.4.6.1: about 1 in 100 AR(1) series with φ = 0.6, n = 320,
+    read as long memory) and has modest power: ARFIMA d = 0.35 was detected in about 25% of samples of 320 and
+    40–50% of 1,000, d = 0.3 in about 70% of 2,000. "No evidence beyond short memory" is not proof of short memory."""
     s = _series(y)
     x = s.to_numpy()
     n = len(x)
     z = stats.norm.ppf(1 - alpha / 2)
     m1 = int(np.floor(n ** power_gph))
-    lam, I = _periodogram(x, m1)
-    reg = -2 * np.log(2 * np.sin(lam / 2))
-    Xg = np.column_stack([np.ones(m1), reg])
-    bg, _ = _ols(np.log(I), Xg)
-    d_gph, se_gph = float(bg[1]), float(np.pi / np.sqrt(24 * m1))
+    d_gph, se_gph = _d_gph(x, m1), float(np.pi / np.sqrt(24 * m1))
     m2 = int(np.floor(n ** power_lw))
-    lam2, I2 = _periodogram(x, m2)
-
-    def R(d):
-        return np.log(np.mean(lam2 ** (2 * d) * I2)) - 2 * d * np.mean(np.log(lam2))
-    res = optimize.minimize_scalar(R, bounds=(-0.49, 1.49), method="bounded")
-    d_lw, se_lw = float(res.x), float(1 / (2 * np.sqrt(m2)))
+    d_lw, se_lw = _d_lw(x, m2), float(1 / (2 * np.sqrt(m2)))
     tab = pd.DataFrame({"d": [d_gph, d_lw], "se": [se_gph, se_lw], "bandwidth_m": [m1, m2]},
                        index=["GPH", "local Whittle"])
     tab["ci_low"], tab["ci_high"] = tab["d"] - z * tab["se"], tab["d"] + z * tab["se"]
@@ -677,11 +736,56 @@ def long_memory(y, power_gph: float = 0.5, power_lw: float = 0.65, alpha: float 
         if d - z * se >= 0.5:
             return "non-stationary (d ≥ 0.5): difference or model as I(d)"
         return "d not pinned down between short memory, long memory and non-stationarity"
-    out = {"table": tab, "d_gph": d_gph, "d_local_whittle": d_lw, "reading": read(d_lw, se_lw), "n": n,
-           "method": "GPH log-periodogram and local Whittle"}
+    reading = read(d_lw, se_lw)
+    sm = None
+    if short_memory_check and 0 < d_lw < 0.5:
+        xc = x - x.mean()
+        pmax = min(max_ar, n // 10)
+        bics = {}
+        for pp in range(0, pmax + 1):
+            _, e_ = _fit_ar(xc[pmax - pp:], pp)
+            T = len(e_)
+            bics[pp] = T * np.log(e_ @ e_ / T) + (pp + 1) * np.log(T)
+        p_ar = min(bics, key=bics.get)
+        coef, e = _fit_ar(xc, p_ar)
+        phi = coef[1:]
+        if p_ar and np.any(np.abs(np.roots(np.r_[1, -phi])) >= 0.95):
+            sm = {"note": "the AR fitted to the series is near a unit root (largest root ≥ 0.95): short-memory check "
+                          "skipped; test for a unit root first"}
+        else:
+            rng = np.random.default_rng(seed)
+            ec = e - e.mean()
+            burn = 200
+            d_sim_lw, d_sim_gph = np.empty(B), np.empty(B)
+            for b in range(B):
+                u = rng.choice(ec, size=n + burn)
+                z_ = np.zeros(n + burn)
+                for t_ in range(n + burn):
+                    z_[t_] = u[t_] + sum(phi[i] * z_[t_ - 1 - i] for i in range(p_ar) if t_ - 1 - i >= 0)
+                xs = z_[burn:]
+                d_sim_lw[b], d_sim_gph[b] = _d_lw(xs, m2), _d_gph(xs, m1)
+            p_lw = float((np.sum(d_sim_lw >= d_lw) + 1) / (B + 1))
+            p_g = float((np.sum(d_sim_gph >= d_gph) + 1) / (B + 1))
+            sm = {"ar_order": p_ar, "ar_coef": phi, "B": B, "mean_d_lw_under_short_memory": float(d_sim_lw.mean()),
+                  "mean_d_gph_under_short_memory": float(d_sim_gph.mean()), "p_local_whittle": p_lw, "p_gph": p_g}
+            if p_lw >= alpha and reading.startswith(("stationary long memory", "d not pinned")):
+                reading = (f"d = {d_lw:.3f} is what short-run persistence alone produces: an AR({p_ar}) with short memory "
+                           f"gives d ≥ observed in {p_lw:.0%} of simulations (mean {d_sim_lw.mean():.3f}); "
+                           "no evidence of long memory beyond it")
+            elif reading.startswith("stationary long memory"):
+                reading += f", beyond what an AR({p_ar}) produces (p = {p_lw:.3f})"
+    out = {"table": tab, "d_gph": d_gph, "d_local_whittle": d_lw, "reading": reading, "short_memory_check": sm,
+           "n": n, "method": "GPH log-periodogram and local Whittle"
+                             + ("; AR(p) parametric bootstrap under short memory" if sm and "B" in sm else "")}
     if show:
         print(f"\nFractional d (n = {n})")
         print(tab.to_string(float_format=_fmt))
+        if sm and "B" in sm:
+            print(f"Short-memory check: AR({sm['ar_order']}) fitted, {B} simulated series; mean d under short memory "
+                  f"LW {sm['mean_d_lw_under_short_memory']:.3f}, GPH {sm['mean_d_gph_under_short_memory']:.3f}; "
+                  f"P(d ≥ observed): LW {sm['p_local_whittle']:.3f}, GPH {sm['p_gph']:.3f}")
+        elif sm:
+            print("Short-memory check:", sm["note"])
         print("→ local Whittle:", out["reading"])
     return out
 
@@ -705,7 +809,7 @@ def arfima(y, order=(1, 0), d: float | None = None, show: bool = True) -> dict:
     dropped). The SEs of the ARMA part treat d as known."""
     from statsmodels.tsa.arima.model import ARIMA
     s = _series(y)
-    lm = long_memory(s, show=False) if d is None else None
+    lm = long_memory(s, short_memory_check=False, show=False) if d is None else None
     dd = lm["d_local_whittle"] if d is None else float(d)
     fd = frac_diff(s - s.mean(), dd)
     cut = int(0.1 * len(fd))

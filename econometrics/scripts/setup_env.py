@@ -8,6 +8,7 @@ Environment check and setup for the econometrics skill, the same on Windows, mac
                                      only if pip refuses because the system Python is externally managed)
     python setup_env.py --skill-dir  print the folder that scripts should use as SKILL_DIR
     --extra excel                    with --check or --install: also the optional openpyxl (.xlsx files)
+    --extra plots                    with --check or --install: also the optional matplotlib (charts saved as PNG)
 
 Exit code 0 when everything needed is present (after --install, when it succeeded), 1 otherwise.
 In Claude Code, Claude runs --check before the first script on a user's machine and asks before --install.
@@ -39,8 +40,9 @@ CORE = {
 # requirements-dev.txt (tested). They go in the same permission question as the core packages.
 OPTIONAL = {
     "excel": {"openpyxl": ("openpyxl", "3.1")},
+    "plots": {"matplotlib": ("matplotlib", "3.8")},
 }
-OPTIONAL_USE = {"excel": "read or write .xlsx/.xlsm files"}
+OPTIONAL_USE = {"excel": "read or write .xlsx/.xlsm files", "plots": "save charts (PNG) from a delivered script"}
 SKILL_DIR = Path(__file__).resolve().parents[1]
 STABLE_PLUGIN_DIR = Path.home() / ".claude" / "plugins" / "marketplaces" / "econometric-skills" / "econometrics"
 

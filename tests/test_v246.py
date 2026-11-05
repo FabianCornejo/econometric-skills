@@ -329,9 +329,10 @@ check("teaching.md curriculum map lists the four new demos",
 import json  # noqa: E402
 import reporting  # noqa: E402
 mk = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
-top = re.search(r"^## \[?v?(\d+\.\d+\.\d+)", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"), re.M).group(1)
-check("version 2.4.6 in marketplace, reporting and CHANGELOG",
-      mk["plugins"][0]["version"] == reporting.SKILL_VERSION == top == "2.4.6", f"{mk['plugins'][0]['version']}, {reporting.SKILL_VERSION}, {top}")
+top = re.search(r"^## v(\S+)", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"), re.M).group(1)
+check("same version (2.4.6 or later) in marketplace, reporting and CHANGELOG",
+      mk["plugins"][0]["version"] == reporting.SKILL_VERSION == top and tuple(map(int, top.split("."))) >= (2, 4, 6),
+      f"{mk['plugins'][0]['version']}, {reporting.SKILL_VERSION}, {top}")
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

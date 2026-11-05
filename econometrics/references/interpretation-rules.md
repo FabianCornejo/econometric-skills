@@ -137,3 +137,10 @@ To run it in your own environment, set `ECONOMETRICS_SKILL_DIR` to the skill fol
 - **A break date is an estimate only when the break test rejects.** Report the sup-Wald p-value (bootstrap) before naming a date; with no rejection, say "no evidence of a single break", not "the series is stable", and look at CUSUM and the recursive coefficients. A break test in levels assumes a stationary series: for one that may be I(1), test the differences or use Zivot-Andrews.
 - **Forecast intervals with parameter uncertainty.** Analytic AR intervals assume known coefficients and normal errors; in short samples show the bias-corrected bootstrap interval next to them (`ts_univariate.ar_bootstrap_forecast`), and say that both can undercover. A combination of forecasts uses equal weights unless an out-of-sample window clearly favours others (`ts_univariate.combine_forecasts`).
 
+## Rules added in v2.4.6.1
+
+From the first test on a real series (monthly IPCA 2000–2026):
+
+- **A positive d is not long memory until short memory is ruled out.** GPH and local Whittle are biased upward by ordinary AR persistence; report the short-memory check of `ts_univariate.long_memory` (an AR(p) simulated under short memory) and write "no evidence of long memory beyond short-run persistence" when it does not reject.
+- **Break tests that disagree are a finding, if both are valid.** A sup-F that does not reject next to a CUSUM that does means gradual or multiple change, not stability; but a CUSUM scaled by the iid SD of autocorrelated residuals rejects stable series most of the time (on the IPCA, p = 0.0025 with the iid SD, 0.34 with the long-run SD): use the long-run version (`ts_univariate.sup_wald`). A break dated at the edge of the trimmed window means the end (or start) of the sample differs, with an imprecise date.
+- **An agreement check is only as good as its tolerance.** When two routes "agree within 1 SE" and the SE is a large share of the estimate, report the spread between them, not the word agree (`reporting.cross_check` flags it as weak).
