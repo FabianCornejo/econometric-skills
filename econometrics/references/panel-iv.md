@@ -77,6 +77,8 @@ Costs of IV: less efficient than OLS (larger variance); biased in finite samples
 - **Rank condition** (necessary and sufficient): from the coefficients of the variables excluded from the equation but present in the others, at least one non-zero determinant of order (M−1) can be formed.
 - Classic example: demand Q = a₁ + b₁P + c₁Income + u₁ and supply Q = a₂ + b₂P + c₂Rain + u₂ — income identifies supply, rain identifies demand. Retail applications in `demand-elasticities.md`. To teach it, `simulation.demo_simultaneity` shows OLS estimating neither curve and ILS = 2SLS recovering the supply slope.
 - Recursive models (triangular B, uncorrelated errors) can be estimated equation by equation by OLS.
+- `systems.three_sls(equations, data)` checks the order condition per equation (refusing an unidentified one), estimates 3SLS and 2SLS equation by equation and shows the first-stage F. When every equation is exactly identified, 3SLS equals 2SLS. 3SLS is more efficient when the system is right, but one misspecified equation contaminates the others.
+- **SUR** (`systems.sur_system`): equations related only through correlated errors (demand for several products, costs of several plants). It gains over OLS only when the errors are correlated (Breusch-Pagan LM) and the regressors differ; with the same regressors, SUR equals OLS.
 
 ## 6. Panel structure
 
@@ -150,7 +152,9 @@ For staggered adoption, event studies with clean comparisons (Callaway-Sant'Anna
 
 - A lagged y with fixed effects creates **Nickell bias** (order 1/T), relevant when T < ~20.
 - Large T (≥ 30): ordinary FE acceptable, with a caveat.
-- Small T, large N: Arellano-Bond (difference) or Blundell-Bond (system) GMM, package `pydynpd`. Equivalents to Stata's `xtabond`: strictly exogenous variables as their own instruments; **predetermined** (`pre()`) instrumented by lags from t−1; **endogenous** (`endogenous()`) from t−2. Use two-step with the Windmeijer correction (robust errors), report AR(2) in differences (should not reject) and Hansen J, and limit the number of instruments (< N).
+- Small T, large N: Arellano-Bond (difference) or Blundell-Bond (system) GMM: `systems.dynamic_panel(df, y, x, entity, time, method="difference" | "system", collapse=True)`, checked against linearmodels' IV2SLS/IVGMM on the stacked differences. Equivalents to Stata's `xtabond`: strictly exogenous variables as their own instruments; **predetermined** (`pre()`) instrumented by lags from t−1; **endogenous** (`endogenous()`) from t−2. Use two-step with the Windmeijer correction (robust errors), report AR(2) in differences (should not reject) and Hansen J, and limit the number of instruments (< N).
+- The estimate of ρ should lie between the within estimate (biased down) and pooled OLS (biased up) (Bond 2002); `dynamic_panel` reports both. When ρ is near 1, lagged levels are weak instruments for the differences: in simulations for v2.4.7 (N = 500, T = 7, ρ = 0.9), difference GMM had an SD of 0.16 across samples, system GMM 0.03. System GMM needs the deviations from the steady state uncorrelated with the fixed effect. Exogenous x enter the level equation through Δx, not x, because x in levels is usually correlated with the effect.
+- Without AR(2), Hansen J and the instrument count there is no result.
 
 ## 12. Pitfalls
 

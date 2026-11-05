@@ -72,7 +72,7 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | `estat overid` | Instrument orthogonality | `res.sargan`; robust: `IVGMM(...).fit().j_stat` |
 | `ivregress liml` | LIML | `IVLIML.from_formula(...)` |
 | `ivregress gmm` | GMM | `IVGMM.from_formula(...)` |
-| `reg3` / `sureg` | System | `linearmodels.system.IV3SLS`, `SUR` |
+| `reg3` / `sureg` | System | `linearmodels.system.IV3SLS`, `SUR`; `systems.three_sls` (order condition per equation), `systems.sur_system` (Breusch-Pagan LM) |
 
 ## Panel data
 
@@ -86,7 +86,7 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | `xtreg ..., re` | `RandomEffects.from_formula("y ~ 1 + x", df).fit()` |
 | `hausman FE RE, sigmamore` | `hausman` in `scripts/diagnostics.py` (or Mundlak) |
 | `xttest0` (Breusch-Pagan LM) | `panel_bp_lm` in `scripts/diagnostics.py` |
-| `xtabond ..., twostep vce(robust) pre() endogenous()` | `pydynpd` package |
+| `xtabond ..., twostep vce(robust) pre() endogenous()`; `xtabond2 ..., collapse` | `systems.dynamic_panel(..., x_kind={'x': 'predetermined' / 'endog'}, collapse=True)` (Windmeijer SEs, AR(2), Hansen). System GMM uses h(2) and Δx for exogenous x in the level equation, so it differs from xtabond2 defaults (`iv(x)` in levels) |
 
 ## Qualitative and limited dependent variables
 
@@ -120,17 +120,19 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | Quandt-Andrews unknown breakpoint test | `ts_univariate.sup_wald` (sieve-bootstrap p-value) |
 | Recursive estimates / CUSUM | `dg.recursive_olsresiduals`, `dg.breaks_cusumolsresid`; `ts_univariate.sup_wald` returns both |
 | Hodrick-Prescott filter / BK / CF | `statsmodels.tsa.filters.hp_filter.hpfilter(y, lamb=129600)`; `ts_univariate.detrend(y, "hp" \| "bk" \| "cf" \| "hamilton")` |
-| ARCH/GARCH/TARCH/EGARCH | `arch.arch_model` |
+| ARCH/GARCH/GJR/EGARCH | `arch.arch_model`; `volatility.garch_fit` (diagnostics; regressors in the variance like Stata `arch ..., het()`) |
+| Engle-Ng sign-bias test | `volatility.sign_bias_test` |
 | ARFIMA | `ts_univariate.long_memory` (GPH, local Whittle), `frac_diff`, `arfima` |
-| VAR, lag length criteria | `VAR(data).select_order(12)` |
+| VAR, lag length criteria | `VAR(data).select_order(12)`; `multivariate.var_analysis` (with stability, whiteness, Granger matrix) |
 | Granger causality (pairwise) | `res.test_causality(...)` or `grangercausalitytests` |
-| Impulse response (Cholesky / generalized) | `res.irf(h).orth_irfs` / Pesaran-Shin formula |
-| Variance decomposition | `res.fevd(h)` |
-| Structural VAR (A/B, long-run) | `SVAR(..., svar_type="AB")`; Blanchard-Quah manually |
+| Impulse response (Cholesky / generalized) | `res.irf(h).orth_irfs` / Pesaran-Shin formula; `multivariate.irf_bands` (Kilian bias-corrected bootstrap) |
+| Variance decomposition | `res.fevd(h)`; `multivariate.fevd_table` (several orderings) |
+| Structural VAR (A/B, long-run, signs) | `SVAR(..., svar_type="AB")`; `multivariate.svar_identify`, `svar_longrun` (Blanchard-Quah), `svar_sign` |
 | Bayesian VAR (Litterman) | manual implementation |
-| Cointegration test (Johansen) | `coint_johansen`, `select_coint_rank` |
+| Cointegration test (Johansen) | `coint_johansen`, `select_coint_rank`; `multivariate.johansen_trace` (restricted-constant case, simulated critical values) |
 | Engle-Granger | `statsmodels.tsa.stattools.coint` |
-| VEC | `statsmodels.tsa.vector_ar.vecm.VECM` |
+| VEC | `statsmodels.tsa.vector_ar.vecm.VECM`; `multivariate.vecm_fit` (error-correction check) |
+| Stata `xtfmb`, `asreg ..., fmb newey()` | `finance_empirics.fama_macbeth` (Newey-West; Shanken for estimated betas) |
 | ARIMA automatic selection | `forecasting.auto_arima` (statsmodels-only replacement for `pmdarima.auto_arima`) |
 | Recursive / rolling forecasts | `forecasting.rolling_origin`, `forecasting.rolling_var` |
 | Markov switching regression | `regimes.markov_switching` (`sm.tsa.MarkovRegression`) |

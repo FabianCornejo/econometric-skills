@@ -125,6 +125,11 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Stock, "Unit Roots, Structural Breaks and Trends", *Handbook of Econometrics*, vol. 4, ch. 46 — power of unit-root tests, DF-GLS, breaks.
 - Kilian (2011), "Structural Vector Autoregressions" — identification by short-run, long-run and sign restrictions.
 - Kilian and Lütkepohl, *Structural Vector Autoregressive Analysis* (2017); Lütkepohl on bootstrapping impulse responses.
+- Blanchard and Quah (1989), "The dynamic effects of aggregate demand and supply disturbances", *American Economic Review*; Rubio-Ramírez, Waggoner and Zha (2010), *Review of Economic Studies*; Fry and Pagan (2011), "Sign restrictions in structural vector autoregressions: a critical review", *Journal of Economic Literature*; Amisano and Giannini (1997) on AB-model identification.
+- Johansen (1991, 1995); Osterwald-Lenum (1992) critical values.
+- Zellner (1962) on SUR; Zellner and Theil (1962) on 3SLS.
+- Arellano and Bond (1991); Blundell and Bond (1998); Windmeijer (2005), "A finite sample correction for the variance of linear efficient two-step GMM estimators", *Journal of Econometrics*; Roodman (2009), "How to do xtabond2" and "A note on the theme of too many instruments"; Bond (2002) on the OLS/within bounds.
+- Fama and MacBeth (1973); Shanken (1992), "On the estimation of beta-pricing models", *Review of Financial Studies*.
 - Cochrane, *Time Series for Macroeconomics and Finance* (lecture notes, 1997).
 - Makridakis and Hibon (2000), "The M3-Competition", *International Journal of Forecasting*.
 - Petropoulos et al. (2022), "Forecasting: theory and practice", *International Journal of Forecasting* — a review of methods and forecast evaluation.
@@ -149,7 +154,7 @@ Use to go deeper on a topic beyond this skill: proofs, worked examples, test var
 - Aguirregabiria, *Empirical Industrial Organization* (2018).
 
 ## Volatility
-- Engle (1982); Bollerslev (1986); Glosten, Jagannathan and Runkle (1993); Nelson (1991).
+- Engle (1982); Bollerslev (1986); Glosten, Jagannathan and Runkle (1993); Nelson (1991); Zakoian (1994) on threshold GARCH; Engle and Ng (1993), "Measuring and testing the impact of news on volatility", *Journal of Finance* (sign-bias tests); Bollerslev and Wooldridge (1992) on QML standard errors.
 - Andersen, Bollerslev, Christoffersen and Diebold, "Volatility and Correlation Forecasting", *Handbook of Economic Forecasting*.
 
 ## Financial econometrics, risk and backtesting

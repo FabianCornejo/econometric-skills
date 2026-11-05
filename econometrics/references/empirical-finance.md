@@ -33,6 +33,8 @@ Use for the econometric inputs of valuation and transactions (the beta and the c
 
 `factor_model(r_i, factors, rf)` regresses excess returns on factor returns with HAC SEs: Fama-French 3 (Mkt-RF, SMB, HML) and 5 factors (+ RMW, CMA), Carhart momentum (Mom). Data: Kenneth French's data library (US, developed and emerging markets); **NEFIN-USP** for Brazil (Market, SMB, HML, WML, IML and a risk-free rate, daily and monthly). Uses: style analysis of a fund, risk-adjusted performance (alpha), cost of equity with several factors. A significant alpha means abnormal performance relative to those factors, or a missing factor.
 
+**Risk premia (cross-section)**: `fama_macbeth` runs one cross-sectional regression per period and averages the slopes. It takes either characteristics known at the start of the period (size, book-to-market) or betas from a first pass on factor returns. SEs: Newey-West on the λ_t, which are autocorrelated when characteristics persist. With estimated betas, apply the Shanken correction, (1 + λ'Σ_f⁻¹λ)·Var + Σ_f/T, because the betas carry estimation error. A premium estimated from a few assets, or from betas with little dispersion, is imprecise whatever the SE.
+
 ## 4. Event studies
 
 `event_study(r, r_m, events, est_win=(-250, -30), evt_win=(-5, 5), model="market", car_windows=((-1, 1),))`.

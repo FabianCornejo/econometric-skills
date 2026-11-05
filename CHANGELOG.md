@@ -2,6 +2,48 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.4.7 — Multivariate time series, volatility, systems and dynamic panels
+
+Three new modules, plus Fama-MacBeth, with the checks that decide whether an estimate can be read.
+
+- **`scripts/multivariate.py`**
+  - **`var_analysis`**: lag order by four criteria, stability (companion eigenvalues), residual whiteness and normality, and the Granger matrix. It warns on parameters per observation and on unit roots in levels.
+  - **`irf_bands`**: impulse responses with Kilian (1998) bias-corrected bootstrap bands, recursive in a chosen ordering or Blanchard-Quah. Draws that stay non-stationary after the correction are drawn again, and their count is reported. In 30 persistent VARs (φ = 0.9, T = 80), the 90% bands covered the true response at least as often as plain bands.
+  - **`fevd_table`**: the decomposition under several orderings; shares that move by more than 10 points are flagged.
+  - **`svar_identify`**: the order condition and a numerical rank condition with a relative tolerance, so the verdict does not depend on units. A model can pass the count and still fail the rank.
+  - **`svar_longrun`** (Blanchard-Quah) and **`svar_sign`**: sign restrictions by QR rotations, with the acceptance share and the Fry-Pagan median-target model.
+  - **`johansen_trace`**: the trace test for the stated deterministic case ('ci', 'co', 'li' or 'n'), with critical values simulated for it.
+    - **Why:** statsmodels has no restricted-constant case. With its unrestricted constant, two cointegrated random walks without drift were declared stationary in 9 of 20 samples. The simulated 'ci' test rejected the true rank in 5% of 300.
+    - **Case 'co':** simulated with the drift measured in the data; it is slightly oversized (11% at 5% with T = 250).
+    - **Agreement with statsmodels:** the eigenvalues match for every case ('li' corresponds to statsmodels' 'coli').
+  - **`vecm_fit`**: chooses the lags and the rank, and fits the same deterministic case it tested.
+    - **Stability:** it checks that the implied levels VAR has exactly k − r unit roots and the rest inside the unit circle. eig(I + β'α) is not enough with lagged differences; the tests include a stable VECM where that check fails.
+    - **Weak exogeneity:** a joint Wald test per variable.
+    - **Readings:** α signs are read only with one relation. With more relations, single loadings depend on the normalisation.
+- **`scripts/volatility.py`**
+  - **`stylized_facts`**: fat tails, Ljung-Box on r and r², ARCH-LM and leverage correlations.
+  - **`garch_fit`**: GARCH, GJR or EGARCH, with persistence, half-life, the unconditional variance, Ljung-Box on z and z², sign bias and AIC/BIC.
+  - **`variance_dummies`**: regressors in the variance equation (day of week, events), estimated by the module's own likelihood with Bollerslev-Wooldridge SEs. Without regressors it reproduces `arch` to 3-4 decimals.
+  - **`sign_bias_test`**: the Engle-Ng tests.
+- **`scripts/systems.py`**
+  - **`sur_system`**: SUR with the Breusch-Pagan LM test. It says when SUR equals OLS (identical regressors).
+  - **`three_sls`**: the order condition per equation. It refuses an unidentified equation, and a variable that is endogenous in one equation but listed as exogenous in another. It reports 3SLS next to 2SLS, and the first-stage F. It says when 3SLS equals 2SLS (exact identification).
+  - **`dynamic_panel`**: Arellano-Bond difference GMM or Blundell-Bond system GMM, one-step robust and two-step with Windmeijer SEs. It reports AR(1)/AR(2), Hansen J, the instrument count against the number of groups (with collapse), and the within/OLS bounds for ρ. When the instruments start at lag 3, the level instrument moves to Δy_t−2.
+    - **Agreement with linearmodels:** IV2SLS and two-step IVGMM on the stacked differences give the same estimates.
+    - **Simulations:** both estimators are centred on the true ρ. With ρ = 0.9, system GMM was far less dispersed than difference GMM. AR(2) rejects when the errors are MA(1).
+    - **Level equation:** exogenous regressors enter it through Δx, because x in levels is usually correlated with the fixed effect.
+- **`finance_empirics.fama_macbeth`**: risk premia from characteristics or first-pass betas, with Newey-West SEs and the Shanken correction (applied to the Newey-West variance) for estimated betas. In 60 simulated samples the Shanken interval covered the true premium more often than the uncorrected one.
+- **References**:
+  - `time-series.md` §7–9, `volatility.md`, `panel-iv.md` §5 and §11, `empirical-finance.md`;
+  - eight interpretation rules for v2.4.7 (dynamic-panel checks, Cholesky ordering, Granger, sign restrictions, VECM, SUR/3SLS equivalences, GARCH names, Fama-MacBeth SEs);
+  - also updated: the curriculum map, `software-equivalents.md` and the bibliography.
+- **Independent review before release:** it found three high-severity issues in the first draft, all fixed and tested.
+  - The 'li' case was fitted without a constant.
+  - The 'co' critical values ignored the drift.
+  - α readings changed with the column order when r > 1.
+  - Also fixed: the stability check with lagged differences, the system-GMM level instrument with later lag limits, an endogenous variable reused as an instrument in 3SLS, the unit-dependent rank tolerance, Kilian draws replaced by the generating VAR, and the convergence flag and mean argument of the variance-regressor GARCH.
+- New `tests/test_v247.py` (53 checks; 965 in total).
+
 ## v2.4.6.2 — Fixes from the v2.4.6.1 validation (IPCA, second run)
 
 The same IPCA request, run again on v2.4.6.1, confirmed the five fixes:

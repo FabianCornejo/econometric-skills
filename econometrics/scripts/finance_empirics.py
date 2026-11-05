@@ -13,6 +13,9 @@ Betas and cost of equity
     unlever_beta / relever_beta                   Hamada/Conine or Harris-Pringle (optional debt beta): comparables
     dimson_beta(r_i, r_m, lags, leads)            beta for thinly traded stocks (sum of lead/lag coefficients)
     factor_model(r_i, factors, rf)                Fama-French 3/5, Carhart, NEFIN (Brazil) loadings and alpha
+    fama_macbeth(...)                             cross-sectional risk premia: characteristics (panel) or
+                                                  first-pass betas (returns + factors); Newey-West SEs of the
+                                                  premia and, for estimated betas, the Shanken correction
 
 Events and performance
     car_regression(es, events, formula)          CARs on deal characteristics, skipped events dropped, clustered
@@ -249,6 +252,91 @@ def factor_model(r_i, factors: pd.DataFrame, rf=None, hac_lags: int | None = Non
                         "ci_low": ci[0], "ci_high": ci[1]}).rename(index={"const": "alpha"})
     return {"method": "factor model", "table": tab, "r2": float(fit.rsquared),
             "alpha_annualized": float(fit.params["const"] * periods_per_year), "hac_lags": lags, "n": n, "model": fit}
+
+
+def fama_macbeth(panel: pd.DataFrame | None = None, y: str | None = None, x: list | None = None,
+                 time: str | None = None, returns: pd.DataFrame | None = None, factors: pd.DataFrame | None = None,
+                 nw_lags: int | None = None, shanken: bool = True, show: bool = True) -> dict:
+    """Fama-MacBeth (1973) two-pass regressions: one cross-sectional OLS per period, then the time series of
+    the slopes λ_t. The premium is mean(λ_t); its SE is the Newey-West SE of that mean (the λ_t are
+    autocorrelated when characteristics are persistent; lags 0 gives the classic FM SE).
+
+    Two inputs: (a) a long panel with columns time, y (excess return) and x (characteristics known at the
+    start of the period: size, book-to-market, momentum); (b) returns (T x N excess returns) and factors
+    (T x K): the first pass estimates each asset's betas on the whole sample, the second regresses returns
+    on the betas each period. With estimated betas the SEs ignore that the betas are estimated
+    (errors-in-variables); shanken=True applies the Shanken (1992) correction
+    Var = (1 + λ'Σ_f⁻¹λ)·Var + Σ_f/T to the factor premia, with Var the Newey-West variance (the zero-beta
+    intercept is left uncorrected). Few assets or betas with little
+    dispersion make the premia imprecise whatever the SE."""
+    import statsmodels.api as sm
+    betas = None
+    if panel is not None:
+        d = panel[[time, y] + list(x)].dropna()
+        groups = [(t, g) for t, g in d.groupby(time, sort=True) if len(g) > len(x) + 1]
+        names = ["const"] + list(x)
+        lam, r2, nn, idx = [], [], [], []
+        for t, g in groups:
+            fit = sm.OLS(g[y].to_numpy(), sm.add_constant(g[list(x)].to_numpy(), has_constant="add")).fit()
+            lam.append(fit.params), r2.append(fit.rsquared), nn.append(len(g)), idx.append(t)
+        mode = "characteristics"
+    elif returns is not None and factors is not None:
+        R = pd.DataFrame(returns).astype(float)
+        F = pd.DataFrame(factors).astype(float).reindex(R.index)
+        ok = F.notna().all(axis=1)
+        R, F = R.loc[ok], F.loc[ok]
+        XF = sm.add_constant(F.to_numpy())
+        rows = {}
+        for c in R.columns:
+            m = R[c].notna().to_numpy()
+            if m.sum() > F.shape[1] + 5:
+                b = np.linalg.lstsq(XF[m], R[c].to_numpy()[m], rcond=None)[0]
+                rows[c] = b[1:]
+        betas = pd.DataFrame(rows, index=F.columns).T
+        names = ["const"] + list(F.columns)
+        lam, r2, nn, idx = [], [], [], []
+        for t in R.index:
+            yv = R.loc[t, betas.index]
+            m = yv.notna().to_numpy()
+            if m.sum() <= len(names):
+                continue
+            fit = sm.OLS(yv.to_numpy()[m], sm.add_constant(betas.to_numpy()[m], has_constant="add")).fit()
+            lam.append(fit.params), r2.append(fit.rsquared), nn.append(int(m.sum())), idx.append(t)
+        mode = "betas"
+    else:
+        raise ValueError("pass either panel, y, x and time, or returns and factors")
+    L = pd.DataFrame(lam, index=idx, columns=names)
+    T = len(L)
+    lags = _nw_lags(T) if nw_lags is None else int(nw_lags)
+    rows = []
+    for c in names:
+        fit = sm.OLS(L[c].to_numpy(), np.ones((T, 1))).fit(cov_type="HAC", cov_kwds={"maxlags": lags})
+        se_fm = float(L[c].std(ddof=1) / np.sqrt(T))
+        rows.append({"premium": float(L[c].mean()), "se_fm": se_fm, "se_nw": float(fit.bse[0])})
+    tab = pd.DataFrame(rows, index=names)
+    tab["t_nw"] = tab["premium"] / tab["se_nw"]
+    tab["p_nw"] = 2 * stats.t.sf(np.abs(tab["t_nw"]), T - 1)
+    if mode == "betas" and shanken:
+        Sf = np.atleast_2d(np.cov(F.to_numpy(), rowvar=False))
+        lf = tab.loc[list(F.columns), "premium"].to_numpy()
+        c_ = float(lf @ np.linalg.solve(Sf, lf))
+        # Shanken on the Newey-West variance of the premia (the SE the table leads with)
+        V_nw = np.diag(tab.loc[list(F.columns), "se_nw"].to_numpy() ** 2)
+        V_sh = (1 + c_) * V_nw + Sf / T
+        se_sh = np.sqrt(np.diag(V_sh))
+        tab["se_shanken"] = np.nan
+        tab.loc[list(F.columns), "se_shanken"] = se_sh
+        tab["t_shanken"] = tab["premium"] / tab["se_shanken"]
+        tab["shanken_c"] = c_
+    out = {"table": tab, "lambdas": L, "avg_r2": float(np.mean(r2)), "avg_n": float(np.mean(nn)), "periods": T,
+           "nw_lags": lags, "betas": betas, "mode": mode,
+           "method": f"Fama-MacBeth two-pass ({mode}), Newey-West SE with {lags} lags"
+                     + (", Shanken correction" if mode == "betas" and shanken else "")}
+    if show:
+        print(f"\n{out['method']}: {T} periods, {out['avg_n']:.0f} assets per period on average, "
+              f"average cross-sectional R² {out['avg_r2']:.3f}")
+        print(tab.to_string(float_format=lambda v: f"{v:.5f}"))
+    return out
 
 
 # =============================================================================

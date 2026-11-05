@@ -116,9 +116,9 @@ Where each topic of a standard sequence (statistics, econometrics, time series: 
 | Serial correlation: DW, BG, HAC, GLS | 4 | `ols-regression.md §7`, `diagnostics.newey_west_lags`, `specification.prais_winsten` |
 | Specification: RESET, model selection, non-nested models | 4 | `ols-regression.md §11`, `diagnostics.ols_diagnostics`, `specification.nonnested_test` |
 | IV and 2SLS, endogeneity and overidentification tests, weak instruments | 5 | `panel-iv.md §2`, `panel-iv.md §3`, `panel-iv.md §4`, `diagnostics.iv_report`, `diagnostics.endogeneity_test`, `diagnostics.overid_test`, `simulation.demo_weak_iv` |
-| Simultaneous equations, identification | 5 | `panel-iv.md §5`, `simulation.demo_simultaneity` |
+| Simultaneous equations, identification | 5 | `panel-iv.md §5`, `simulation.demo_simultaneity`, `systems.three_sls`, `systems.sur_system` |
 | Panel data: FE, RE, Hausman, Mundlak | 7 | `panel-iv.md §7`, `panel-iv.md §9`, `diagnostics.hausman`, `diagnostics.mundlak_test` |
-| Dynamic panels | 7 | `panel-iv.md §11` |
+| Dynamic panels | 7 | `panel-iv.md §11`, `systems.dynamic_panel` |
 | LPM, logit, probit, marginal effects, odds ratios | 7 | `limited-dependent.md §1`, `limited-dependent.md §3`, `discrete_choice.binary_effects`, `simulation.demo_lpm_bounds` |
 | Tobit, Heckman | 7 | `limited-dependent.md §5`, `limited-dependent.md §6`, `diagnostics.tobit`, `discrete_choice.heckman` |
 | Counts | 7 | `limited-dependent.md §7`, `diagnostics.count_diagnostics` |
@@ -129,8 +129,8 @@ Where each topic of a standard sequence (statistics, econometrics, time series: 
 | ARMA and Box-Jenkins | TS | `time-series.md §5`, `ts_univariate.ts_identify`, `forecasting.auto_arima`, `forecasting.select_d`, `simulation.demo_ar1_forecast_variance` |
 | Long memory, ARFIMA | TS | `time-series.md §5`, `ts_univariate.long_memory`, `ts_univariate.arfima` |
 | Forecast evaluation, combination | TS | `time-series.md §11`, `forecasting.rolling_origin`, `forecasting.evaluate`, `diagnostics.diebold_mariano`, `ts_univariate.ar_bootstrap_forecast`, `ts_univariate.combine_forecasts` |
-| Cointegration, ECM/VECM | TS | `time-series.md §7`, `diagnostics.cointegration` |
-| VAR, SVAR, impulse responses | TS | `time-series.md §8`, `time-series.md §9`, `forecasting.rolling_var` |
-| ARCH/GARCH, stylized facts | TS | `volatility.md §1`, `volatility.md §3`, `risk.var_garch` |
+| Cointegration, ECM/VECM | TS | `time-series.md §7`, `diagnostics.cointegration`, `multivariate.johansen_trace`, `multivariate.vecm_fit` |
+| VAR, SVAR, impulse responses | TS | `time-series.md §8`, `time-series.md §9`, `forecasting.rolling_var`, `multivariate.var_analysis`, `multivariate.irf_bands`, `multivariate.fevd_table`, `multivariate.svar_identify`, `multivariate.svar_longrun`, `multivariate.svar_sign` |
+| ARCH/GARCH, stylized facts | TS | `volatility.md §1`, `volatility.md §3`, `risk.var_garch`, `volatility.stylized_facts`, `volatility.garch_fit`, `volatility.sign_bias_test` |
 | Causal designs (matching, DML, RD, DiD, synthetic control) | 8 | `causal-inference.md §2`, `causal.aipw`, `causal.rdd`, `causal.att_gt`, `causal.synth` |
 
