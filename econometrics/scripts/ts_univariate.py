@@ -564,6 +564,22 @@ def sup_wald(y, X=None, trim: float = 0.15, B: int = 499, ar_max: int = 4, seed:
             raise ValueError("missing values in X")
         Xv = np.column_stack([np.ones(n), Xd.to_numpy()])
         names = ["const"] + list(Xd.columns)
+    pre_warn = []
+    # ranks on column-normalised matrices: a regressor in large raw units (nominal GDP, 1e13) would otherwise make
+    # the constant look numerically redundant
+    norms = np.linalg.norm(Xv, axis=0)
+    Zv = Xv / np.where(norms > 0, norms, 1.0)
+    rank = np.linalg.matrix_rank(Zv)
+    if rank < Xv.shape[1]:
+        # A full set of dummies (12 months, say) already spans the constant: the design would be rank deficient
+        # and the Chow F would use the wrong number of restrictions (v2.4.6.2, found in the IPCA validation).
+        if np.linalg.matrix_rank(Zv[:, 1:]) == rank == Xv.shape[1] - 1:
+            Xv, names = Xv[:, 1:], names[1:]
+            pre_warn.append("X already contains a constant (for example a full set of dummies): no extra constant "
+                            "was added")
+        else:
+            raise ValueError("the columns of X are collinear (with each other or with the constant): drop the "
+                             "redundant ones")
     k = Xv.shape[1]
     lo, hi = int(np.floor(trim * n)), int(np.ceil((1 - trim) * n)) - 1
     if hi - lo < 5 or lo < k + 1:
@@ -591,7 +607,7 @@ def sup_wald(y, X=None, trim: float = 0.15, B: int = 499, ar_max: int = 4, seed:
     else:
         a, r = np.zeros(0), u.copy()
     r = r - r.mean()
-    warn = []
+    warn = list(pre_warn)
     # Is y possibly I(1)? A break test in levels assumes stationarity. Without regressors: Zivot-Andrews (unit root
     # against stationarity with one break), so that a real break does not trigger the warning; with regressors:
     # the persistence of the residuals of the model with the break.
