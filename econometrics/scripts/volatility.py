@@ -163,7 +163,7 @@ def _ll_obs(theta, r, D, gjr, dist):
     return -0.5 * (np.log(2 * np.pi) + np.log(s2) + e ** 2 / s2)
 
 
-def _garch_mle(r: np.ndarray, D: np.ndarray, gjr: bool, dist: str):
+def _garch_mle(r: np.ndarray, D: np.ndarray, gjr: bool, dist: str, return_cov: bool = False):
     from statsmodels.tools.numdiff import approx_fprime, approx_hess
     k = D.shape[1]
     v = r.var()
@@ -198,10 +198,70 @@ def _garch_mle(r: np.ndarray, D: np.ndarray, gjr: bool, dist: str):
         cov = Hi @ (S.T @ S) @ Hi
         se = np.sqrt(np.clip(np.diag(cov), 0, None))
     except np.linalg.LinAlgError:
+        cov = np.full((len(th), len(th)), np.nan)
         se = np.full(len(th), np.nan)
     e = r - th[0]
     s2 = _sigma2(th, e, D, gjr, _backcast(e))
-    return th, se, -best.fun, s2, names, bool(best.success) or best.nit > 0
+    out = (th, se, -best.fun, s2, names, bool(best.success) or best.nit > 0)
+    return out + (cov,) if return_cov else out
+
+
+_SKEWT = ("skewt", "skewstudent")
+
+
+def _neg_weight(dist: str, params: pd.Series) -> float:
+    """κ = E[z²·1(z < 0)] of the standardized error distribution: the share of the GJR term γ·ε²·1(ε < 0) that
+    enters the persistence α + κγ + β. κ = 1/2 for any symmetric distribution (normal, t, GED); for the skewed t
+    of Hansen (arch 'skewt') it depends on η and λ (v2.4.7.2: before, 1/2 was used for every distribution)."""
+    if dist not in _SKEWT:
+        return 0.5
+    try:
+        from arch.univariate.distribution import SkewStudent
+        k = float(SkewStudent().partial_moment(2, 0.0, [float(params["eta"]), float(params["lambda"])]))
+    except Exception:  # noqa: BLE001 — reported by garch_fit, which then falls back to 1/2
+        return np.nan
+    return k if 0 < k < 1 else np.nan
+
+
+def _persistence(vol: str, dist: str, params: pd.Series) -> float:
+    a = params.get("alpha[1]", np.nan)
+    b = params.get("beta[1]", np.nan)
+    if vol == "egarch":
+        return float(b)
+    if vol == "gjr":
+        k = _neg_weight(dist, params)
+        return float(a + b + (k if np.isfinite(k) else 0.5) * params.get("gamma[1]", 0.0))
+    return float(a + b)
+
+
+def _persistence_delta(vol: str, dist: str, params: pd.Series, cov, level: float):
+    """SE and CI of the persistence by the delta method: numerical gradient of _persistence with respect to every
+    parameter (with 'skewt' the persistence also moves with η and λ), sandwiched with the parameter covariance."""
+    cov = np.asarray(cov, float)
+    if cov.shape != (len(params), len(params)) or not np.all(np.isfinite(cov)):
+        return np.nan, (np.nan, np.nan)
+    base = params.astype(float)
+    grad = np.zeros(len(base))
+    for i, name in enumerate(base.index):
+        if vol == "egarch" and name != "beta[1]":
+            continue
+        if name not in ("alpha[1]", "beta[1]", "gamma[1]", "eta", "lambda"):
+            continue
+        h = 1e-5 * max(1.0, abs(base.iloc[i]))
+        up, dn = base.copy(), base.copy()
+        up.iloc[i] += h
+        dn.iloc[i] -= h
+        try:
+            grad[i] = (_persistence(vol, dist, up) - _persistence(vol, dist, dn)) / (2 * h)
+        except Exception:  # noqa: BLE001 — a step outside the distribution's support: one-sided difference
+            grad[i] = (_persistence(vol, dist, base) - _persistence(vol, dist, dn)) / h
+    var = float(grad @ cov @ grad)
+    if not np.isfinite(var) or var < 0:
+        return np.nan, (np.nan, np.nan)
+    se = float(np.sqrt(var))
+    p = _persistence(vol, dist, base)
+    zq = float(stats.norm.ppf(0.5 + level / 2))
+    return se, (p - zq * se, p + zq * se)
 
 
 def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", variance_dummies=None,
@@ -209,7 +269,9 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
     """GARCH(1,1), GJR-GARCH(1,1) or EGARCH(1,1,1) with the diagnostics that decide whether it is usable.
 
     vol: 'garch', 'gjr' (threshold: γ adds to α after negative shocks) or 'egarch' (log-variance; γ < 0 is
-    the leverage effect). Persistence: α + β (GARCH), α + γ/2 + β (GJR, symmetric errors), β (EGARCH);
+    the leverage effect). Persistence: α + β (GARCH), α + κγ + β (GJR, κ = E[z²·1(z<0)]: 1/2 for symmetric errors,
+    from the fitted η and λ for 'skewt'), β (EGARCH), with a delta-method SE and a (1 - alpha) CI
+    (persistence_se, persistence_ci; v2.4.7.2);
     half-life of a variance shock ln 0.5 / ln(persistence); unconditional variance ω/(1 - persistence) for
     GARCH/GJR. Diagnostics on the standardized residuals z: Ljung-Box on z (mean) and z² (variance), the
     Engle-Ng sign-bias tests. For vol='garch' the asymmetry is tested by the LR of the GJR against the
@@ -233,15 +295,13 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
         am = arch_model(s, mean=mean, dist=dist, **spec)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = am.fit(disp="off")
+            res = am.fit(disp="off", show_warning=False)   # arch's own filter would override "ignore"
         params, se = res.params, res.std_err
         z = res.std_resid.dropna().to_numpy()
         llf, k_par = float(res.loglikelihood), len(params)
         conv = int(res.convergence_flag) == 0
-        a = params.get("alpha[1]", np.nan)
-        b = params.get("beta[1]", np.nan)
-        g = params.get("gamma[1]", 0.0)
-        pers = b if vol == "egarch" else a + b + (g / 2 if vol == "gjr" else 0.0)
+        pers = _persistence(vol, dist, params)
+        param_cov = res.param_cov
         omega = params.get("omega", np.nan)
         cond_var = res.conditional_volatility ** 2
         dummies = None
@@ -253,13 +313,13 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
             raise ValueError("variance_dummies must cover every date of r")
         if mean != "Constant":
             raise ValueError("with variance_dummies the mean is a constant (mean='Constant')")
-        th, se_, llf, s2, names, conv_flag = _garch_mle(s.to_numpy(), Dd.to_numpy(), vol == "gjr", dist)
+        th, se_, llf, s2, names, conv_flag, param_cov = _garch_mle(s.to_numpy(), Dd.to_numpy(), vol == "gjr", dist,
+                                                                   return_cov=True)
         names = names + [f"delta[{c}]" for c in Dd.columns] + (["nu"] if dist == "t" else [])
         params, se = pd.Series(th, index=names), pd.Series(se_, index=names)
         z = (s.to_numpy() - th[0]) / np.sqrt(s2)
         k_par, conv = len(th), bool(conv_flag)
-        a, b, g = params["alpha[1]"], params["beta[1]"], params.get("gamma[1]", 0.0)
-        pers = a + b + (g / 2 if vol == "gjr" else 0.0)
+        pers = _persistence(vol, dist, params)   # normal or t here: κ = 1/2
         omega = params["omega"] + float(Dd.mean().to_numpy() @ params[[f"delta[{c}]" for c in Dd.columns]].to_numpy())
         cond_var = pd.Series(s2, index=s.index)
         dummies = pd.DataFrame({"coef": params[[f"delta[{c}]" for c in Dd.columns]],
@@ -267,6 +327,8 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
         dummies["z"] = dummies["coef"] / dummies["se"]
         dummies["p"] = 2 * stats.norm.sf(np.abs(dummies["z"]))
     n = len(s)
+    kappa = _neg_weight(dist, params) if vol == "gjr" else np.nan
+    pers_se, pers_ci = _persistence_delta(vol, dist, params, param_cov, 1 - alpha)
     half_life = float(np.log(0.5) / np.log(pers)) if 0 < pers < 1 else np.inf
     uncond = float(omega / (1 - pers)) if vol != "egarch" and pers < 1 else np.nan
     lb_z = acorr_ljungbox(z, lags=[lags], return_df=True).iloc[0]
@@ -280,7 +342,8 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                rg = arch_model(s, mean=mean, dist=dist, vol="GARCH", p=1, o=1, q=1).fit(disp="off")
+                rg = arch_model(s, mean=mean, dist=dist, vol="GARCH", p=1, o=1, q=1).fit(disp="off",
+                                                                                       show_warning=False)
             ok_fit = rg.convergence_flag == 0 and float(rg.loglikelihood) >= llf - 1e-4
         except Exception:  # noqa: BLE001 — the asymmetry check must never break the main fit
             rg, ok_fit = None, False
@@ -298,6 +361,12 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
                         f"γ = {asym['gamma']:.4f}); use 'gjr' or 'egarch'"
                         + (f" — the sign-bias tests miss it here (joint p = {sb['joint_p']:.3f}): they have little "
                            "power with fat tails" if sb["joint_p"] >= alpha else ""))
+    if vol == "gjr" and dist in _SKEWT and not np.isfinite(kappa):
+        warn.append("E[z²·1(z<0)] of the fitted skewed t could not be computed: the persistence uses γ/2, which is "
+                    "exact only for symmetric errors")
+    if pers < 1 and np.isfinite(pers_ci[1]) and pers_ci[1] >= 1:
+        warn.append(f"the {1 - alpha:.0%} CI of the persistence reaches 1 ({pers_ci[0]:.4f} to {pers_ci[1]:.4f}): an "
+                    "integrated variance (IGARCH) is not ruled out, and the half-life is imprecise")
     if pers >= 1:
         warn.append(f"persistence {pers:.4f} ≥ 1: integrated (IGARCH-like); unconditional variance undefined. Check "
                     "for breaks, which inflate persistence")
@@ -315,7 +384,8 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
     tab = pd.DataFrame({"coef": params, "se": se})
     tab["z"] = tab["coef"] / tab["se"]
     tab["p"] = 2 * stats.norm.sf(np.abs(tab["z"]))
-    out = {"params": tab, "persistence": float(pers), "half_life": half_life, "unconditional_variance": uncond,
+    out = {"params": tab, "persistence": float(pers), "persistence_se": pers_se,
+           "persistence_ci": (float(pers_ci[0]), float(pers_ci[1])), "neg_weight": kappa, "half_life": half_life, "unconditional_variance": uncond,
            "llf": llf, "aic": -2 * llf + 2 * k_par, "bic": -2 * llf + k_par * np.log(n), "n": n,
            "ljung_box_z": {"stat": float(lb_z["lb_stat"]), "p": float(lb_z["lb_pvalue"])},
            "ljung_box_z2": {"stat": float(lb_z2["lb_stat"]), "p": float(lb_z2["lb_pvalue"])},
@@ -328,7 +398,9 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
     if show:
         print(f"\n{out['method']} (n = {n})")
         print(tab.to_string(float_format=_fmt))
-        print(f"Persistence {pers:.4f}; half-life {half_life:.1f} periods"
+        print(f"Persistence {pers:.4f} (SE {pers_se:.4f}; {1 - alpha:.0%} CI {pers_ci[0]:.4f} to {pers_ci[1]:.4f})"
+              + (f" [κ = E[z²·1(z<0)] = {kappa:.4f}]" if vol == "gjr" and dist in _SKEWT else "")
+              + f"; half-life {half_life:.1f} periods"
               + (f"; unconditional variance {uncond:.4f}" if np.isfinite(uncond) else ""))
         print(f"Ljung-Box({lags}) z: p = {lb_z['lb_pvalue']:.4f}; z²: p = {lb_z2['lb_pvalue']:.4f}; sign bias joint "
               f"p = {sb['joint_p']:.4f}; AIC {out['aic']:.2f}, BIC {out['bic']:.2f}")

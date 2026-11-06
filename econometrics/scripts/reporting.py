@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
-SKILL_VERSION = "2.4.7.1"
+SKILL_VERSION = "2.4.7.2"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
@@ -213,7 +213,7 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
 
 
 def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol: float = 1e-6,
-                label: str = "estimate", weak_ratio: float = 0.25, show: bool = True) -> dict:
+                label: str = "estimate", weak_ratio: float = 0.25, alpha: float = 0.05, show: bool = True) -> dict:
     """Independent verification of a headline number (the dynare-mcp idea of solving the same
     model twice): pass the same quantity computed by different routes, e.g. {"DR": ..., "outcome
     regression": ..., "IPW": ...}, {"statsmodels": ..., "linearmodels": ...} or {"formula": ...,
@@ -236,9 +236,12 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
     A tolerance can be too loose to test anything (v2.4.6.1): when tol_se·se exceeds weak_ratio (25%) of the
     estimate's size, "agree" would have been printed for routes far apart in practical terms (in a 12-month
     inflation forecast of 5.3% with SE 2.1, anything from 3.2% to 7.4% "agreed"). The result then says the check
-    is weak and reports the actual spread, which is the number to judge. When every route is within 1.96 SE of
-    zero (v2.4.7.1), the agreement is flagged as uninformative: two estimates compatible with zero agree with
-    each other trivially."""
+    is weak and reports the actual spread, which is the number to judge. When every route is compatible with
+    zero at level alpha (|estimate| < z·SE, z = Φ⁻¹(1 − alpha/2); 1.96 for the default 0.05; v2.4.7.1, alpha since
+    v2.4.7.2), the agreement is flagged as uninformative: two estimates compatible with zero agree with each
+    other trivially."""
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
     if isinstance(estimates, dict) and any(isinstance(v, dict) for v in estimates.values()):
         estimates = {k: (v.get("estimate") if isinstance(v, dict) else v) for k, v in estimates.items()}
     s = pd.Series(estimates, dtype=float).dropna()
@@ -264,11 +267,13 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
     weak = False
     null = False
     size = float(s.abs().mean())
-    # every route compatible with zero (|estimate| < 1.96 SE): agreeing then says nothing about the effect
-    if kind == "method" and agree and float(s.abs().max()) < 1.96 * se:
+    # every route compatible with zero at alpha (|estimate| < z SE): agreeing then says nothing about the effect
+    from scipy import stats
+    z = float(stats.norm.ppf(1 - alpha / 2))
+    if kind == "method" and agree and float(s.abs().max()) < z * se:
         null = True
-        warns.append(f"uninformative agreement: every route is compatible with zero (|{label}| < 1.96 SE = "
-                     f"{1.96 * se:.4g}); the routes agree, but the effect itself is not measured")
+        warns.append(f"uninformative agreement: every route is compatible with zero at alpha = {alpha:g} "
+                     f"(|{label}| < {z:.3g} SE = {z * se:.4g}); the routes agree, but the effect itself is not measured")
     # weak only for an agreement on an estimate clearly away from zero: for a statistically null estimate
     # (|estimate| below the tolerance) the relative size of the tolerance means nothing
     if kind == "method" and agree and not null and size > tol_se * se and tol_se * se > weak_ratio * size:

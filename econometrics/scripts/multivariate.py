@@ -154,6 +154,31 @@ def _res_parts(res):
 # =============================================================================
 # VAR analysis
 # =============================================================================
+def _unit_root_split(d: pd.DataFrame, trend: str, alpha: float):
+    """Classify each column by the joint verdict of diagnostics.stationarity at alpha: not I(0) (unit), I(0) only
+    around a trend that the model lacks (trend_only), I(0) although ADF alone does not reject at alpha
+    (adf_only). Returns (unit, adf_only, trend_only, orders, warnings)."""
+    from statsmodels.tsa.stattools import adfuller
+    from diagnostics import stationarity
+    unit, adf_only, trend_only, orders, warns = [], [], [], {}, []
+    for c in d.columns:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            st = stationarity(d[c], c, show=False, alpha=alpha)
+            p_adf = adfuller(d[c].to_numpy(), autolag="AIC")[1]
+        orders[c] = st.attrs.get("suggested_order", "")
+        for w in st.attrs.get("warnings", []):
+            if w not in warns:
+                warns.append(w)
+        if "I(0)" not in orders[c]:
+            unit.append(c)
+        elif orders[c].startswith("I(0) around a deterministic trend") and "t" not in trend:
+            trend_only.append(c)
+        elif p_adf >= alpha:
+            adf_only.append(c)
+    return unit, adf_only, trend_only, orders, warns
+
+
 def var_analysis(df, maxlags: int = 8, ic: str = "bic", lags: int | None = None, trend: str = "c",
                  whiteness_lags: int | None = None, alpha: float = ALPHA, show: bool = True) -> dict:
     """Fit a VAR and run the checks a VAR needs before any IRF is read.
@@ -166,9 +191,8 @@ def var_analysis(df, maxlags: int = 8, ic: str = "bic", lags: int | None = None,
     not causation). Warnings: parameters per equation against observations, and series that the joint verdict
     of diagnostics.stationarity (ADF, DF-GLS, KPSS) does not classify as I(0) (a VAR in levels with I(1)
     series: use vecm_fit if cointegrated, differences otherwise); when only the ADF fails to reject, that is
-    said separately."""
+    said separately. All tests use alpha, including the unit-root checks (v2.4.7.2)."""
     from statsmodels.tsa.api import VAR
-    from statsmodels.tsa.stattools import adfuller
     d = _frame(df)
     k = d.shape[1]
     model = VAR(d)
@@ -208,21 +232,10 @@ def var_analysis(df, maxlags: int = 8, ic: str = "bic", lags: int | None = None,
         warn.append(f"the residuals are autocorrelated (portmanteau p = {white.pvalue:.4f}): add lags before "
                     "reading IRFs or Granger tests")
     # unit roots by the joint verdict of diagnostics.stationarity (ADF, DF-GLS, KPSS), the same one the rest of
-    # the skill uses; ADF alone has low power near the unit root (v2.4.7.1)
-    from diagnostics import stationarity
-    unit, adf_only, trend_only, orders = [], [], [], {}
-    for c in names:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            st = stationarity(d[c], c, show=False)
-            orders[c] = st.attrs.get("suggested_order", "")
-            p_adf = adfuller(d[c].to_numpy(), autolag="AIC")[1]
-        if "I(0)" not in orders[c]:
-            unit.append(c)
-        elif orders[c].startswith("I(0) around a deterministic trend") and "t" not in trend:
-            trend_only.append(c)
-        elif p_adf > 0.10:
-            adf_only.append(c)
+    # the skill uses; ADF alone has low power near the unit root (v2.4.7.1). Both at this function's alpha
+    # (v2.4.7.2: before, the joint verdict used 0.05 and the ADF-only note a fixed 0.10)
+    unit, adf_only, trend_only, orders, ur_warn = _unit_root_split(d[names], trend, alpha)
+    warn.extend(ur_warn)
     if unit:
         listed = ", ".join(c + " (" + orders[c].split(" —")[0] + ")" for c in unit)
         warn.append(f"the unit-root tests (ADF, DF-GLS, KPSS) do not classify {listed} "
@@ -707,11 +720,16 @@ def vecm_fit(df, k_ar_diff: int | None = None, rank: int | None = None, determin
         msg = ("no cointegration at the chosen level: model the differences (VAR in differences)" if r == 0 else
                "full rank: the series behave as stationary; a VAR in levels is appropriate")
         if r == k:
-            from statsmodels.tsa.stattools import adfuller
-            unit = [c for c in d.columns if adfuller(d[c].to_numpy(), autolag="AIC")[1] > 0.10]
+            # same joint verdict and alpha as var_analysis (v2.4.7.2: before, ADF alone at a fixed 0.10)
+            trend_v = "ct" if deterministic in ("co", "li") else "c"
+            unit, adf_only, _, orders, _w = _unit_root_split(d, trend_v, alpha)
             if unit:
-                msg += (f"; but ADF does not reject a unit root for {', '.join(map(str, unit))}: the rank test and "
-                        "the unit-root tests disagree; check the deterministic case and the lags")
+                listed = ", ".join(f"{c} ({orders[c].split(' —')[0]})" for c in unit)
+                msg += (f"; but the unit-root tests (ADF, DF-GLS, KPSS) do not classify {listed} as stationary: the "
+                        "rank test and the unit-root tests disagree; check the deterministic case and the lags")
+            elif adf_only:
+                msg += (f"; ADF alone does not reject a unit root for {', '.join(map(str, adf_only))} (the joint "
+                        "verdict is I(0)): persistent series, consistent with the full rank")
         out["message"] = msg
         if show:
             print(f"\nJohansen trace test (case '{deterministic}', k_ar_diff = {k_ar_diff}):\n"
