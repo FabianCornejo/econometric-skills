@@ -10,7 +10,13 @@
 # Output: tools/r_reference/output/did_v250_reference.txt (everything printed) and .json (the numbers).
 
 pkgs <- c("didimputation", "TwoWayFEWeights", "jsonlite")
-for (p in pkgs) if (!requireNamespace(p, quietly = TRUE)) install.packages(p, repos = "https://cloud.r-project.org")
+# Install into the user's personal library: R's own library (C:/Program Files/R/...) is not writable without admin
+# rights, and Rscript, unlike the R console, does not offer to create the personal one.
+user_lib <- Sys.getenv("R_LIBS_USER")
+dir.create(user_lib, recursive = TRUE, showWarnings = FALSE)
+.libPaths(c(user_lib, .libPaths()))
+for (p in pkgs) if (!requireNamespace(p, quietly = TRUE))
+  install.packages(p, lib = user_lib, repos = "https://cloud.r-project.org")
 suppressPackageStartupMessages({
   library(didimputation)
   library(TwoWayFEWeights)
