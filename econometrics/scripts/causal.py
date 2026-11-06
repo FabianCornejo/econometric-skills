@@ -741,26 +741,33 @@ def _cs_draw(rng, eng: dict) -> np.ndarray:
     return rng.integers(0, n, n)
 
 
-def _wald_boot(b: np.ndarray, draws: np.ndarray, max_rank: int):
+def _wald_boot(b: np.ndarray, draws: np.ndarray, max_rank: int, n_obs: int | None = None):
     """Wald test of b = 0 with the covariance of bootstrap draws (rows = draws). The rank is computed on the
     correlation scale (so cells with small SEs do not look degenerate) and capped at max_rank (B − 1 draws, G − 1
     clusters); below full rank the pseudo-inverse on the effective rank is used, with df = rank.
-    Returns (W, df, p, rank)."""
+    Reference distribution (v2.5.0): with n_obs (the smaller of the resampled units, or clusters, and the draws),
+    W·(n − q)/(q·(n − 1)) ~ F(q, n − q), the small-sample form of a Wald test with an estimated covariance; the χ²(q)
+    over-rejected in the skill's simulations (5% nominal: 12% with 100 units and 9 restrictions, 8% with 200, 5.7%
+    with 800). Without n_obs, or with n ≤ q, χ²(q). Returns (W, df, p, rank, p_chi2, ref)."""
     V = np.cov(draws, rowvar=False, ddof=1).reshape(len(b), len(b))
     sd = np.sqrt(np.clip(np.diag(V), 0, None))
     if not np.all(np.isfinite(V)) or np.any(sd <= 0):
-        return np.nan, 0, np.nan, 0
+        return np.nan, 0, np.nan, 0, np.nan, None
     C = V / np.outer(sd, sd)
     w, U = np.linalg.eigh(C)
     keep = w > max(w.max(), 0) * len(b) * 1e-10
     rank = int(min(keep.sum(), max_rank))
     if rank < 1:
-        return np.nan, 0, np.nan, 0
+        return np.nan, 0, np.nan, 0, np.nan, None
     order = np.argsort(w)[::-1][:rank]
     z = b / sd
     proj = U[:, order].T @ z
     W = float(np.sum(proj ** 2 / w[order]))
-    return W, rank, float(stats.chi2.sf(W, rank)), rank
+    p_chi2 = float(stats.chi2.sf(W, rank))
+    if n_obs is not None and n_obs > rank + 1:
+        p = float(stats.f.sf(W * (n_obs - rank) / (rank * (n_obs - 1)), rank, n_obs - rank))
+        return W, rank, p, rank, p_chi2, f"F({rank}, {n_obs - rank})"
+    return W, rank, p_chi2, rank, p_chi2, f"chi2({rank})"
 
 
 def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str = "never",
@@ -799,12 +806,16 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
     date is significant (Bonferroni, alpha/2 each): the effect starts before the recorded date (anticipation or a misdated
     treatment) → check the date and run did_timing_sensitivity.
 
-    Joint pre-trend test (v2.5.0; res["pretrend"], res["pretrend_p"], res["pretrend_df"]): Wald test that every
-    pre-period cell (t < g − anticipation, short t−1 base) is zero, with the covariance of the bootstrap draws
-    (the draws in which every pre cell exists). The rank is capped at B − 1 draws and, with cluster=, G − 1
-    clusters: when there are more pre cells than that, the test is run on the pre-period event-time averages
-    (e < −anticipation) instead, and says so; below full rank the pseudo-inverse on the effective rank is used
-    and df = rank. Not rejecting does not show parallel trends (low power; Roth 2022).
+    Joint pre-trend test (v2.5.0; res["pretrend"], res["pretrend_p"], res["pretrend_df"]): Wald test that the
+    pre-period effects are zero (cells with t < g − anticipation, short t−1 base), with the covariance of the
+    bootstrap draws (those in which every pre cell exists) and an F(q, n − q) reference, n = the smaller of the
+    resampled units (clusters with cluster=) and the draws; the χ²(q) p-value is kept as pretrend["p_chi2"]. A
+    covariance estimated from n units supports few restrictions, so the test uses the most detailed of three levels
+    with q ≤ (n − 1)/10: every pre cell; the pre-period event-time averages (e < −anticipation); their mean (one
+    restriction). A coarser level checks less (a pre-trend that averages out passes) and is warned. Below full rank
+    the pseudo-inverse on the effective rank is used and df = rank. In the skill's simulations (5% test): 9 cells and
+    300 units, 7.5%; 8 clusters with the one-restriction level, 6%; the χ² with 9 cells and 100 units, 13%. Not
+    rejecting does not show parallel trends (low power; Roth 2022).
     alpha (v2.5.0): level of the CIs, of the joint pre-trend test and of the early-effect warning."""
     covs = list(covariates) if covariates else []
     if est_method not in ("dr", "reg", "ipw"):
@@ -827,15 +838,29 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         base = full[["g", "t", "e", est_method, "n_g"]].rename(columns={est_method: "att"}) if verify else full
     else:
         base = compute(all_idx)
+    if base.empty:
+        raise ValueError("att_gt: no group-time cell has a comparison group"
+                         + (" (no never-treated units: use control='notyet', or check the design with causal.did_design)"
+                            if control == "never" else " (no unit is untreated at the time each cohort is compared)"))
     post = base[base["e"] >= 0]
     simple = np.average(post["att"], weights=post["n_g"]) if len(post) else np.nan
     dyn = base.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False)
     bs_dyn, bs_cells = [], []
+    n_empty = 0
     if n_boot and n_boot > 1:
         rng = np.random.default_rng(seed)
         bs_simple = []
+        n_empty = 0
         for _ in range(n_boot):
             b = compute(_cs_draw(rng, eng))
+            if b.empty:
+                # with few clusters a draw can hold no treated cluster (or no control): no cell is defined. Before
+                # v2.5.0 this crashed att_gt; the draw now counts as missing, as np.nanstd already did for the ATT.
+                n_empty += 1
+                bs_simple.append(np.nan)
+                bs_dyn.append(pd.Series(dtype=float))
+                bs_cells.append(pd.Series(dtype=float, index=pd.MultiIndex.from_tuples([], names=["g", "t"])))
+                continue
             p = b[b["e"] >= 0]
             bs_simple.append(np.average(p["att"], weights=p["n_g"]) if len(p) else np.nan)
             bs_dyn.append(b.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False))
@@ -857,29 +882,42 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
             and dyn_tab.loc[k, "se"] > 0 and abs(dyn_tab.loc[k, "att"] / dyn_tab.loc[k, "se"]) > zc]
     flag = bool(hits)
     k_chk = hits[0] if hits else -dlt - 1
-    # joint pre-trend test (v2.5.0)
+    # joint pre-trend test (v2.5.0). Three levels, from the most to the least detailed, so that the number of
+    # restrictions q stays within (n - 1)/10, n = min(resampled units or clusters, bootstrap draws): a Wald test with
+    # a covariance estimated from n units over-rejects badly when q is close to n (8 clusters, 8 restrictions: 83%
+    # rejections for a 5% test in the skill's simulations; one restriction: 6%).
     pre = base[base["t"] < base["g"] - dlt].set_index(["g", "t"])["att"].dropna()
-    pt = {"stat": np.nan, "df": 0, "p": np.nan, "rank": 0, "n_cells": int(len(pre)), "test": None, "draws_used": 0,
-          "max_rank": 0}
+    pt = {"stat": np.nan, "df": 0, "p": np.nan, "p_chi2": np.nan, "reference": None, "rank": 0,
+          "n_cells": int(len(pre)), "test": None, "draws_used": 0, "max_rank": 0}
     if len(pre) and bs_cells:
-        units_cap = (n_cl - 1) if eng["cluster"] else (len(Ym) - 1)
+        n_res = n_cl if eng["cluster"] else len(Ym)          # resampled units: the n of the F reference
+        e_pre = [e for e in dyn.index if e < -dlt]
         Dc = pd.concat(bs_cells, axis=1).reindex(pre.index).T
         Dc = Dc[Dc.notna().all(axis=1)].to_numpy(float)
-        cap = min(len(Dc) - 1, units_cap)
-        if len(pre) <= cap:
-            W, df_, p_, rk = _wald_boot(pre.to_numpy(float), Dc, cap)
-            pt.update(stat=W, df=df_, p=p_, rank=rk, test="pre-period cells", draws_used=len(Dc), max_rank=cap)
-        else:
-            e_pre = [e for e in dyn.index if e < -dlt]
-            De = pd.concat(bs_dyn, axis=1).reindex(e_pre).T
-            De = De[De.notna().all(axis=1)].to_numpy(float)
-            cap = min(len(De) - 1, units_cap)
-            W, df_, p_, rk = _wald_boot(dyn.reindex(e_pre).to_numpy(float), De, cap)
-            pt.update(stat=W, df=df_, p=p_, rank=rk, test="pre-period event-time averages", draws_used=len(De),
-                      max_rank=cap, n_event_times=len(e_pre))
+        De = pd.concat(bs_dyn, axis=1).reindex(e_pre).T
+        De = De[De.notna().all(axis=1)].to_numpy(float)
+        levels = [("pre-period cells", pre.to_numpy(float), Dc),
+                  ("pre-period event-time averages", dyn.reindex(e_pre).to_numpy(float), De),
+                  ("average pre-period coefficient", np.array([float(np.mean(dyn.reindex(e_pre)))]),
+                   De.mean(axis=1, keepdims=True))]
+        for name, est_v, draws_v in levels:
+            n_eff = min(n_res, len(draws_v))
+            if len(est_v) <= max(1, (n_eff - 1) / 10) or name == levels[-1][0]:
+                break
+        cap = min(len(draws_v) - 1, n_res - 1)
+        if len(draws_v) >= 2 and len(est_v) <= cap:
+            W, df_, p_, rk, pc, ref = _wald_boot(est_v, draws_v, cap, n_eff)
+            pt.update(stat=W, df=df_, p=p_, p_chi2=pc, reference=ref, rank=rk, test=name,
+                      draws_used=len(draws_v), max_rank=cap, n_restrictions=len(est_v), n_event_times=len(e_pre))
+        pt["n_resampled"] = n_res
+        pt["n_effective"] = min(n_res, pt["draws_used"]) if pt["draws_used"] else 0
     method = "no covariates" if not covs else {"dr": "doubly robust", "reg": "outcome regression",
                                                "ipw": "IPW"}[est_method] + f", X: {', '.join(covs)} ({x_periods})"
     warns = []
+    if n_boot and n_boot > 1 and n_empty:
+        warns.append(f"{n_empty} of {n_boot} bootstrap draws had no treated {'cluster' if cluster else 'unit'} or no "
+                     "control and were left out of the SEs: with this few treated clusters the bootstrap is unreliable;"
+                     " use causal.randomization_inference.")
     if cluster and n_boot and n_boot > 1 and (n_cl < 30 or n_cl_treated < 6):
         warns.append(f"Cluster bootstrap with {n_cl} clusters ({n_cl_treated} treated): pairs-cluster bootstrap SEs are "
                      "unreliable with few (treated) clusters. Report causal.randomization_inference (and a wild cluster "
@@ -888,17 +926,25 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         warns.append(f"The outcome already moves at e = {k_chk} (|z| > {zc:.2f}): the effect starts before the recorded"
                      " date (anticipation or a misdated treatment). Confirm the date; re-run with anticipation="
                      f"{-k_chk} and did_timing_sensitivity before reporting the ATT.")
-    if pt["test"] == "pre-period event-time averages":
-        warns.append(f"Joint pre-trend test run on the {pt['n_event_times']} pre-period event-time averages, not on the "
-                     f"{pt['n_cells']} pre-period cells: the bootstrap covariance has rank at most {pt['max_rank']} "
-                     f"({'clusters' if cluster else 'draws or units'} − 1), fewer than the cells.")
-    if pt["test"] and pt["rank"] < (pt.get("n_event_times") or pt["n_cells"]):
+    if pt["test"] and pt["test"] != "pre-period cells":
+        warns.append(f"Joint pre-trend test run on the {pt['test']} ({pt['n_restrictions']} restriction"
+                     f"{'s' if pt['n_restrictions'] > 1 else ''}), not on the {pt['n_cells']} pre-period cells: with "
+                     f"{pt['n_effective']} resampled {'clusters' if cluster else 'units'} (or draws) a covariance of more "
+                     "restrictions is too noisy for a Wald test. It checks less (a pre-trend that averages out passes).")
+    if pt["test"] and pt["rank"] < pt["n_restrictions"]:
         warns.append(f"Pre-trend covariance below full rank: Wald test on rank {pt['rank']} (pseudo-inverse), df = "
                      f"{pt['df']}.")
     if pt["test"] and np.isfinite(pt["p"]) and pt["p"] < alpha:
         warns.append(f"Joint pre-trend test rejects (p = {pt['p']:.3g}, df = {pt['df']}): parallel trends are doubtful."
                      " Look at the pre-period cells, compare with did_imputation (did_compare) and consider anticipation"
                      " or covariates.")
+    if pt["test"] and pt["df"] and pt["n_effective"] < 40 * pt["df"] and pt["test"] == "pre-period cells":
+        warns.append(f"Joint pre-trend test with {pt['df']} restrictions, {pt['n_resampled']} resampled "
+                     f"{'clusters' if cluster else 'units'} and {pt['draws_used']} bootstrap draws: a Wald test with an "
+                     f"estimated covariance can over-reject at this size even with the {pt['reference']} reference; read a"
+                     " rejection near the threshold with care"
+                     + (", raise n_boot (>= 999)" if pt["draws_used"] < 40 * pt["df"] else "")
+                     + " and check with causal.randomization_inference.")
     if pt["test"] and cluster and (n_cl < 30 or n_cl_treated < 6):
         warns.append("With few (treated) clusters the bootstrap pre-trend test is fragile as well: check the pre-period"
                      " cells with causal.randomization_inference.")
@@ -944,8 +990,8 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
               f"{o['ci_high']:.4f})")
         print("Dynamic (event-time) ATT:\n" + dyn_tab.to_string(float_format=lambda v: f"{v:.4f}"))
         if pt["test"]:
-            print(f"Joint pre-trend test ({pt['test']}, bootstrap covariance): W = {pt['stat']:.3f}, df = {pt['df']}, "
-                  f"p = {pt['p']:.3f} → " + ("pre-trends detected: parallel trends doubtful" if pt["p"] < alpha else
+            print(f"Joint pre-trend test ({pt['test']}, bootstrap covariance): W = {pt['stat']:.3f}, "
+                  f"{pt['reference']} p = {pt['p']:.3f} → " + ("pre-trends detected: parallel trends doubtful" if pt["p"] < alpha else
                                             "does not reject; this does not show parallel trends (low power is possible)"))
         if cross is not None:
             print("Independent recomputation of the overall ATT: "

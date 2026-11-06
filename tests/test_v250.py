@@ -83,5 +83,115 @@ ge = vo.garch_fit(r, vol="egarch", dist="t", show=False)
 check("EGARCH: half_life_ci defined from β's CI", np.isfinite(ge["half_life_ci"][0])
       and abs(ge["persistence_ci"][0] ** ge["half_life_ci"][0] - 0.5) < 1e-9)
 
+# ---------------------------------------------------------------- 4. att_gt: alpha and the joint pre-trend test
+import causal as ca  # noqa: E402
+from scipy import stats  # noqa: E402
+
+
+def did_panel(seed, N=300, T=8, cohorts=(0, 4, 5, 6), pretrend=0.0, n_states=None):
+    """Staggered panel with a constant effect of 1, unit effects and iid errors. pretrend adds a linear trend to every
+    eventually-treated unit (a parallel-trends violation that the pre-period cells see). n_states: units are nested in
+    states with a common state shock per period, and adoption is by state."""
+    rng = np.random.default_rng(seed)
+    if n_states:
+        g_state = rng.choice(cohorts, n_states)
+        g_state[:2] = 0                       # at least two never-treated states, so control='never' is defined
+        state = rng.integers(0, n_states, N)
+        g = g_state[state]
+        shock = rng.normal(0, 0.5, (n_states, T + 1))
+    else:
+        g = rng.choice(cohorts, N)
+        state = np.zeros(N, int)
+        shock = np.zeros((1, T + 1))
+    rows = []
+    for i in range(N):
+        a = rng.normal()
+        for t in range(1, T + 1):
+            te = 1.0 if g[i] and t >= g[i] else 0.0
+            rows.append((i, t, a + 0.2 * t + pretrend * (g[i] > 0) * t + te + shock[state[i], t] + rng.normal(),
+                         g[i], state[i]))
+    return pd.DataFrame(rows, columns=["id", "t", "y", "g", "state"])
+
+
+d0 = did_panel(1)
+r05 = ca.att_gt(d0, "id", "t", "y", "g", n_boot=99, seed=1, show=False)
+r10 = ca.att_gt(d0, "id", "t", "y", "g", n_boot=99, seed=1, alpha=0.10, show=False)
+o5, o10 = r05["overall"], r10["overall"]
+check("att_gt(alpha=0.10): same estimate and SE, CI = estimate ± Φ⁻¹(0.95)·SE",
+      o5["estimate"] == o10["estimate"] and o5["se"] == o10["se"]
+      and abs(o10["ci_high"] - o10["estimate"] - 1.6448536 * o10["se"]) < 1e-6)
+check("att_gt: the dynamic table also follows alpha",
+      np.allclose(r10["dynamic"]["ci_high"] - r10["dynamic"]["att"], 1.6448536 * r10["dynamic"]["se"]))
+pt = r05["pretrend"]
+check("pre-trend test: 9 pre cells (cohorts 4, 5, 6 × short-base periods), F reference with n = min(units, draws)",
+      pt["n_cells"] == 9 and pt["df"] == 9 and pt["reference"] == "F(9, 90)" and pt["n_effective"] == 99,
+      f"{pt['reference']}, cells {pt['n_cells']}")
+check("pre-trend test: the F p-value is above the χ² one (small-sample form is more conservative)",
+      pt["p"] >= pt["p_chi2"])
+# Wald recomputed here from the bootstrap draws, by a plain inverse (the implementation uses an eigendecomposition)
+eng = ca._cs_engine(d0, "id", "t", "y", "g", "never", 0, [], "dr", "base", None)
+rng_ = np.random.default_rng(1)
+draws = []
+for _ in range(99):
+    c = eng["compute"](ca._cs_draw(rng_, eng))
+    draws.append(c[c["e"] < 0]["att"].to_numpy())
+b_pre = r05["gt"][r05["gt"]["e"] < 0]["att"].to_numpy()
+W_here = float(b_pre @ np.linalg.solve(np.cov(np.array(draws), rowvar=False), b_pre))
+check("pre-trend Wald equals b'V⁻¹b with V from the same bootstrap draws (plain inverse)",
+      abs(W_here - pt["stat"]) < 1e-6 * max(1, W_here), f"{W_here:.4f} vs {pt['stat']:.4f}")
+
+# size and power (no pre-trend vs a planted linear pre-trend)
+size_p = [ca.att_gt(did_panel(7000 + s), "id", "t", "y", "g", n_boot=199, seed=s, show=False)["pretrend_p"]
+          for s in range(120)]
+rej = float(np.mean(np.array(size_p) < 0.05))
+check("pre-trend test size (no pre-trend, 300 units, B = 199, 120 panels): within [1%, 11%] for a 5% test",
+      0.01 <= rej <= 0.11, f"rejection rate {rej:.3f}")
+pow_p = [ca.att_gt(did_panel(8000 + s, pretrend=0.25), "id", "t", "y", "g", n_boot=199, seed=s, show=False)
+         for s in range(30)]
+pw = float(np.mean([r["pretrend_p"] < 0.05 for r in pow_p]))
+check("pre-trend test power (linear pre-trend 0.25 per period): rejects in at least 80% of 30 panels", pw >= 0.8,
+      f"power {pw:.2f}")
+check("... and the rejection is relayed as a warning", all(any("pre-trend test rejects" in w for w in r["warnings"])
+                                                          for r in pow_p if r["pretrend_p"] < 0.05))
+
+def _err(f):
+    try:
+        f()
+    except Exception as e:  # noqa: BLE001
+        return e
+    return None
+
+
+# few clusters, many pre cells: n = 8 clusters supports one restriction → the mean pre-period coefficient, F(1, 7)
+dc = did_panel(3, N=400, T=12, cohorts=(0, 7, 8, 9, 10), n_states=8)
+rc = ca.att_gt(dc, "id", "t", "y", "g", cluster="state", n_boot=199, seed=3, show=False)
+pc = rc["pretrend"]
+check("8 clusters: the test moves to the mean pre-period coefficient (1 restriction, F(1, 7)) and says so",
+      pc["n_cells"] > 7 and pc["test"] == "average pre-period coefficient" and pc["reference"] == "F(1, 7)"
+      and any("average pre-period coefficient" in w for w in rc["warnings"]),
+      f"cells {pc['n_cells']}, {pc['test']}, {pc['reference']}")
+d30 = did_panel(4, N=800, T=8, cohorts=(0, 4, 5, 6), n_states=30)
+p30 = ca.att_gt(d30, "id", "t", "y", "g", cluster="state", n_boot=199, seed=4, show=False)["pretrend"]
+check("30 clusters: 9 cells and 4 event times > (30 − 1)/10, so the mean pre coefficient is tested (F(1, 29))",
+      p30["test"] == "average pre-period coefficient" and p30["reference"] == "F(1, 29)", f"{p30['reference']}")
+d80 = did_panel(4, N=800, T=8, cohorts=(0, 4, 5, 6), n_states=80)
+p80 = ca.att_gt(d80, "id", "t", "y", "g", cluster="state", n_boot=199, seed=4, show=False)["pretrend"]
+check("80 clusters: 4 event times ≤ (80 − 1)/10 < 9 cells, so the event-time averages are tested (F(4, 76))",
+      p80["test"] == "pre-period event-time averages" and p80["reference"] == "F(4, 76)", f"{p80['reference']}")
+d100 = did_panel(4, N=1000, T=8, cohorts=(0, 4, 5, 6), n_states=100)
+p100 = ca.att_gt(d100, "id", "t", "y", "g", cluster="state", n_boot=199, seed=4, show=False)["pretrend"]
+check("100 clusters: 9 cells ≤ (100 − 1)/10, so every cell is tested (F(9, 91))",
+      p100["test"] == "pre-period cells" and p100["reference"] == "F(9, 91)", f"{p100['reference']}")
+check("... with the few-clusters fragility warning", any("fragile" in w for w in rc["warnings"]))
+e_nn = _err(lambda: ca.att_gt(did_panel(5, N=200, cohorts=(4, 5, 6)), "id", "t", "y", "g", n_boot=0, show=False))
+check("att_gt with no never-treated unit and control='never': a clear error, not a pandas one (crashed before v2.5.0)",
+      isinstance(e_nn, ValueError) and "never-treated" in str(e_nn), str(e_nn)[:80])
+size_c = [ca.att_gt(did_panel(9000 + s, N=400, T=12, cohorts=(0, 7, 8, 9, 10), n_states=8), "id", "t", "y", "g",
+                    cluster="state", n_boot=199, seed=s, show=False)["pretrend_p"] for s in range(60)]
+size_c = np.array([p for p in size_c if np.isfinite(p)])
+rc_rate = float(np.mean(size_c < 0.05))
+check("8-cluster pre-trend test (1 restriction): finite p in most panels and size not above 12% (60 panels)",
+      len(size_c) >= 50 and rc_rate <= 0.12, f"{len(size_c)} finite, rejection rate {rc_rate:.3f}")
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
