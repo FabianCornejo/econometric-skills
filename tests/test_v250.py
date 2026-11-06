@@ -451,9 +451,10 @@ check("did_imputation(anticipation=1): the ATT averages t ≥ g only (planted ef
 check("... and reports e = −1 as an anticipation row (planted 0.5), not as part of the ATT",
       bool(ra["dynamic"].loc[-1, "anticipation"]) and abs(ra["dynamic"].loc[-1, "att"] - 0.5) < 3 * ra["dynamic"].loc[-1, "se"]
       and any("Anticipation = 1" in w for w in ra["warnings"]), f"e = −1: {ra['dynamic'].loc[-1, 'att']:.3f}")
-cs_a = ca.att_gt(ap, "id", "t", "y", "g", anticipation=1, n_boot=0, show=False)["overall"]["estimate"]
-check("... same target as att_gt(anticipation=1): the two estimates within 0.1", abs(cs_a - ra["overall"]["estimate"]) < 0.1,
-      f"CS {cs_a:.3f}, BJS {ra['overall']['estimate']:.3f}")
+# (review, round 2: a "within 0.1 of att_gt" check passed on the old code too; replaced by the flags of the tables)
+check("... the anticipation cells and rows are flagged in gt and tau as well, and only those",
+      set(ra["gt"].loc[ra["gt"]["anticipation"], "e"]) == {-1} and (ra["tau"]["anticipation"] == (ra["tau"]["e"] < 0)).all()
+      and int(ra["tau"]["anticipation"].sum()) == int(((ap.g > 0) & (ap.t == ap.g - 1)).sum()))
 
 # (d) unbalanced panel
 pan = pd.read_csv(ROOT / "tests" / "data" / "did_v250_panel.csv")

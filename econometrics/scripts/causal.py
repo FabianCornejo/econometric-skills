@@ -1453,7 +1453,8 @@ def did_imputation(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, an
 
     Returns the contract dict in "overall" (estimand, estimate, se, ci_low, ci_high, p, n, method, warnings), the
     event-study table "dynamic" (horizons ≥ 0 from the imputation, < 0 from the pre-trend regression), "pretrend",
-    the cell table "gt" (mean τ̂ and count per cohort-period, used by did_compare), the per-observation "tau" and
+    the cell table "gt" (mean τ̂ and count per cohort-period, with an anticipation flag; did_compare recomputes the cells
+    on its bootstrap draws), the per-observation "tau" (same flag) and
     "converged" (True: the estimator has no iterative step)."""
     from scipy import sparse
     if not 0 < alpha < 1:
@@ -1579,6 +1580,7 @@ def did_imputation(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, an
     gt = pd.DataFrame({"g": g1, "t": t1, "tau": tau}).groupby(["g", "t"])["tau"].agg(["mean", "size"])
     gt.columns = ["att", "n_obs"]
     gt["e"] = gt.index.get_level_values("t") - gt.index.get_level_values("g")
+    gt["anticipation"] = gt["e"] < 0
     warns = []
     if n_drop:
         warns.append(f"{n_drop} treated observations could not be imputed (their unit has no untreated period, or no "
@@ -1609,7 +1611,7 @@ def did_imputation(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, an
     out = {"overall": _out("ATT (imputation)", est, se, int(len(d)), alpha=alpha, method=method, warnings=warns,
                            n_treated_obs=n1, n_clusters=n_cl, anticipation=dlt),
            "dynamic": dyn, "pretrend": pt, "pretrend_p": pt["p"], "gt": gt,
-           "tau": pd.DataFrame({unit: uniq_u[ui[ident]], time: t1, gvar: g1, "e": e, "tau": tau}),
+           "tau": pd.DataFrame({unit: uniq_u[ui[ident]], time: t1, gvar: g1, "e": e, "tau": tau, "anticipation": e < 0}),
            "dropped_treated_obs": n_drop, "converged": True, "warnings": warns, "alpha": alpha}
     if show:
         o = out["overall"]

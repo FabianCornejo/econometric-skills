@@ -22,7 +22,7 @@ Difference-in-differences that starts from the design: what kind of treatment it
   - The pre-trend test uses untreated observations only and leaves out leads that the fixed effects span.
   - With `anticipation`, the periods g − δ … g − 1 stay out of the fixed-effects fit and are reported as their own event-study rows, not averaged into the ATT, which covers t ≥ g as in `att_gt`.
   - In simulation, the mean Theorem 3 SE equals the Monte Carlo SD of (estimate − sample ATT): ratio 1.00 over 200 panels.
-  - Matches R `didimputation` 0.5.1: estimates within 2e-7, SEs within 1e-8.
+  - Matches R `didimputation` 0.5.1: estimates within 2e-7, SEs within 1e-8 (event-study SEs within 1e-7).
 - **`causal.did_compare`** (new): Callaway-Sant'Anna against the imputation estimator. Both run without covariates, and `control` defaults to `"notyet"`; pass the headline `att_gt`'s control.
   - The comparison uses only the post-period cells both define, with the same weights.
   - The difference is tested at alpha with a paired bootstrap. A significant gap is a finding that points to the pre-trends.
