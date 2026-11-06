@@ -59,8 +59,8 @@ def _ci(est, se, alpha=ALPHA):
     return est - z * se, est + z * se
 
 
-def _out(name, est, se, n, **extra):
-    lo, hi = _ci(est, se)
+def _out(name, est, se, n, alpha=ALPHA, **extra):
+    lo, hi = _ci(est, se, alpha)
     p = 2 * (1 - stats.norm.cdf(abs(est / se))) if se > 0 else np.nan
     return {"estimand": name, "estimate": est, "se": se, "ci_low": lo, "ci_high": hi, "p": p, "n": n, **extra}
 
@@ -643,46 +643,12 @@ def _did_cell_cov(dy: np.ndarray, Z: np.ndarray, treat: np.ndarray, methods=("dr
     return out
 
 
-def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str = "never",
-           n_boot: int = 199, seed: int = 0, anticipation: int = 0, covariates: list[str] | None = None,
-           est_method: str = "dr", x_periods: str = "base", verify: bool = True, cluster: str | None = None,
-           show: bool = True) -> dict:
-    """Callaway & Sant'Anna (2021) ATT(g,t) on a balanced panel, with or without covariates.
-    gvar = first treated period (0 or NaN = never treated). control = 'never' or 'notyet'.
-    anticipation = δ periods in which units may react before g (law announced before it
-    takes effect): post cells (t >= g-δ) use base g-δ-1, not-yet controls must be untreated
-    until t+δ. Pre-period cells use the short (t-1) base.
-
-    Covariates (parallel trends that hold only conditional on X; Caetano & Callaway 2024):
-    covariates = columns entered in LEVELS, never differenced away (that is what removes
-    hidden linearity bias from a TWFE regression). est_method = 'dr' (doubly robust,
-    Sant'Anna & Zhao 2020; default), 'reg' (outcome regression) or 'ipw' (normalized IPW).
-    x_periods = 'base': each cell uses X at its base period (pre-treatment values, safe when X
-    could respond to treatment); 'both': X at the base period and its change up to t, for
-    time-varying covariates that are NOT affected by treatment (Caetano & Callaway's setting).
-    Comparison units with propensity >= 0.995 get zero weight (warned). verify=True also
-    computes the other two estimators on the full sample (an independent recomputation, stored as
-    res["cross_check"], a pandas Series indexed dr/reg/ipw that reporting.cross_check takes as is): if
-    they differ from the chosen one by more than one SE, the outcome and propensity models
-    disagree, a sign that at least one is misspecified (warned). Covariate effects that differ
-    ACROSS GROUPS (not only over time) bias every estimator here; check with ccc_test.
-
-    Inference: bootstrap resampling units with replacement and re-estimating every nuisance
-    model; n_boot=0 skips it. cluster = a column constant within unit (the state when a law
-    varies by state, with municipalities as units): the bootstrap then resamples whole
-    clusters, so the SEs allow any correlation within them, while the estimand (an average
-    over units) is unchanged. Do not aggregate the data to the cluster level to get clustered
-    inference: that changes the estimand (unit average -> cluster average). With fewer than
-    ~30 clusters or ~6 treated clusters, the cluster bootstrap is unreliable (warned): add
-    randomization_inference.
-    Warns when either of the two pre-period cells right before the (anticipation-adjusted)
-    date is significant (Bonferroni, ALPHA/2 each): the effect starts before the recorded date (anticipation or a misdated
-    treatment) → check the date and run did_timing_sensitivity."""
-    covs = list(covariates) if covariates else []
-    if est_method not in ("dr", "reg", "ipw"):
-        raise ValueError("est_method must be 'dr', 'reg' or 'ipw'")
-    if x_periods not in ("base", "both"):
-        raise ValueError("x_periods must be 'base' or 'both'")
+def _cs_engine(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str, anticipation: int,
+               covs: list[str], est_method: str, x_periods: str, cluster: str | None) -> dict:
+    """Data preparation and the cell-by-cell Callaway-Sant'Anna computation of att_gt, separated (v2.5.0) so
+    that did_compare can re-estimate CS on the same bootstrap draws as the imputation estimator. Returns the
+    balanced outcome matrix, cohorts, cluster members and compute(idx, methods, record), where idx are row
+    positions of units (repeated when a unit or cluster is drawn more than once)."""
     d = df[[unit, time, y, gvar, *covs] + ([cluster] if cluster and cluster not in (unit, time, y, gvar, *covs)
                                            else [])].copy()
     d[gvar] = d[gvar].fillna(0)
@@ -690,15 +656,17 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
     if Y.isna().any().any():
         raise ValueError("att_gt needs a balanced panel (drop units with missing periods)")
     G = d.groupby(unit)[gvar].first().reindex(Y.index).to_numpy()
+    eng = {"units": Y.index, "cluster": cluster}
     if cluster:
         if (d.groupby(unit)[cluster].nunique() > 1).any():
             raise ValueError(f"att_gt: cluster '{cluster}' must be constant within each {unit}")
         cl_codes = pd.factorize(d.groupby(unit)[cluster].first().reindex(Y.index))[0]
-        cl_members = [np.where(cl_codes == c)[0] for c in range(cl_codes.max() + 1)]
-        n_cl = len(cl_members)
-        n_cl_treated = len({cl_codes[i] for i in np.where(G > 0)[0]})
+        eng["cl_members"] = [np.where(cl_codes == c)[0] for c in range(cl_codes.max() + 1)]
+        eng["n_cl"] = len(eng["cl_members"])
+        eng["n_cl_treated"] = len({cl_codes[i] for i in np.where(G > 0)[0]})
     T = np.array(Y.columns)
     Ym = Y.to_numpy()
+    Xa = None
     # covariates as a (units, periods, k) array; time-invariant columns are simply constant
     if covs:
         Xa = np.stack([d.pivot(index=unit, columns=time, values=c).reindex(index=Y.index, columns=T).to_numpy(float)
@@ -759,6 +727,97 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         cols = ["att"] if len(methods) == 1 else list(methods)
         return pd.DataFrame(cells, columns=["g", "t", "e", *cols, "n_g"])
 
+    eng.update(T=T, Ym=Ym, G=G, cohorts=cohorts, dropped=dropped, dlt=dlt, diag=diag, compute=compute)
+    return eng
+
+
+def _cs_draw(rng, eng: dict) -> np.ndarray:
+    """One bootstrap draw of unit positions: whole clusters when the engine has them, else units."""
+    if eng["cluster"]:
+        n_cl = eng["n_cl"]
+        draw = rng.integers(0, n_cl, n_cl)
+        return np.concatenate([eng["cl_members"][c] for c in draw])
+    n = len(eng["Ym"])
+    return rng.integers(0, n, n)
+
+
+def _wald_boot(b: np.ndarray, draws: np.ndarray, max_rank: int):
+    """Wald test of b = 0 with the covariance of bootstrap draws (rows = draws). The rank is computed on the
+    correlation scale (so cells with small SEs do not look degenerate) and capped at max_rank (B − 1 draws, G − 1
+    clusters); below full rank the pseudo-inverse on the effective rank is used, with df = rank.
+    Returns (W, df, p, rank)."""
+    V = np.cov(draws, rowvar=False, ddof=1).reshape(len(b), len(b))
+    sd = np.sqrt(np.clip(np.diag(V), 0, None))
+    if not np.all(np.isfinite(V)) or np.any(sd <= 0):
+        return np.nan, 0, np.nan, 0
+    C = V / np.outer(sd, sd)
+    w, U = np.linalg.eigh(C)
+    keep = w > max(w.max(), 0) * len(b) * 1e-10
+    rank = int(min(keep.sum(), max_rank))
+    if rank < 1:
+        return np.nan, 0, np.nan, 0
+    order = np.argsort(w)[::-1][:rank]
+    z = b / sd
+    proj = U[:, order].T @ z
+    W = float(np.sum(proj ** 2 / w[order]))
+    return W, rank, float(stats.chi2.sf(W, rank)), rank
+
+
+def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str = "never",
+           n_boot: int = 199, seed: int = 0, anticipation: int = 0, covariates: list[str] | None = None,
+           est_method: str = "dr", x_periods: str = "base", verify: bool = True, cluster: str | None = None,
+           alpha: float = ALPHA, show: bool = True) -> dict:
+    """Callaway & Sant'Anna (2021) ATT(g,t) on a balanced panel, with or without covariates.
+    gvar = first treated period (0 or NaN = never treated). control = 'never' or 'notyet'.
+    anticipation = δ periods in which units may react before g (law announced before it
+    takes effect): post cells (t >= g-δ) use base g-δ-1, not-yet controls must be untreated
+    until t+δ. Pre-period cells use the short (t-1) base.
+
+    Covariates (parallel trends that hold only conditional on X; Caetano & Callaway 2024):
+    covariates = columns entered in LEVELS, never differenced away (that is what removes
+    hidden linearity bias from a TWFE regression). est_method = 'dr' (doubly robust,
+    Sant'Anna & Zhao 2020; default), 'reg' (outcome regression) or 'ipw' (normalized IPW).
+    x_periods = 'base': each cell uses X at its base period (pre-treatment values, safe when X
+    could respond to treatment); 'both': X at the base period and its change up to t, for
+    time-varying covariates that are NOT affected by treatment (Caetano & Callaway's setting).
+    Comparison units with propensity >= 0.995 get zero weight (warned). verify=True also
+    computes the other two estimators on the full sample (an independent recomputation, stored as
+    res["cross_check"], a pandas Series indexed dr/reg/ipw that reporting.cross_check takes as is): if
+    they differ from the chosen one by more than one SE, the outcome and propensity models
+    disagree, a sign that at least one is misspecified (warned). Covariate effects that differ
+    ACROSS GROUPS (not only over time) bias every estimator here; check with ccc_test.
+
+    Inference: bootstrap resampling units with replacement and re-estimating every nuisance
+    model; n_boot=0 skips it. cluster = a column constant within unit (the state when a law
+    varies by state, with municipalities as units): the bootstrap then resamples whole
+    clusters, so the SEs allow any correlation within them, while the estimand (an average
+    over units) is unchanged. Do not aggregate the data to the cluster level to get clustered
+    inference: that changes the estimand (unit average -> cluster average). With fewer than
+    ~30 clusters or ~6 treated clusters, the cluster bootstrap is unreliable (warned): add
+    randomization_inference.
+    Warns when either of the two pre-period cells right before the (anticipation-adjusted)
+    date is significant (Bonferroni, alpha/2 each): the effect starts before the recorded date (anticipation or a misdated
+    treatment) → check the date and run did_timing_sensitivity.
+
+    Joint pre-trend test (v2.5.0; res["pretrend"], res["pretrend_p"], res["pretrend_df"]): Wald test that every
+    pre-period cell (t < g − anticipation, short t−1 base) is zero, with the covariance of the bootstrap draws
+    (the draws in which every pre cell exists). The rank is capped at B − 1 draws and, with cluster=, G − 1
+    clusters: when there are more pre cells than that, the test is run on the pre-period event-time averages
+    (e < −anticipation) instead, and says so; below full rank the pseudo-inverse on the effective rank is used
+    and df = rank. Not rejecting does not show parallel trends (low power; Roth 2022).
+    alpha (v2.5.0): level of the CIs, of the joint pre-trend test and of the early-effect warning."""
+    covs = list(covariates) if covariates else []
+    if est_method not in ("dr", "reg", "ipw"):
+        raise ValueError("est_method must be 'dr', 'reg' or 'ipw'")
+    if x_periods not in ("base", "both"):
+        raise ValueError("x_periods must be 'base' or 'both'")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    eng = _cs_engine(df, unit, time, y, gvar, control, anticipation, covs, est_method, x_periods, cluster)
+    Ym, G, cohorts, dropped, dlt, diag, compute = (eng[k] for k in ("Ym", "G", "cohorts", "dropped", "dlt", "diag",
+                                                                    "compute"))
+    n_cl = eng.get("n_cl")
+    n_cl_treated = eng.get("n_cl_treated")
     if not cohorts:
         raise ValueError("att_gt: no cohort has the base period g-anticipation-1 inside the panel")
     all_idx = np.arange(len(Ym))
@@ -771,15 +830,12 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
     post = base[base["e"] >= 0]
     simple = np.average(post["att"], weights=post["n_g"]) if len(post) else np.nan
     dyn = base.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False)
+    bs_dyn, bs_cells = [], []
     if n_boot and n_boot > 1:
         rng = np.random.default_rng(seed)
-        bs_simple, bs_dyn, bs_cells = [], [], []
+        bs_simple = []
         for _ in range(n_boot):
-            if cluster:
-                draw = rng.integers(0, n_cl, n_cl)
-                b = compute(np.concatenate([cl_members[c] for c in draw]))
-            else:
-                b = compute(rng.integers(0, len(Ym), len(Ym)))
+            b = compute(_cs_draw(rng, eng))
             p = b[b["e"] >= 0]
             bs_simple.append(np.average(p["att"], weights=p["n_g"]) if len(p) else np.nan)
             bs_dyn.append(b.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False))
@@ -791,16 +847,36 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         se_simple, dyn_se = np.nan, pd.Series(np.nan, index=dyn.index)
         cell_se = pd.Series(np.nan, index=base.set_index(["g", "t"]).index)
     dyn_tab = pd.DataFrame({"att": dyn, "se": dyn_se})
-    dyn_tab["ci_low"], dyn_tab["ci_high"] = _ci(dyn_tab["att"], dyn_tab["se"])
+    dyn_tab["ci_low"], dyn_tab["ci_high"] = _ci(dyn_tab["att"], dyn_tab["se"], alpha)
     gt = base.set_index(["g", "t"]).join(cell_se.rename("se"))
     # Jump right before the (anticipation-adjusted) date: with the short t-1 base, the cell
     # e = -δ-1 measures the change from g-δ-2 to g-δ-1, which is ~0 if the date is right.
-    # Check the two cells right before it (a date one or two periods too late), each at ALPHA/2.
-    zc = stats.norm.ppf(1 - ALPHA / 4)
+    # Check the two cells right before it (a date one or two periods too late), each at alpha/2.
+    zc = stats.norm.ppf(1 - alpha / 4)
     hits = [k for k in (-dlt - 1, -dlt - 2) if k in dyn_tab.index and np.isfinite(dyn_tab.loc[k, "se"])
             and dyn_tab.loc[k, "se"] > 0 and abs(dyn_tab.loc[k, "att"] / dyn_tab.loc[k, "se"]) > zc]
     flag = bool(hits)
     k_chk = hits[0] if hits else -dlt - 1
+    # joint pre-trend test (v2.5.0)
+    pre = base[base["t"] < base["g"] - dlt].set_index(["g", "t"])["att"].dropna()
+    pt = {"stat": np.nan, "df": 0, "p": np.nan, "rank": 0, "n_cells": int(len(pre)), "test": None, "draws_used": 0,
+          "max_rank": 0}
+    if len(pre) and bs_cells:
+        units_cap = (n_cl - 1) if eng["cluster"] else (len(Ym) - 1)
+        Dc = pd.concat(bs_cells, axis=1).reindex(pre.index).T
+        Dc = Dc[Dc.notna().all(axis=1)].to_numpy(float)
+        cap = min(len(Dc) - 1, units_cap)
+        if len(pre) <= cap:
+            W, df_, p_, rk = _wald_boot(pre.to_numpy(float), Dc, cap)
+            pt.update(stat=W, df=df_, p=p_, rank=rk, test="pre-period cells", draws_used=len(Dc), max_rank=cap)
+        else:
+            e_pre = [e for e in dyn.index if e < -dlt]
+            De = pd.concat(bs_dyn, axis=1).reindex(e_pre).T
+            De = De[De.notna().all(axis=1)].to_numpy(float)
+            cap = min(len(De) - 1, units_cap)
+            W, df_, p_, rk = _wald_boot(dyn.reindex(e_pre).to_numpy(float), De, cap)
+            pt.update(stat=W, df=df_, p=p_, rank=rk, test="pre-period event-time averages", draws_used=len(De),
+                      max_rank=cap, n_event_times=len(e_pre))
     method = "no covariates" if not covs else {"dr": "doubly robust", "reg": "outcome regression",
                                                "ipw": "IPW"}[est_method] + f", X: {', '.join(covs)} ({x_periods})"
     warns = []
@@ -812,6 +888,20 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         warns.append(f"The outcome already moves at e = {k_chk} (|z| > {zc:.2f}): the effect starts before the recorded"
                      " date (anticipation or a misdated treatment). Confirm the date; re-run with anticipation="
                      f"{-k_chk} and did_timing_sensitivity before reporting the ATT.")
+    if pt["test"] == "pre-period event-time averages":
+        warns.append(f"Joint pre-trend test run on the {pt['n_event_times']} pre-period event-time averages, not on the "
+                     f"{pt['n_cells']} pre-period cells: the bootstrap covariance has rank at most {pt['max_rank']} "
+                     f"({'clusters' if cluster else 'draws or units'} − 1), fewer than the cells.")
+    if pt["test"] and pt["rank"] < (pt.get("n_event_times") or pt["n_cells"]):
+        warns.append(f"Pre-trend covariance below full rank: Wald test on rank {pt['rank']} (pseudo-inverse), df = "
+                     f"{pt['df']}.")
+    if pt["test"] and np.isfinite(pt["p"]) and pt["p"] < alpha:
+        warns.append(f"Joint pre-trend test rejects (p = {pt['p']:.3g}, df = {pt['df']}): parallel trends are doubtful."
+                     " Look at the pre-period cells, compare with did_imputation (did_compare) and consider anticipation"
+                     " or covariates.")
+    if pt["test"] and cluster and (n_cl < 30 or n_cl_treated < 6):
+        warns.append("With few (treated) clusters the bootstrap pre-trend test is fragile as well: check the pre-period"
+                     " cells with causal.randomization_inference.")
     cross = None
     if covs:
         if diag["trimmed"]:
@@ -836,11 +926,12 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
                              f"{cross['reg']:.4f}, IPW {cross['ipw']:.4f} differ by {spread / se_simple:.1f} SE. "
                              "The outcome and propensity models disagree, so at least one is misspecified: add "
                              "flexibility (squares, interactions, logs) or check overlap before reporting.")
-    out = {"overall": _out("ATT (CS, simple)", simple, se_simple, len(Ym), anticipation=dlt,
+    out = {"overall": _out("ATT (CS, simple)", simple, se_simple, len(Ym), alpha=alpha, anticipation=dlt,
                            method=method, warnings=warns, cluster=cluster,
                            n_clusters=n_cl if cluster else len(Ym)),
            "dynamic": dyn_tab, "gt": gt, "flags": {"effect_before_date": flag},
-           "cohorts_dropped": dropped, "warnings": warns}
+           "cohorts_dropped": dropped, "warnings": warns, "pretrend": pt, "pretrend_p": pt["p"],
+           "pretrend_df": pt["df"], "alpha": alpha}
     if covs:
         out["cross_check"] = cross
         out["overlap"] = {k: diag[k] for k in ("ps_max", "trimmed", "ps_failed", "cells")}
@@ -849,8 +940,13 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         print(f"\nCallaway-Sant'Anna ({control} controls, {len(cohorts)} cohorts, {n_boot} bootstrap reps"
               + (f" by {cluster} ({n_cl} clusters, {n_cl_treated} treated)" if cluster else "")
               + (f", anticipation = {dlt}" if dlt else "") + f"; {method})")
-        print(f"Overall ATT: {o['estimate']:.4f} (SE {o['se']:.4f}, 95% CI {o['ci_low']:.4f} to {o['ci_high']:.4f})")
+        print(f"Overall ATT: {o['estimate']:.4f} (SE {o['se']:.4f}, {100 * (1 - alpha):g}% CI {o['ci_low']:.4f} to "
+              f"{o['ci_high']:.4f})")
         print("Dynamic (event-time) ATT:\n" + dyn_tab.to_string(float_format=lambda v: f"{v:.4f}"))
+        if pt["test"]:
+            print(f"Joint pre-trend test ({pt['test']}, bootstrap covariance): W = {pt['stat']:.3f}, df = {pt['df']}, "
+                  f"p = {pt['p']:.3f} → " + ("pre-trends detected: parallel trends doubtful" if pt["p"] < alpha else
+                                            "does not reject; this does not show parallel trends (low power is possible)"))
         if cross is not None:
             print("Independent recomputation of the overall ATT: "
                   + ", ".join(f"{k} {v:.4f}" for k, v in cross.items()))
@@ -864,7 +960,7 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
 def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, max_shift: int = 2,
                            control: str = "never", n_boot: int = 199, seed: int = 0, covariates: list[str] | None = None,
                            est_method: str = "dr", x_periods: str = "base", cluster: str | None = None,
-                           show: bool = True) -> dict:
+                           alpha: float = ALPHA, show: bool = True) -> dict:
     """How much does the Callaway-Sant'Anna result depend on the exact treatment date?
 
     1. Shift table: re-estimates the overall ATT with every treated unit's date moved by
@@ -877,11 +973,11 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
        are dynamic), at the cost of fewer usable cohorts and wider CIs.
     Verdict: 'survives' if the date-robust CI excludes 0 with the same sign as the
     baseline; otherwise the conclusion depends on the exact date.
-    covariates / est_method / x_periods / cluster: passed to att_gt, so the check uses the same specification
-    and the same (clustered) inference."""
+    covariates / est_method / x_periods / cluster / alpha: passed to att_gt, so the check uses the same specification
+    and the same (clustered) inference at the same level."""
     d = df.copy()
     cov_kw = dict(covariates=covariates, est_method=est_method, x_periods=x_periods, verify=False,
-                  cluster=cluster)
+                  cluster=cluster, alpha=alpha)
     g0 = d[gvar].fillna(0)
     rows = []
     for k in range(-max_shift, max_shift + 1):
@@ -911,7 +1007,7 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
               " treated periods in the base or untreated ones in the post period, so swings are expected;"
               " the date-robust line below is the verdict)")
         print(f"Date-robust ATT (true date anywhere within ±{max_shift}): {ro['estimate']:.4f} "
-              f"(SE {ro['se']:.4f}, 95% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})"
+              f"(SE {ro['se']:.4f}, {100 * (1 - alpha):g}% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})"
               + (f"; cohorts dropped: {rob['cohorts_dropped']}" if rob["cohorts_dropped"] else ""))
         print("  → " + (f"the conclusion survives date errors of up to ±{max_shift} periods." if survives else
                         f"the conclusion DEPENDS on the exact date: with an error of up to ±{max_shift} periods the "
@@ -923,7 +1019,7 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
 def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: str, g_high: str,
                         control: str = "never", n_draws: int = 200, n_boot: int = 199, seed: int = 0,
                         covariates: list[str] | None = None, est_method: str = "dr", x_periods: str = "base",
-                        cluster: str | None = None, show: bool = True) -> dict:
+                        cluster: str | None = None, alpha: float = ALPHA, show: bool = True) -> dict:
     """Staggered DiD when each unit's adoption date is only known to lie in a window
     [g_low, g_high] (e.g. a law phased in court by court with imprecise records).
     Never-treated units: g_low = g_high = 0 or NaN.
@@ -932,10 +1028,10 @@ def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: s
        every base period precedes any plausible adoption (Callaway-Sant'Anna, bootstrap CI).
     2. Date draws: n_draws estimates with each unit's date drawn uniformly from its
        window; the spread shows how much date uncertainty alone moves the ATT.
-    covariates / est_method / x_periods / cluster: passed to att_gt (same specification and inference)."""
+    covariates / est_method / x_periods / cluster / alpha: passed to att_gt (same specification, inference and level)."""
     d = df.copy()
     cov_kw = dict(covariates=covariates, est_method=est_method, x_periods=x_periods, verify=False,
-                  cluster=cluster)
+                  cluster=cluster, alpha=alpha)
     lo = d.groupby(unit)[g_low].first().fillna(0)
     hi = d.groupby(unit)[g_high].first().fillna(0)
     if ((hi > 0) & (lo > hi)).any():
@@ -967,7 +1063,7 @@ def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: s
     if show:
         print(f"\nDiD with uncertain adoption dates (windows up to {width} periods wide, {control} controls)")
         print(f"Window-robust ATT (base before any plausible date): {ro['estimate']:.4f} "
-              f"(SE {ro['se']:.4f}, 95% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})")
+              f"(SE {ro['se']:.4f}, {100 * (1 - alpha):g}% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})")
         print(f"ATT across {len(draws)} random dates inside the windows: median {q50:.4f}, "
               f"5–95% {q05:.4f} to {q95:.4f}, same sign in {share_same:.0%} of draws")
         print("  → " + ("the effect survives the date uncertainty." if survives else
