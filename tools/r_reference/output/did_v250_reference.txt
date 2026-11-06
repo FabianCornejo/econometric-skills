@@ -1,0 +1,14 @@
+panel: tests/data/did_v250_panel.csv  rows: 600 
+md5 of the panel: 7498036256b9e987f01997bc34a57ea0 (expected '7498036256b9e987f01997bc34a57ea0'; a different value means the file changed, e.g. CRLF line endings)
+
+R: R version 4.6.2 (2026-10-29 ucrt) 
+didimputation 0.5.1 
+TwoWayFEWeights 2.1.0 
+jsonlite 2.0.0 
+
+==== didimputation: static ATT, SEs clustered by unit ====
+     term estimate  std.error conf.low conf.high
+   <char>    <num>      <num>    <num>     <num>
+1:  treat 1.930855 0.08319653  1.76779   2.09392
+
+==== didimputation: event study (all horizons) with pre-trend coefficients ====
