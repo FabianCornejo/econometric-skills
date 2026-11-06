@@ -155,3 +155,11 @@ From the first test on a real series (monthly IPCA 2000–2026):
 - **SUR equals OLS with identical regressors; 3SLS equals 2SLS when every equation is exactly identified.** Say so instead of presenting them as different estimates.
 - **GARCH names**: GJR = threshold in the variance; EGARCH = log-variance (not TGARCH). Persistence ≥ 0.99 deserves a break check before it is reported as a property of the asset.
 - **Fama-MacBeth with estimated betas** needs the Shanken correction (or a bootstrap) and Newey-West on the λ_t; the plain FM SE overstates precision.
+
+## Rules added in v2.4.7.1
+
+From the validation of v2.4.7 (a VAR of IPCA, Selic and the exchange rate; a GARCH of the Ibovespa):
+
+- **A sign-bias test that does not reject does not show symmetry.** Test omitted asymmetry with the LR of the GJR against the GARCH (`volatility.garch_fit` reports `asymmetry_lr`); the Engle-Ng tests have little power with fat tails and are a complement.
+- **Agreement between routes that are all compatible with zero is not a confirmation.** Two estimates of 0.15 and 0.10 with an SE of 0.12 agree, but neither measures an effect; say "both routes are compatible with zero" (`reporting.cross_check` flags it). Compare only the same quantity in both routes (the same horizon, the same units, cumulative with cumulative).
+- **Unit-root warnings follow the joint verdict.** Classify a series with ADF, DF-GLS and KPSS together (`diagnostics.stationarity`); when only the ADF fails to reject, the series is persistent, a VAR in levels is reasonable, and a Toda-Yamamoto Granger test is the safe check (`multivariate.var_analysis` says so instead of warning of a unit root). A series stationary only around a deterministic trend needs the trend in the VAR (`trend='ct'`) or detrending.

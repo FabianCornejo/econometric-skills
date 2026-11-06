@@ -2,6 +2,17 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.4.7.1 — Fixes from the v2.4.7 validation
+
+Three fixes found by the first real-data tests of v2.4.7 (a VAR of IPCA, Selic and the exchange rate; a GARCH of the Ibovespa).
+
+- **`volatility.garch_fit`**: a symmetric GARCH is now tested for omitted asymmetry by the LR of the GJR(1,1,1) with the same mean and distribution (`asymmetry_lr`), and a rejection is flagged. The Engle-Ng sign-bias tests stay as a complement. On the Ibovespa the sign-bias joint p was 0.77 while the LR was 31.5 (p = 2e-8); in simulations with t(5) errors and γ = 0.08 the LR rejected in every sample and the sign-bias tests in about one in ten, with no false rejections of the LR on symmetric data. If the GJR fit fails, the LR is reported as unavailable (not as "no asymmetry") and the sign-bias tests remain the check.
+- **`multivariate.var_analysis`**: the unit-root warning follows the joint ADF/DF-GLS/KPSS verdict of `diagnostics.stationarity` (`integration_order` in the output). When only the ADF fails to reject, as for the Selic 2010–2026 (ADF p = 0.27, joint verdict I(0)), the series is reported as persistent, with Toda-Yamamoto as the safe Granger check. A series stationary only around a trend, in a VAR without a trend, gets a warning to add it.
+- **`reporting.cross_check`**: when the routes agree and all are compatible with zero, the agreement is flagged as uninformative (`null`), so a VAR and a local projection that both cannot tell the effect from zero are no longer reported as a confirmation. `null` and `weak` no longer fire together.
+- **Rules**: a sign-bias test that does not reject does not show symmetry; agreement between routes compatible with zero is not a confirmation, and only the same quantity is compared; unit-root warnings follow the joint verdict (`interpretation-rules.md`, `volatility.md`, `time-series.md`).
+- **Python 3.10 and 3.11**: `multivariate.py` (v2.4.7) used a nested f-string that only Python 3.12 accepts, so the module failed to import on 3.10 and 3.11; fixed, and CI now compiles every script on Python 3.10.
+- **Tests**: `tests/test_v2471.py` (17 checks), with the Selic series of the validation, seeded GJR simulations (power, size and recovery of γ) and a forced GJR failure.
+
 ## v2.4.7 — Multivariate time series, volatility, systems and dynamic panels
 
 Three new modules, plus Fama-MacBeth, with the checks that decide whether an estimate can be read.

@@ -37,14 +37,14 @@ print(res.summary())
 
 `arch` does not accept regressors in the variance equation; `volatility.garch_fit(r, "garch" | "gjr", variance_dummies=D)` estimates GARCH/GJR with regressors in the variance (day of week, post-holiday, an event) by its own likelihood with Bollerslev-Wooldridge SEs; without regressors it reproduces `arch` (parameters within 0.002, SEs within 3%).
 
-`volatility.stylized_facts(r)` checks the facts of section 1 (Jarque-Bera, Ljung-Box on r and r², ARCH-LM, leverage correlations); `volatility.garch_fit(r, vol)` reports persistence, half-life, the unconditional variance, Ljung-Box on z and z², the Engle-Ng sign-bias tests (`sign_bias_test`) and AIC/BIC, and warns on persistence ≥ 0.99.
+`volatility.stylized_facts(r)` checks the facts of section 1 (Jarque-Bera, Ljung-Box on r and r², ARCH-LM, leverage correlations); `volatility.garch_fit(r, vol)` reports persistence, half-life, the unconditional variance, Ljung-Box on z and z², the Engle-Ng sign-bias tests (`sign_bias_test`) and AIC/BIC, and warns on persistence ≥ 0.99. For a symmetric GARCH it also fits the GJR(1,1,1) with the same mean and distribution and reports the LR test of γ = 0 (`asymmetry_lr`); a rejection is flagged as omitted asymmetry.
 
 **Names**: GJR-GARCH is the threshold GARCH in the variance; Zakoian's TGARCH models the conditional SD; EGARCH (Nelson) models the log-variance. Calling EGARCH a TGARCH is wrong.
 
 Diagnostics:
 - Persistence α + β (+ γ/2 in GJR) < 1; close to 1 = very persistent shocks. Half-life = ln 0.5 / ln(α + β).
 - Standardized residuals (`res.std_resid`): no autocorrelation in them or their squares; distribution consistent with the chosen one.
-- Engle-Ng sign-bias test to check for omitted asymmetry.
+- Omitted asymmetry: the LR of the GJR against the GARCH (χ²(1): γ can be negative, so γ = 0 is interior while α > 0; with α̂ near zero the χ²(1) is conservative; like any LR it assumes the chosen error distribution) is the primary test; if the GJR does not converge, `garch_fit` says so and the sign-bias tests are the fallback. The Engle-Ng sign-bias tests are a complement: with fat-tailed returns they have little power (on the Ibovespa 2010–2026 the joint p was 0.77 while the LR was 31.5, p = 2e-8; in simulations with t(5) errors and γ = 0.08 the LR rejected in every sample and the sign-bias tests in about one in ten). A sign-bias test that does not reject does not show symmetry.
 
 ## 4. Forecasting and risk
 
