@@ -1484,50 +1484,60 @@ def did_imputation(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, an
         eh, sh = estimate(w)
         rows.append({"e": h, "att": eh, "se": sh, "n_obs": int(m.sum())})
     dyn = pd.DataFrame(rows).set_index("e")
-    # ---- pre-trend test on the untreated observations only
-    pt = {"stat": np.nan, "df": 0, "p": np.nan, "reference": None, "leads": 0, "n_clusters": n_cl}
-    unt = ~treated
-    rel = np.where(gv > 0, tv - gv, np.nan)[unt]
-    avail = sorted({int(-r) for r in rel[np.isfinite(rel)] if r < -dlt}, key=int)
-    K_all = [k for k in avail if k > dlt]           # leads: periods before g − δ
-    K = len(K_all) if pretrends is None else min(int(pretrends), len(K_all))
-    cut = False
-    if K > max(1, (n_cl - 1) / 10):
-        K, cut = max(1, int((n_cl - 1) // 10)), True
-    lead_rows = []
-    if K >= 1:
-        leads = list(range(dlt + 1, dlt + K + 1))
-        L = np.column_stack([(rel == -k).astype(float) for k in leads])
-        L[~np.isfinite(rel)] = 0.0
-        u0, t0, y0 = ui[unt], ti[unt], yv[unt]
-        Z = _fe_design(u0, t0, len(uniq_u), len(periods), int(t0.min()))
-        Z = Z[:, np.asarray(Z.sum(axis=0)).ravel() > 0]
-        X = sparse.hstack([Z, sparse.csr_matrix(L)]).tocsc()
-        from scipy.sparse.linalg import spsolve
-        XtX = (X.T @ X).tocsc()
-        beta = spsolve(XtX, X.T @ y0)
-        res = y0 - X @ beta
-        k_fe = Z.shape[1]
-        # FWL: covariance of the lead coefficients from (X'X)^-1 restricted block, clustered meat
-        XtX_inv_L = spsolve(XtX, sparse.vstack([sparse.csr_matrix((k_fe, K)), sparse.identity(K)]).tocsc())
-        XtX_inv_L = XtX_inv_L.toarray() if hasattr(XtX_inv_L, "toarray") else np.asarray(XtX_inv_L).reshape(-1, K)
-        H = X @ XtX_inv_L                                  # n0 × K: rows of X (X'X)^-1 for the lead block
-        c0 = cl_codes[unt]
-        S = np.vstack([np.bincount(c0, weights=H[:, j] * res, minlength=n_cl) for j in range(K)]).T
+    # ---- pre-trend test on the untreated observations only (separate from estimation, as in the paper). By
+    # Frisch-Waugh: the lead indicators and Y are residualized on the unit and period effects, and leads that the
+    # effects already span are dropped (without never-treated units the full set of leads is collinear with them),
+    # keeping the leads nearest to adoption first.
+    pt = {"stat": np.nan, "df": 0, "p": np.nan, "reference": None, "leads": 0, "n_clusters": n_cl,
+          "leads_dropped_collinear": 0}
+    lead_rows, cut, pre_fail = [], False, None
+    try:
+        unt_idx = np.where(~treated)[0][core["ok0"]]
+        rel = np.where(gv > 0, tv - gv, np.nan)[unt_idx]
+        K_all = sorted({int(-r) for r in rel[np.isfinite(rel)] if r < -dlt})
+        if pretrends is not None:
+            K_all = K_all[:int(pretrends)]
+        Z0, A0 = core["Z0"], core["A"]
+        from scipy.sparse.linalg import splu
+        lu = splu(A0)
+        y_r = core["resid0"]                          # Y residualized on the effects (fitted on these observations)
+        kept, Lr = [], []
+        for k in K_all:
+            col = (rel == -k).astype(float)
+            r = col - Z0 @ lu.solve(np.asarray(Z0.T @ col).ravel())
+            if Lr:
+                M = np.column_stack(Lr)
+                r = r - M @ np.linalg.lstsq(M, r, rcond=None)[0]
+            if r @ r > 1e-10 * max(1.0, col @ col):
+                kept.append(k)
+                Lr.append(col - Z0 @ lu.solve(np.asarray(Z0.T @ col).ravel()))
+        pt["leads_dropped_collinear"] = len(K_all) - len(kept)
+        c0 = cl_codes[unt_idx]
         Gc = len(np.unique(c0))
-        V = (S.T @ S) * Gc / max(Gc - 1, 1)
-        b = beta[k_fe:]
-        try:
-            W = float(b @ np.linalg.solve(V, b))
-            q = K
-            p_ = float(stats.f.sf(W / q * (Gc - q) / (Gc - 1), q, Gc - q)) if Gc > q + 1 else float(stats.chi2.sf(W, q))
-            ref = f"F({q}, {Gc - q})" if Gc > q + 1 else f"chi2({q})"
-            pt.update(stat=W, df=q, p=p_, reference=ref, leads=K, n_clusters=Gc)
-        except np.linalg.LinAlgError:
-            pass
-        sev = np.sqrt(np.clip(np.diag(V), 0, None))
-        for j, k in enumerate(leads):
-            lead_rows.append({"e": -k, "att": float(b[j]), "se": float(sev[j]), "n_obs": int(L[:, j].sum())})
+        cap_k = max(1, int((Gc - 1) // 10))
+        if len(kept) > cap_k:
+            kept, Lr, cut = kept[:cap_k], Lr[:cap_k], True
+        if kept:
+            Lm = np.column_stack(Lr)
+            LtL_inv = np.linalg.inv(Lm.T @ Lm)
+            bl = LtL_inv @ (Lm.T @ y_r)
+            res = y_r - Lm @ bl
+            H = Lm @ LtL_inv
+            S = np.vstack([np.bincount(c0, weights=H[:, j] * res, minlength=n_cl) for j in range(len(kept))]).T
+            V = (S.T @ S) * Gc / max(Gc - 1, 1)
+            q = len(kept)
+            W = float(bl @ np.linalg.solve(V, bl))
+            if Gc > q + 1:
+                p_, ref = float(stats.f.sf(W / q * (Gc - q) / (Gc - 1), q, Gc - q)), f"F({q}, {Gc - q})"
+            else:
+                p_, ref = float(stats.chi2.sf(W, q)), f"chi2({q})"
+            pt.update(stat=W, df=q, p=p_, reference=ref, leads=q, n_clusters=Gc)
+            sev = np.sqrt(np.clip(np.diag(V), 0, None))
+            for j, k in enumerate(kept):
+                lead_rows.append({"e": -k, "att": float(bl[j]), "se": float(sev[j]),
+                                  "n_obs": int((rel == -k).sum())})
+    except Exception as exc:  # noqa: BLE001 — the pre-trend test must never break the estimate
+        pre_fail = str(exc)
     if lead_rows:
         dyn = pd.concat([pd.DataFrame(lead_rows).set_index("e"), dyn]).sort_index()
     dyn["ci_low"], dyn["ci_high"] = _ci(dyn["att"], dyn["se"], alpha)
@@ -1539,8 +1549,13 @@ def did_imputation(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, an
         warns.append(f"{n_drop} treated observations could not be imputed (their unit has no untreated period, or no "
                      "untreated unit is observed in their period) and were left out of every estimate.")
     if cut:
-        warns.append(f"Pre-trend test on the {K} lead(s) nearest to adoption only: with {n_cl} clusters a clustered "
-                     "covariance of more coefficients is too noisy for a Wald test.")
+        warns.append(f"Pre-trend test on the {pt['leads']} lead(s) nearest to adoption only: with {pt['n_clusters']} "
+                     "clusters a clustered covariance of more coefficients is too noisy for a Wald test.")
+    if pt["leads_dropped_collinear"]:
+        warns.append(f"{pt['leads_dropped_collinear']} lead(s) are spanned by the unit and period effects (no "
+                     "never-treated units, or too few untreated periods) and were left out of the pre-trend test.")
+    if pre_fail:
+        warns.append(f"The pre-trend test could not be computed ({pre_fail}); the estimates are unaffected.")
     if np.isfinite(pt["p"]) and pt["p"] < alpha:
         warns.append(f"Pre-trend test rejects (p = {pt['p']:.3g}, {pt['reference']}): parallel trends are doubtful; "
                      "compare with att_gt (did_compare) and look at the leads.")

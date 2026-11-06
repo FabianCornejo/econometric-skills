@@ -4,6 +4,10 @@
    never-treated units, reversals, heterogeneous adoption, first switch, other), plus unbalanced panels, units treated
    from the first period, treatment varying inside clusters, missing treatment and irregular periods. The expected
    classification and counts come from how each panel was built (planted dates, reversals), not from the function.
+2. causal.did_imputation: closed form in the canonical design (group means, pre-period average base), sign reversal
+   of TWFE, coverage and bias in simulation, SE against a unit bootstrap written here, unbalanced panel, pre-trend
+   test size and power. R didimputation numbers on tests/data/did_v250_panel.csv: pending (tools/r_reference).
+3. causal.did_compare: size of the paired difference test, power against a pre-trend, paired draws.
 4. causal.att_gt: alpha, and the joint pre-trend test (Wald recomputed by a plain inverse, size and power in
    simulation, the level chosen with few clusters).
 
@@ -298,6 +302,142 @@ gap = stag.copy()
 gap["t"] = gap["t"] * 2
 check("did_design: periods that are not consecutive integers are flagged",
       any("consecutive integers" in w for w in ca.did_design(gap, "id", "t", "d", show=False)["warnings"]))
+
+# ---------------------------------------------------------------- 2-3. did_imputation and did_compare
+def twfe_dummies(d, y="y", D="D"):
+    """Static TWFE coefficient by OLS on unit and period dummies (an independent route: no within transformation)."""
+    X = pd.get_dummies(d[["id", "t"]].astype(str)).astype(float)
+    X[D] = d[D].to_numpy(float)
+    return float(np.linalg.lstsq(X.to_numpy(), d[y].to_numpy(float), rcond=None)[0][-1])
+
+
+# (a) canonical design: the imputation estimate equals a DiD of each treated unit's change from its own pre-period
+#     mean against the never-treated units' change (closed form, written here with group means only)
+rng = np.random.default_rng(21)
+rows = []
+for i in range(40):
+    a, g = rng.normal(), (5 if i < 15 else 0)
+    for t in range(1, 9):
+        rows.append((i, t, a + 0.3 * t + (1.0 + 0.4 * (t - g) if g and t >= g else 0) + rng.normal(), g))
+can = pd.DataFrame(rows, columns=["id", "t", "y", "g"])
+rb = ca.did_imputation(can, "id", "t", "y", "g", show=False)
+Y = can.pivot(index="id", columns="t", values="y")
+tr_u, nv_u = Y.index[:15], Y.index[15:]
+pre, post = [1, 2, 3, 4], [5, 6, 7, 8]
+cf = [((Y.loc[tr_u, t] - Y.loc[tr_u, pre].mean(axis=1)) - (Y.loc[nv_u, t].mean() - Y.loc[nv_u, pre].mean(axis=1).mean())).mean()
+      for t in post]
+check("did_imputation, canonical design: ATT equals the closed-form DiD on group means (pre-period average base)",
+      abs(rb["overall"]["estimate"] - np.mean(cf)) < 1e-10, f"{rb['overall']['estimate']:.6f} vs {np.mean(cf):.6f}")
+check("... and each event-time coefficient equals its closed-form cell",
+      np.allclose(rb["dynamic"].loc[[0, 1, 2, 3], "att"].to_numpy(), cf, atol=1e-10))
+
+# (b) sign reversal: early cohort with an effect that grows fast, late cohort with a small one, no never-treated
+def sign_rev(seed):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for i in range(100):
+        a, g = rng.normal(), (2 if i < 50 else 7)
+        for t in range(1, 9):
+            tau = ((t - g + 1) if g == 2 else 0.2) if t >= g else 0.0
+            rows.append((i, t, a + 0.1 * t + tau + rng.normal(0, 0.5), g, tau, float(t >= g)))
+    return pd.DataFrame(rows, columns=["id", "t", "y", "g", "tau", "D"])
+
+
+sr = sign_rev(22)
+tw = twfe_dummies(sr)
+rb = ca.did_imputation(sr, "id", "t", "y", "g", show=False)
+true_imp = sr[(sr.D == 1) & (sr.t < 7)].tau.mean()          # identified: some unit is untreated in the period (= 3)
+check("sign reversal: TWFE is negative while every treated effect is positive", tw < 0 and (sr[sr.D == 1].tau > 0).all(),
+      f"TWFE {tw:.3f}")
+cs_sr = ca.att_gt(sr, "id", "t", "y", "g", control="notyet", n_boot=0, show=False)["overall"]
+check("... one control cohort and one base period: CS (not-yet) and the imputation estimator coincide exactly",
+      abs(cs_sr["estimate"] - rb["overall"]["estimate"]) < 1e-10, f"{cs_sr['estimate']:.6f} vs {rb['overall']['estimate']:.6f}")
+zs = []
+for s_ in range(400):
+    o_ = ca.did_imputation(sign_rev(1000 + s_), "id", "t", "y", "g", show=False)["overall"]
+    zs.append((o_["estimate"] - true_imp) / o_["se"])
+zs = np.array(zs)
+# 40 panels were too few: seeds 100-139 gave mean z -0.45 and 10% beyond 2 by chance (0.02 and 6.2% over 400)
+check("... and recovers the ATT of the imputable observations: over 400 panels |mean z| < 0.15, |z| > 1.96 in ≤ 9%",
+      abs(zs.mean()) < 0.15 and np.mean(np.abs(zs) > 1.96) <= 0.09,
+      f"mean z {zs.mean():.3f}, |z|>1.96 {np.mean(np.abs(zs) > 1.96):.3f}")
+check("... drops (and counts) the treated observations of periods with no untreated unit",
+      rb["dropped_treated_obs"] == int(((sr.D == 1) & (sr.t >= 7)).sum()) and any("could not be imputed" in w
+                                                                                for w in rb["warnings"]))
+check("... no never-treated units: every lead is spanned by the effects, the pre-trend test says so and the estimate stands",
+      rb["pretrend"]["leads"] == 0 and rb["pretrend"]["leads_dropped_collinear"] > 0 and np.isfinite(rb["overall"]["se"]))
+
+
+# (c) coverage of the Theorem 3 CI, and its SE against a unit bootstrap computed here
+def stag_het(seed, N=120, T=8, pretrend=0.0):
+    rng = np.random.default_rng(seed)
+    g = rng.choice([0, 4, 6], N)
+    rows = []
+    for i in range(N):
+        a = rng.normal()
+        for t in range(1, T + 1):
+            tau = (1 + 0.3 * (t - g[i])) * (1.5 if g[i] == 4 else 1.0) if g[i] and t >= g[i] else 0.0
+            rows.append((i, t, a + 0.2 * t + pretrend * (g[i] > 0) * t + tau + rng.normal(), g[i], tau))
+    return pd.DataFrame(rows, columns=["id", "t", "y", "g", "tau"])
+
+
+cover, ests = [], []
+for s_ in range(200):
+    dd = stag_het(3000 + s_)
+    o = ca.did_imputation(dd, "id", "t", "y", "g", show=False)["overall"]
+    true = dd[(dd.g > 0) & (dd.t >= dd.g)].tau.mean()
+    cover.append(o["ci_low"] <= true <= o["ci_high"])
+    ests.append(o["estimate"] - true)
+cov = float(np.mean(cover))
+check("did_imputation: 95% CI covers the sample ATT in 92-99.5% of 200 panels (conservative variance)",
+      0.92 <= cov <= 0.995, f"coverage {cov:.3f}")
+check("did_imputation: no bias (mean error within 3 Monte Carlo SE)",
+      abs(np.mean(ests)) < 3 * np.std(ests) / np.sqrt(len(ests)), f"mean error {np.mean(ests):.4f}")
+dd = stag_het(77)
+o = ca.did_imputation(dd, "id", "t", "y", "g", show=False)["overall"]
+ids = dd["id"].unique()
+rngb = np.random.default_rng(5)
+bs = []
+for _ in range(199):
+    pick = rngb.choice(ids, len(ids))
+    bd = pd.concat([dd[dd.id == u].assign(id=k) for k, u in enumerate(pick)])
+    bs.append(ca.did_imputation(bd, "id", "t", "y", "g", show=False)["overall"]["estimate"])
+ratio = o["se"] / np.std(bs, ddof=1)
+check("did_imputation: Theorem 3 SE against a unit bootstrap computed here (ratio 0.85-1.35)", 0.85 <= ratio <= 1.35,
+      f"ratio {ratio:.3f}")
+
+# (d) unbalanced panel
+pan = pd.read_csv(ROOT / "tests" / "data" / "did_v250_panel.csv")
+ub = pan[pan.keep_unb == 1]
+ru = ca.did_imputation(ub, "id", "t", "y", "g", show=False)
+check("did_imputation runs on an unbalanced panel and uses every treated row it can impute",
+      ru["overall"]["n_treated_obs"] + ru["dropped_treated_obs"] == int((ub.d == 1).sum()) and np.isfinite(ru["overall"]["se"]))
+
+# (e) pre-trend test on untreated observations: size and power
+ps0 = [ca.did_imputation(stag_het(4000 + s_, N=200), "id", "t", "y", "g", show=False)["pretrend_p"] for s_ in range(150)]
+ps1 = [ca.did_imputation(stag_het(5000 + s_, N=200, pretrend=0.25), "id", "t", "y", "g", show=False)["pretrend_p"]
+       for s_ in range(40)]
+r0, r1 = float(np.mean(np.array(ps0) < 0.05)), float(np.mean(np.array(ps1) < 0.05))
+check("did_imputation pre-trend test: size within [1%, 10%] (150 panels, 200 units)", 0.01 <= r0 <= 0.10, f"{r0:.3f}")
+check("did_imputation pre-trend test: power ≥ 80% against a linear pre-trend of 0.25 per period", r1 >= 0.8, f"{r1:.2f}")
+
+# (f) did_compare: same target on common cells; the paired difference keeps its size and flags a pre-trend
+cmp0 = [ca.did_compare(stag_het(6000 + s_), "id", "t", "y", "g", n_boot=199, seed=s_, show=False) for s_ in range(80)]
+rej0 = float(np.mean([c["diverge"] for c in cmp0]))
+check("did_compare: without pre-trends the difference is significant in ≤ 12% of 80 panels (5% test)", rej0 <= 0.12,
+      f"{rej0:.3f}")
+check("did_compare: the SE of the difference comes from paired draws (correlation of the two routes > 0.5)",
+      np.median([c["corr"] for c in cmp0]) > 0.5, f"median corr {np.median([c['corr'] for c in cmp0]):.2f}")
+cmp1 = [ca.did_compare(stag_het(7000 + s_, pretrend=0.4), "id", "t", "y", "g", n_boot=199, seed=s_, show=False)
+        for s_ in range(30)]
+rej1 = float(np.mean([c["diverge"] for c in cmp1]))
+check("did_compare: with a linear pre-trend of 0.4 per period the routes diverge in ≥ 70% of 30 panels (43% at 0.2)", rej1 >= 0.7,
+      f"{rej1:.2f}")
+check("... and the warning points to the pre-trend tests", all(any("pre-trend" in w for w in c["warnings"])
+                                                               for c in cmp1 if c["diverge"]))
+c_one = cmp0[0]
+check("did_compare: the cross_check Series has the two routes for reporting.cross_check",
+      list(c_one["cross_check"].index) == ["Callaway-Sant'Anna", "imputation (BJS)"])
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
