@@ -31,6 +31,11 @@ Panel designs
                                                   (Sant'Anna-Zhao 2020), outcome regression or IPW, with the other two
                                                   recomputed as an independent check; joint pre-trend test
                                                   (F reference, fewer restrictions with few clusters; v2.5.0)
+    did_imputation(df, unit, time, y, gvar)       Borusyak-Jaravel-Spiess (2024) imputation estimator (v2.5.0): FE fitted
+                                                  on untreated observations only, Theorem 3 clustered SEs, event study,
+                                                  pre-trend test on untreated observations; unbalanced panels allowed
+    did_compare(df, unit, time, y, gvar)          att_gt vs did_imputation on common cells, difference tested with a
+                                                  paired bootstrap (v2.5.0): a gap points to the pre-trends
     bacon_decomposition(df, unit, time, y, gvar)  Goodman-Bacon (2021): TWFE as a weighted average of every 2x2,
                                                   with the weight of forbidden (already-treated control) comparisons
     twfe_covariate_diagnostic(df, ..., covariates) hidden linearity bias of TWFE with covariates (Caetano-Callaway
@@ -1336,6 +1341,352 @@ def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: s
         print("  → " + ("the effect survives the date uncertainty." if survives else
                         "the effect does NOT survive the date uncertainty: narrow the windows with better "
                         "records or report the result as inconclusive."))
+    return out
+
+
+def _fe_design(ui: np.ndarray, ti: np.ndarray, n_u: int, n_t: int, t_ref: int):
+    """Sparse two-way fixed-effects design: n_u unit dummies and n_t − 1 period dummies (period t_ref dropped)."""
+    from scipy import sparse
+    n = len(ui)
+    cols_t = np.where(ti < t_ref, ti, ti - 1) + n_u
+    keep = ti != t_ref
+    rows = np.concatenate([np.arange(n), np.arange(n)[keep]])
+    cols = np.concatenate([ui, cols_t[keep]])
+    return sparse.csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n_u + n_t - 1))
+
+
+def _bjs_core(y: np.ndarray, ui: np.ndarray, ti: np.ndarray, g_t: np.ndarray, treated: np.ndarray,
+              n_u: int, n_t: int):
+    """Imputation step of Borusyak, Jaravel & Spiess (2024) on arrays. ui, ti: unit and period codes; treated:
+    boolean mask of the treated observations (the rest are untreated, Ω0). Fits unit and period effects by OLS on Ω0
+    only, imputes Y(0) for the treated observations and returns their τ̂ = Y − Ŷ(0), plus what the variance needs.
+    Treated observations whose unit or period has no untreated observation connected to the rest cannot be imputed
+    and are flagged (ident = False)."""
+    from scipy import sparse
+    from scipy.sparse.csgraph import connected_components
+    from scipy.sparse.linalg import spsolve
+    u0, t0 = ui[~treated], ti[~treated]
+    # connectedness of the unit-period graph of untreated observations
+    adj = sparse.csr_matrix((np.ones(len(u0)), (u0, t0 + n_u)), shape=(n_u + n_t, n_u + n_t))
+    _, lab = connected_components(adj, directed=False)
+    has0 = np.zeros(n_u + n_t, bool)
+    has0[u0] = True
+    has0[t0 + n_u] = True
+    main = np.bincount(lab[has0]).argmax() if has0.any() else -1
+    in_main = (lab == main) & has0
+    ok0 = in_main[u0] & in_main[t0 + n_u]
+    ident = treated & in_main[ui] & in_main[ti + n_u]
+    t_ref = int(t0[ok0].min())
+    Z0 = _fe_design(u0[ok0], t0[ok0], n_u, n_t, t_ref)
+    keep_col = np.asarray(Z0.sum(axis=0)).ravel() > 0
+    Z0 = Z0[:, keep_col]
+    A = (Z0.T @ Z0).tocsc()
+    coef = spsolve(A, Z0.T @ y[~treated][ok0])
+    Z1 = _fe_design(ui[ident], ti[ident], n_u, n_t, t_ref)[:, keep_col]
+    tau = y[ident] - Z1 @ coef
+    resid0 = y[~treated][ok0] - Z0 @ coef
+    return {"tau": tau, "ident": ident, "ok0": ok0, "Z0": Z0, "Z1": Z1, "A": A, "resid0": resid0}
+
+
+def _bjs_weights_v(core: dict, w1: np.ndarray) -> np.ndarray:
+    """Implied weights on the untreated observations of the linear estimator Σ w1·τ̂: v0 = −Z0 (Z0'Z0)⁻¹ Z1' w1."""
+    from scipy.sparse.linalg import spsolve
+    b = spsolve(core["A"], core["Z1"].T @ w1)
+    return -(core["Z0"] @ b)
+
+
+def did_imputation(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, anticipation: int = 0,
+                   cluster: str | None = None, horizons: int | None = None, pretrends: int | None = None,
+                   alpha: float = ALPHA, show: bool = True) -> dict:
+    """Imputation estimator of Borusyak, Jaravel & Spiess (2024, Review of Economic Studies), the second route for
+    staggered adoption next to att_gt (v2.5.0). gvar = first treated period (0 or NaN = never treated); a binary,
+    absorbing treatment (check with did_design). The panel may be unbalanced.
+
+    1. Unit and period fixed effects are fitted by OLS on the untreated observations only (never-treated units, and
+       treated units before g − anticipation), so treated outcomes never enter the counterfactual model.
+    2. Y(0) is imputed for every treated observation and τ̂_it = Y_it − Ŷ_it(0).
+    3. The overall ATT is the mean of τ̂ over the treated observations (each treated unit-period weighs the same, as
+       in att_gt's simple aggregation); the event-study coefficient at horizon h ≥ 0 is the mean over t − g = h.
+    Treated observations whose unit has no untreated period (always treated) or whose period has no untreated unit
+    cannot be imputed: they are dropped and counted (warned).
+
+    Standard errors: the conservative clustered variance of the paper (Theorem 3): every estimate is linear in Y,
+    Σ v_it Y_it, with v = w on treated observations and v = −Z0(Z0'Z0)⁻¹Z1'w on untreated ones; the variance is
+    Σ_clusters (Σ v_it ε̃_it)², with model residuals on untreated observations and, on treated ones, τ̂ minus the
+    average of τ̂ in its cohort-period cell (weighted by v²). It is conservative when effects vary within cells.
+    Clusters: units by default, cluster= a coarser column (the level of assignment).
+
+    Pre-trend test (separate from estimation, as in the paper): on the untreated observations only, regress Y on unit
+    and period effects and indicators of the pretrends = K periods before adoption (default: all available, cut to
+    keep K ≤ (G − 1)/10 with G clusters, warned); Wald test that they are zero with a clustered covariance and an
+    F(K, G − K) reference. Not rejecting does not show parallel trends.
+
+    Returns the contract dict in "overall" (estimand, estimate, se, ci_low, ci_high, p, n, method, warnings), the
+    event-study table "dynamic" (horizons ≥ 0 from the imputation, < 0 from the pre-trend regression), "pretrend",
+    the cell table "gt" (mean τ̂ and count per cohort-period, used by did_compare), the per-observation "tau" and
+    "converged" (True: the estimator has no iterative step)."""
+    from scipy import sparse
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    cols = [unit, time, y, gvar] + ([cluster] if cluster and cluster not in (unit, time, y, gvar) else [])
+    d = df[cols].dropna(subset=[unit, time, y]).copy()
+    d[gvar] = d[gvar].fillna(0).astype(float)
+    if (d.groupby(unit)[gvar].nunique() > 1).any():
+        raise ValueError(f"did_imputation: {gvar} must be constant within each {unit}")
+    if d.duplicated([unit, time]).any():
+        raise ValueError(f"did_imputation: repeated ({unit}, {time}) rows")
+    if cluster and (d.groupby(unit)[cluster].nunique() > 1).any():
+        raise ValueError(f"did_imputation: cluster '{cluster}' must be constant within each {unit}")
+    dlt = int(anticipation)
+    ui, uniq_u = pd.factorize(d[unit], sort=True)
+    periods = np.sort(d[time].unique())
+    ti = np.searchsorted(periods, d[time].to_numpy())
+    tv = d[time].to_numpy(float)
+    gv = d[gvar].to_numpy(float)
+    treated = (gv > 0) & (tv >= gv - dlt)
+    yv = d[y].to_numpy(float)
+    if treated.all() or not treated.any():
+        raise ValueError("did_imputation: need both treated and untreated observations")
+    core = _bjs_core(yv, ui, ti, gv, treated, len(uniq_u), len(periods))
+    ident = core["ident"]
+    n_drop = int((treated & ~ident).sum())
+    e = (tv - gv)[ident]
+    tau = core["tau"]
+    cl_codes = pd.factorize(d[cluster] if cluster else d[unit])[0]
+    n_cl = int(cl_codes.max() + 1)
+    cl0 = cl_codes[~treated][core["ok0"]]
+    cl1 = cl_codes[ident]
+    g1, t1 = gv[ident], tv[ident]
+    cell = pd.Series(list(zip(g1, t1)))
+
+    def estimate(w1):
+        """Estimate and Theorem 3 SE of Σ w1·τ̂ over the imputed treated observations."""
+        est = float(w1 @ tau)
+        v0 = _bjs_weights_v(core, w1)
+        v2 = pd.Series(w1 ** 2)
+        num = (v2 * tau).groupby(cell).transform("sum")
+        den = v2.groupby(cell).transform("sum")
+        tau_tilde = np.where(den.to_numpy() > 0, (num / den.where(den > 0, 1)).to_numpy(), 0.0)
+        eps1 = tau - tau_tilde
+        s = np.bincount(cl0, weights=v0 * core["resid0"], minlength=n_cl) + np.bincount(cl1, weights=w1 * eps1,
+                                                                                         minlength=n_cl)
+        return est, float(np.sqrt(np.sum(s ** 2)))
+
+    n1 = len(tau)
+    est, se = estimate(np.full(n1, 1.0 / n1))
+    hs = sorted(set(e.astype(int)))
+    if horizons is not None:
+        hs = [h for h in hs if h <= horizons]
+    rows = []
+    for h in hs:
+        m = e == h
+        w = np.where(m, 1.0 / m.sum(), 0.0)
+        eh, sh = estimate(w)
+        rows.append({"e": h, "att": eh, "se": sh, "n_obs": int(m.sum())})
+    dyn = pd.DataFrame(rows).set_index("e")
+    # ---- pre-trend test on the untreated observations only
+    pt = {"stat": np.nan, "df": 0, "p": np.nan, "reference": None, "leads": 0, "n_clusters": n_cl}
+    unt = ~treated
+    rel = np.where(gv > 0, tv - gv, np.nan)[unt]
+    avail = sorted({int(-r) for r in rel[np.isfinite(rel)] if r < -dlt}, key=int)
+    K_all = [k for k in avail if k > dlt]           # leads: periods before g − δ
+    K = len(K_all) if pretrends is None else min(int(pretrends), len(K_all))
+    cut = False
+    if K > max(1, (n_cl - 1) / 10):
+        K, cut = max(1, int((n_cl - 1) // 10)), True
+    lead_rows = []
+    if K >= 1:
+        leads = list(range(dlt + 1, dlt + K + 1))
+        L = np.column_stack([(rel == -k).astype(float) for k in leads])
+        L[~np.isfinite(rel)] = 0.0
+        u0, t0, y0 = ui[unt], ti[unt], yv[unt]
+        Z = _fe_design(u0, t0, len(uniq_u), len(periods), int(t0.min()))
+        Z = Z[:, np.asarray(Z.sum(axis=0)).ravel() > 0]
+        X = sparse.hstack([Z, sparse.csr_matrix(L)]).tocsc()
+        from scipy.sparse.linalg import spsolve
+        XtX = (X.T @ X).tocsc()
+        beta = spsolve(XtX, X.T @ y0)
+        res = y0 - X @ beta
+        k_fe = Z.shape[1]
+        # FWL: covariance of the lead coefficients from (X'X)^-1 restricted block, clustered meat
+        XtX_inv_L = spsolve(XtX, sparse.vstack([sparse.csr_matrix((k_fe, K)), sparse.identity(K)]).tocsc())
+        XtX_inv_L = XtX_inv_L.toarray() if hasattr(XtX_inv_L, "toarray") else np.asarray(XtX_inv_L).reshape(-1, K)
+        H = X @ XtX_inv_L                                  # n0 × K: rows of X (X'X)^-1 for the lead block
+        c0 = cl_codes[unt]
+        S = np.vstack([np.bincount(c0, weights=H[:, j] * res, minlength=n_cl) for j in range(K)]).T
+        Gc = len(np.unique(c0))
+        V = (S.T @ S) * Gc / max(Gc - 1, 1)
+        b = beta[k_fe:]
+        try:
+            W = float(b @ np.linalg.solve(V, b))
+            q = K
+            p_ = float(stats.f.sf(W / q * (Gc - q) / (Gc - 1), q, Gc - q)) if Gc > q + 1 else float(stats.chi2.sf(W, q))
+            ref = f"F({q}, {Gc - q})" if Gc > q + 1 else f"chi2({q})"
+            pt.update(stat=W, df=q, p=p_, reference=ref, leads=K, n_clusters=Gc)
+        except np.linalg.LinAlgError:
+            pass
+        sev = np.sqrt(np.clip(np.diag(V), 0, None))
+        for j, k in enumerate(leads):
+            lead_rows.append({"e": -k, "att": float(b[j]), "se": float(sev[j]), "n_obs": int(L[:, j].sum())})
+    if lead_rows:
+        dyn = pd.concat([pd.DataFrame(lead_rows).set_index("e"), dyn]).sort_index()
+    dyn["ci_low"], dyn["ci_high"] = _ci(dyn["att"], dyn["se"], alpha)
+    gt = pd.DataFrame({"g": g1, "t": t1, "tau": tau}).groupby(["g", "t"])["tau"].agg(["mean", "size"])
+    gt.columns = ["att", "n_obs"]
+    gt["e"] = gt.index.get_level_values("t") - gt.index.get_level_values("g")
+    warns = []
+    if n_drop:
+        warns.append(f"{n_drop} treated observations could not be imputed (their unit has no untreated period, or no "
+                     "untreated unit is observed in their period) and were left out of every estimate.")
+    if cut:
+        warns.append(f"Pre-trend test on the {K} lead(s) nearest to adoption only: with {n_cl} clusters a clustered "
+                     "covariance of more coefficients is too noisy for a Wald test.")
+    if np.isfinite(pt["p"]) and pt["p"] < alpha:
+        warns.append(f"Pre-trend test rejects (p = {pt['p']:.3g}, {pt['reference']}): parallel trends are doubtful; "
+                     "compare with att_gt (did_compare) and look at the leads.")
+    if n_cl < 30:
+        warns.append(f"{n_cl} clusters: the clustered SEs and the pre-trend test are unreliable; add "
+                     "causal.randomization_inference.")
+    method = (f"imputation (Borusyak, Jaravel & Spiess 2024), FE fitted on {int((~treated).sum())} untreated "
+              f"observations; SEs clustered by {cluster or unit} ({n_cl} clusters)" + (f", anticipation = {dlt}" if dlt else ""))
+    out = {"overall": _out("ATT (imputation)", est, se, int(len(d)), alpha=alpha, method=method, warnings=warns,
+                           n_treated_obs=n1, n_clusters=n_cl, anticipation=dlt),
+           "dynamic": dyn, "pretrend": pt, "pretrend_p": pt["p"], "gt": gt,
+           "tau": pd.DataFrame({unit: uniq_u[ui[ident]], time: t1, gvar: g1, "e": e, "tau": tau}),
+           "dropped_treated_obs": n_drop, "converged": True, "warnings": warns, "alpha": alpha}
+    if show:
+        o = out["overall"]
+        print(f"\nImputation estimator (BJS; {method})")
+        print(f"Overall ATT: {o['estimate']:.4f} (SE {o['se']:.4f}, {100 * (1 - alpha):g}% CI {o['ci_low']:.4f} to "
+              f"{o['ci_high']:.4f}); {n1} treated observations")
+        print("Event study (leads from the pre-trend regression on untreated observations):\n"
+              + dyn.to_string(float_format=lambda v: f"{v:.4f}"))
+        if pt["leads"]:
+            print(f"Pre-trend test ({pt['leads']} leads, untreated observations only): W = {pt['stat']:.3f}, "
+                  f"{pt['reference']} p = {pt['p']:.3f} → " + ("pre-trends detected" if pt["p"] < alpha else
+                                                            "does not reject; this does not show parallel trends"))
+        for w in warns:
+            print("  WARNING: " + w)
+    return out
+
+
+def _bjs_cells(y: np.ndarray, ui: np.ndarray, ti: np.ndarray, tv: np.ndarray, gv: np.ndarray, n_u: int, n_t: int,
+               dlt: int) -> pd.DataFrame:
+    """Mean τ̂ of the imputation estimator per (cohort, period) cell, without SEs (used inside did_compare's bootstrap)."""
+    treated = (gv > 0) & (tv >= gv - dlt)
+    core = _bjs_core(y, ui, ti, gv, treated, n_u, n_t)
+    idt = core["ident"]
+    return pd.DataFrame({"g": gv[idt], "t": tv[idt], "tau": core["tau"]}).groupby(["g", "t"])["tau"].mean()
+
+
+def did_compare(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str = "notyet",
+                anticipation: int = 0, cluster: str | None = None, n_boot: int = 199, seed: int = 0,
+                alpha: float = ALPHA, show: bool = True) -> dict:
+    """Callaway-Sant'Anna (att_gt) against the imputation estimator (did_imputation) on the same data: a second route
+    with a different method for a staggered DiD (v2.5.0). The guide of de Chaisemartin & D'Haultfœuille reports that
+    the two families are always close except where pre-trend tests reject, so a significant gap is a finding that
+    points to the pre-trends, not a choice between two numbers.
+
+    Same target: both are averaged over the post-period (cohort, period) cells that both define, with the cohort sizes
+    of att_gt as weights (its simple aggregation); cells that only one route estimates (a cohort without a base period
+    in att_gt, a period with no untreated unit in the imputation) are listed and left out, so the gap is not
+    mechanical. The difference is tested with its own SE from a paired bootstrap: in every draw of units (whole
+    clusters with cluster=) both estimators are recomputed on the same resampled data, and the test is at alpha.
+    Requires a balanced panel (att_gt). Pass the result to reporting.cross_check(res["cross_check"],
+    se=res["diff_se"], tol_se=Φ⁻¹(1 − alpha/2)) to record it as an independent check (kind "method")."""
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    eng = _cs_engine(df, unit, time, y, gvar, control, anticipation, [], "dr", "base", cluster)
+    Ym, G, T, dlt = eng["Ym"], eng["G"], eng["T"], eng["dlt"]
+    n_u, n_t = Ym.shape
+    tv_full = np.tile(T.astype(float), n_u)
+
+    def routes(idx):
+        cs = eng["compute"](idx)
+        cs = cs[cs["e"] >= 0].set_index(["g", "t"])
+        k = len(idx)
+        yv = Ym[idx].ravel()
+        gv = np.repeat(G[idx].astype(float), n_t)
+        ui = np.repeat(np.arange(k), n_t)
+        ti = np.tile(np.arange(n_t), k)
+        bj = _bjs_cells(yv, ui, ti, np.tile(T.astype(float), k), gv, k, n_t, dlt)
+        return cs, bj
+
+    cs0, bj0 = routes(np.arange(n_u))
+    bj0.index = pd.MultiIndex.from_arrays([bj0.index.get_level_values(0), bj0.index.get_level_values(1)],
+                                          names=["g", "t"])
+    cs0.index = pd.MultiIndex.from_arrays([cs0.index.get_level_values(0).astype(float),
+                                          cs0.index.get_level_values(1).astype(float)], names=["g", "t"])
+    common = cs0.index.intersection(bj0.index)
+    only_cs = [tuple(x) for x in cs0.index.difference(common)]
+    only_bjs = [tuple(x) for x in bj0.index.difference(common)
+                if x[1] >= x[0]]                                  # post cells only
+    if len(common) == 0:
+        raise ValueError("did_compare: the two estimators share no post-period cell")
+    wts = cs0.loc[common, "n_g"].to_numpy(float)
+
+    def agg(cs, bj):
+        cs = cs.copy()
+        cs.index = pd.MultiIndex.from_arrays([cs.index.get_level_values(0).astype(float),
+                                             cs.index.get_level_values(1).astype(float)])
+        a = cs["att"].reindex(common).to_numpy(float)
+        b = bj.reindex(common).to_numpy(float)
+        if np.isnan(a).any() or np.isnan(b).any():
+            return np.nan, np.nan
+        return float(wts @ a / wts.sum()), float(wts @ b / wts.sum())
+
+    est_cs, est_bj = agg(cs0, bj0)
+    diff = est_cs - est_bj
+    draws = []
+    if n_boot and n_boot > 1:
+        rng = np.random.default_rng(seed)
+        for _ in range(n_boot):
+            idx = _cs_draw(rng, eng)
+            try:
+                c, b = routes(idx)
+            except Exception:  # noqa: BLE001 — a degenerate draw (no untreated observation, singular FE): skipped
+                draws.append((np.nan, np.nan))
+                continue
+            draws.append(agg(c, b))
+    D = np.array(draws, float).reshape(-1, 2)
+    okd = np.isfinite(D).all(axis=1)
+    n_ok = int(okd.sum())
+    se_cs = float(np.std(D[okd, 0], ddof=1)) if n_ok > 1 else np.nan
+    se_bj = float(np.std(D[okd, 1], ddof=1)) if n_ok > 1 else np.nan
+    se_d = float(np.std(D[okd, 0] - D[okd, 1], ddof=1)) if n_ok > 1 else np.nan
+    z = diff / se_d if np.isfinite(se_d) and se_d > 0 else np.nan
+    p = float(2 * stats.norm.sf(abs(z))) if np.isfinite(z) else np.nan
+    diverge = bool(np.isfinite(p) and p < alpha)
+    corr = float(np.corrcoef(D[okd].T)[0, 1]) if n_ok > 2 else np.nan
+    warns = []
+    if diverge:
+        warns.append(f"Callaway-Sant'Anna ({est_cs:.4f}) and the imputation estimator ({est_bj:.4f}) differ by "
+                     f"{diff:.4f} (SE of the difference {se_d:.4f}, p = {p:.3g}): the two routes disagree, which in "
+                     "the guide's meta-analysis happened only when pre-trend tests rejected. Look at att_gt's and "
+                     "did_imputation's pre-trend tests and leads before reporting either number.")
+    if only_cs or only_bjs:
+        warns.append(f"Compared on {len(common)} common post-period cells; left out: {len(only_cs)} cell(s) only in "
+                     f"att_gt and {len(only_bjs)} only in did_imputation (each route's overall ATT also averages over "
+                     "its own cells).")
+    if n_boot and n_ok < n_boot:
+        warns.append(f"{n_boot - n_ok} of {n_boot} bootstrap draws could not compute both routes and were skipped.")
+    if cluster and (eng["n_cl"] < 30 or eng["n_cl_treated"] < 6):
+        warns.append(f"{eng['n_cl']} clusters ({eng['n_cl_treated']} treated): the bootstrap SE of the difference is "
+                     "unreliable; read the comparison as descriptive.")
+    out = {"cs": est_cs, "bjs": est_bj, "difference": diff, "diff_se": se_d, "z": z, "p": p, "diverge": diverge,
+           "se_cs": se_cs, "se_bjs": se_bj, "corr": corr, "cells_common": len(common),
+           "cells_only_cs": only_cs, "cells_only_bjs": only_bjs, "draws_used": n_ok, "alpha": alpha,
+           "control": control, "cross_check": pd.Series({"Callaway-Sant'Anna": est_cs, "imputation (BJS)": est_bj},
+                                                        name="ATT on common cells"),
+           "warnings": warns}
+    if show:
+        print(f"\nCallaway-Sant'Anna ({control} controls) vs imputation (BJS), {len(common)} common post cells, "
+              f"{n_ok} paired bootstrap draws" + (f" by {cluster}" if cluster else ""))
+        print(f"  CS {est_cs:.4f} (SE {se_cs:.4f}); BJS {est_bj:.4f} (SE {se_bj:.4f}); difference {diff:.4f} "
+              f"(SE {se_d:.4f}, p = {p:.3f}) → " + ("the routes DISAGREE at alpha = " + f"{alpha:g}" if diverge else
+                                                   f"no significant difference at alpha = {alpha:g}"))
+        for w in warns:
+            print("  WARNING: " + w)
     return out
 
 
