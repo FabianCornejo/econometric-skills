@@ -39,41 +39,43 @@ for (p in pkgs) cat(p, as.character(packageVersion(p)), "\n")
 out <- list(panel = panel_file, panel_md5 = panel_md5, R = R.version.string,
             versions = lapply(setNames(pkgs, pkgs), function(p) as.character(packageVersion(p))))
 grab <- function(x) tryCatch(as.data.frame(x), error = function(e) paste("error:", conditionMessage(e)))
+# print every row; a failure to print must not stop the run (v2.5.0: print(x, n = 50) failed on a data.table)
+show_df <- function(x) tryCatch(print(as.data.frame(x), digits = 10), error = function(e) print(x))
 
 # ---- 1. Imputation estimator (balanced panel), never-treated coded as g = 0
 cat("\n==== didimputation: static ATT, SEs clustered by unit ====\n")
 s1 <- tryCatch(did_imputation(data = df, yname = "y", gname = "g", tname = "t", idname = "id"),
                error = function(e) e)
-print(s1); out$bjs_static <- grab(s1)
+show_df(s1); out$bjs_static <- grab(s1)
 
 cat("\n==== didimputation: event study (all horizons) with pre-trend coefficients ====\n")
 s2 <- tryCatch(did_imputation(data = df, yname = "y", gname = "g", tname = "t", idname = "id",
                               horizon = TRUE, pretrends = TRUE), error = function(e) e)
-print(s2, n = 50); out$bjs_event <- grab(s2)
+show_df(s2); out$bjs_event <- grab(s2)
 
 cat("\n==== didimputation: static ATT, SEs clustered by state ====\n")
 s3 <- tryCatch(did_imputation(data = df, yname = "y", gname = "g", tname = "t", idname = "id",
                               cluster_var = "state"), error = function(e) e)
-print(s3); out$bjs_static_state <- grab(s3)
+show_df(s3); out$bjs_static_state <- grab(s3)
 
 cat("\n==== didimputation: unbalanced version (keep_unb == 1) ====\n")
 du <- df[df$keep_unb == 1, ]
 s4 <- tryCatch(did_imputation(data = du, yname = "y", gname = "g", tname = "t", idname = "id"),
                error = function(e) e)
-print(s4); out$bjs_static_unbalanced <- grab(s4)
+show_df(s4); out$bjs_static_unbalanced <- grab(s4)
 
 # ---- 2. TWFE weights (de Chaisemartin & D'Haultfoeuille 2020), binary and non-binary treatment
 tw <- function(D) {
   r <- tryCatch(twowayfeweights(df, Y = "y", G = "id", T = "t", D = D, type = "feTR", summary_measures = TRUE),
                 error = function(e) e)
-  print(r)
-  cat("\n-- str of the result --\n"); str(r, max.level = 2)
+  tryCatch(print(r), error = function(e) cat("print failed:", conditionMessage(e), "\n"))
+  cat("\n-- str of the result --\n"); tryCatch(str(r, max.level = 2), error = function(e) NULL)
   r
 }
 cat("\n==== TwoWayFEWeights: binary treatment d (feTR) ====\n")
-w1 <- tw("d"); out$twfe_weights_binary <- tryCatch(unclass(w1), error = function(e) paste("error:", conditionMessage(e)))
+w1 <- tw("d"); out$twfe_weights_binary <- tryCatch(lapply(unclass(w1), function(z) tryCatch(as.data.frame(z), error = function(e) z)), error = function(e) paste("error:", conditionMessage(e)))
 cat("\n==== TwoWayFEWeights: non-binary treatment dose (feTR) ====\n")
-w2 <- tw("dose"); out$twfe_weights_dose <- tryCatch(unclass(w2), error = function(e) paste("error:", conditionMessage(e)))
+w2 <- tw("dose"); out$twfe_weights_dose <- tryCatch(lapply(unclass(w2), function(z) tryCatch(as.data.frame(z), error = function(e) z)), error = function(e) paste("error:", conditionMessage(e)))
 
 # TWFE coefficients computed directly, as an anchor for the weights
 out$twfe_beta_binary <- unname(coef(lm(y ~ d + factor(id) + factor(t), data = df))["d"])
