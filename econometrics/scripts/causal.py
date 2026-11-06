@@ -20,12 +20,17 @@ Regression discontinuity
     density_test(x, cutoff)                       McCrary (2008)-type manipulation test
 
 Panel designs
+    did_design(df, unit, time, d)                 first step of any DiD (v2.5.0): binary or dose, absorbing or
+                                                  reversible, one or several dates, never-treated units and stayers;
+                                                  the design among the five of de Chaisemartin-D'Haultfœuille's guide,
+                                                  the estimators that fit it and gvar (binary absorbing only)
     event_study(df, unit, time, y, event_time)    TWFE leads/lags with clustered SE and joint pre-trend test
     att_gt(df, unit, time, y, gvar)               Callaway-Sant'Anna (2021) group-time ATTs, robust to staggered timing;
                                                   anticipation=δ; warns when the effect starts before the recorded date;
                                                   covariates= in levels (conditional parallel trends): doubly robust
                                                   (Sant'Anna-Zhao 2020), outcome regression or IPW, with the other two
-                                                  recomputed as an independent check
+                                                  recomputed as an independent check; joint pre-trend test
+                                                  (F reference, fewer restrictions with few clusters; v2.5.0)
     bacon_decomposition(df, unit, time, y, gvar)  Goodman-Bacon (2021): TWFE as a weighted average of every 2x2,
                                                   with the weight of forbidden (already-treated control) comparisons
     twfe_covariate_diagnostic(df, ..., covariates) hidden linearity bias of TWFE with covariates (Caetano-Callaway
@@ -507,6 +512,222 @@ def rdd_robustness(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: flo
 # =============================================================================
 # Panel designs
 # =============================================================================
+_DESIGN_LABELS = {
+    "canonical": "canonical DiD (binary, absorbing, one adoption date, never-treated units)",
+    "staggered": "staggered adoption (binary, absorbing, several adoption dates)",
+    "heterogeneous_adoption": "heterogeneous adoption (all untreated at the start, one date, different doses)",
+    "first_switch": "staggered first switch (non-binary or non-absorbing treatment, first changes at different dates)",
+    "other": "other design (no unit to compare with the switchers: no heterogeneity-robust DiD estimator)",
+}
+
+
+def did_design(df: pd.DataFrame, unit: str, time: str, d: str, cluster: str | None = None,
+               show: bool = True) -> dict:
+    """First step of any difference-in-differences (v2.5.0): what kind of treatment is this, and which estimators
+    fit it? Classifies the panel into the five designs of de Chaisemartin & D'Haultfœuille's guide "Which
+    difference-in-differences estimator should I use?" (Credible Answers):
+
+      canonical               binary, absorbing, every treated unit starts at the same date, never-treated units
+      staggered               binary, absorbing, adoption at different dates
+      heterogeneous_adoption  every unit untreated at the start, treated units switch on at one date with
+                              different doses
+      first_switch            first treatment changes at different dates, with a non-binary or non-absorbing
+                              treatment (staggered adoption is its binary-absorbing special case)
+      other                   none of the above: no switcher has a unit with the same starting treatment that has
+                              not switched yet (e.g. the treatment changes for every unit every period); the guide
+                              lists no heterogeneity-robust estimator for these
+
+    d: the treatment of each unit in each period (binary or a dose), not a first-treated date: gvar is an output.
+    Definitions used here (the guide does not define them): a stayer is a unit whose treatment never changes in the
+    panel; a switcher changes at least once; its first switch is the first period whose treatment differs from the
+    unit's first observed one; a switcher is comparable when some unit with the same starting treatment has not
+    switched yet at that date (a stayer or a later switcher). Reversal: a binary treatment going from 1 back to 0.
+
+    Returns: design and label; checks (criterion, value, what it implies); per-unit table (start, number of changes,
+    first switch, reversals); cohorts (first-switch date, units, pre-periods in the panel); estimators of the skill
+    and outside it; the suggested comparison group (the guide recommends not-yet-treated controls when they exist);
+    gvar (first treated period, 0 = never treated, indexed by unit; map it with df[unit].map(res["gvar"])) only for a
+    binary absorbing treatment, else None; warnings. Nothing is imputed: rows with a missing d are counted and left
+    out."""
+    cols = [unit, time, d] + ([cluster] if cluster else [])
+    x = df[cols].copy()
+    n_missing = int(x[d].isna().sum())
+    x = x.dropna(subset=[d]).sort_values([unit, time])
+    if x.empty:
+        raise ValueError("did_design: the treatment column has no observed values")
+    if x.duplicated([unit, time]).any():
+        raise ValueError(f"did_design: repeated ({unit}, {time}) rows; one row per unit and period is needed")
+    vals = np.unique(x[d].to_numpy(float))
+    binary = bool(np.isin(vals, [0.0, 1.0]).all())
+    periods = np.sort(x[time].unique())
+    n_per = x.groupby(unit)[time].size()
+    balanced = bool((n_per == len(periods)).all())
+    t_num = pd.api.types.is_numeric_dtype(x[time])
+    regular = bool(t_num and np.allclose(np.diff(periods.astype(float)), 1.0)) if len(periods) > 1 else True
+    # per-unit trajectory
+    prev = x.groupby(unit)[d].shift()
+    chg = prev.notna() & (x[d] != prev)
+    x["_chg"] = chg
+    x["_rev"] = chg & (prev == 1) & (x[d] == 0) if binary else False
+    g_by = x.groupby(unit)
+    start = g_by[d].first()
+    first_t = g_by[time].first()
+    n_chg = g_by["_chg"].sum().astype(int)
+    n_rev = g_by["_rev"].sum().astype(int) if binary else pd.Series(0, index=start.index)
+    first_switch = x[x["_chg"]].groupby(unit)[time].first().reindex(start.index)
+    units = pd.DataFrame({"start": start, "first_period": first_t, "changes": n_chg, "first_switch": first_switch,
+                          "reversals": n_rev})
+    stayer = units["changes"] == 0
+    switchers = units[~stayer]
+    absorbing = bool(binary and (units["reversals"] == 0).all())
+    if binary:
+        never = stayer & (units["start"] == 0)
+        always = units["start"] == 1
+    else:
+        never = stayer & (units["start"] == 0)
+        always = pd.Series(False, index=units.index)
+    late_entry = always & (units["first_period"] > periods[0])
+    # comparable switchers: a unit with the same start that has not switched yet at the switch date
+    observed = set(zip(x[unit], x[time]))
+    comp = pd.Series(False, index=switchers.index)
+    for u, row in switchers.iterrows():
+        f = row["first_switch"]
+        same = units[(units["start"] == row["start"]) & (units.index != u)]
+        later = same[same["first_switch"].isna() | (same["first_switch"] > f)]
+        comp[u] = any((v, f) in observed for v in later.index)     # observed at the switch date
+    share_comp = float(comp.mean()) if len(comp) else np.nan
+    dates = np.sort(switchers["first_switch"].unique())
+    all_untreated_start = bool((units["start"] == 0).all())
+    # design
+    if len(switchers) == 0:
+        design = "other"
+    elif binary and absorbing:
+        if len(dates) == 1:
+            design = "canonical" if never.any() else "other"
+        else:
+            design = "staggered" if share_comp > 0 else "other"
+    elif not binary and all_untreated_start and len(dates) == 1:
+        design = "heterogeneous_adoption"
+    else:
+        design = "first_switch" if share_comp > 0 else "other"
+    # cohorts (first-switch dates) and pre-periods
+    coh = switchers.groupby("first_switch").size().rename("units").to_frame()
+    coh["pre_periods"] = [int((periods < t).sum()) for t in coh.index]
+    coh.index.name = "first_switch"
+    # clusters
+    cl = {}
+    if cluster:
+        cl_treated = x.groupby(cluster)[d].apply(lambda s: bool((s != 0).any()))
+        varies = x.groupby([cluster, time])[d].nunique()
+        cl = {"clusters": int(x[cluster].nunique()), "treated_clusters": int(cl_treated.sum()),
+              "cluster_periods_with_mixed_treatment": int((varies > 1).sum())}
+    # estimators and comparison group
+    # the guide recommends not-yet-treated controls (more transparent than imputation, slightly less noisy)
+    control = {"canonical": "never", "staggered": "notyet"}.get(design)
+    skill, external = [], []
+    if design == "canonical":
+        skill = ["causal.att_gt(control='never')", "causal.did_imputation", "causal.event_study",
+                 "TWFE (acceptable without covariates; with covariates use att_gt(covariates=...))"]
+    elif design == "staggered":
+        skill = [f"causal.att_gt(control='{control}')", "causal.did_imputation", "causal.did_compare",
+                 "causal.did_timing_sensitivity", "for an existing TWFE: causal.bacon_decomposition and "
+                 "causal.twfe_weights"]
+        external = ["R/Stata csdid, did_imputation, did_multiplegt_dyn"]
+    elif design == "heterogeneous_adoption":
+        skill = ["for an existing TWFE: causal.twfe_weights (non-binary treatment)"]
+        external = ["did_had (R, Stata; Python version listed by the guide, not checked)"]
+    elif design == "first_switch":
+        skill = ["for an existing TWFE: causal.twfe_weights"]
+        external = ["did_multiplegt_dyn (R, Stata; Python version listed by the guide, not checked)"]
+        if binary:
+            external.append("if lagged effects are ruled out: did_multiplegt_stat, or imputation estimators "
+                            "(R/Stata did_imputation, did2s, fect), which the guide says are valid only for a "
+                            "binary treatment")
+    else:
+        skill = ["for an existing TWFE: causal.twfe_weights (how much of it rests on negative weights)"]
+    gvar = None
+    if binary and absorbing:
+        gvar = pd.Series(np.where(units["start"] == 1, units["first_period"],
+                                  units["first_switch"].fillna(0)), index=units.index, name="gvar")
+    # warnings
+    w = []
+    if n_missing:
+        w.append(f"{n_missing} rows have a missing treatment and were left out; check whether they are missing at "
+                 "random before estimating.")
+    if binary and not absorbing:
+        nr = int((units["reversals"] > 0).sum())
+        w.append(f"The treatment is reversible: {nr} unit(s) go from 1 back to 0 ({int(units['reversals'].sum())} "
+                 "reversals). It must not enter att_gt, did_imputation, bacon_decomposition or "
+                 "randomization_inference as a first-treated date (gvar): those assume that treatment, once on, "
+                 "stays on. No gvar was built.")
+    if not binary:
+        w.append(f"The treatment is not binary ({len(vals)} distinct values): the skill's DiD estimators take a "
+                 "binary absorbing treatment; none of them may be run on a dichotomized dose without saying that "
+                 "the estimand changed.")
+    if design == "other":
+        w.append("No heterogeneity-robust DiD estimator applies to this design: a TWFE coefficient here is not a "
+                 "robust causal effect, and must not be reported as one. causal.twfe_weights shows how much of it "
+                 "rests on negative weights.")
+    if design == "first_switch" and share_comp < 1:
+        w.append(f"{1 - share_comp:.0%} of the switchers have no unit with the same starting treatment that has not "
+                 "switched yet: robust estimators drop them.")
+    if always.any():
+        w.append(f"{int(always.sum())} unit(s) are treated from their first observed period (no pre-period): they "
+                 "cannot identify an effect and serve as controls only in a TWFE, where they are forbidden "
+                 "comparisons." + (f" {int(late_entry.sum())} of them enter the panel late already treated: check "
+                                   "whether earlier periods are missing." if late_entry.any() else ""))
+    if design == "staggered" and not never.any():
+        w.append("No never-treated units: use control='notyet'; the last cohort has no comparison group after its "
+                 "own date, so its post-period cells are not estimated.")
+    if design in ("canonical", "staggered") and len(coh) and (coh["pre_periods"] == 0).any():
+        w.append("Some cohorts have no pre-period inside the panel and will be dropped by att_gt.")
+    if not balanced:
+        w.append(f"Unbalanced panel ({int((n_per < len(periods)).sum())} units miss periods): att_gt and "
+                 "bacon_decomposition need a balanced panel; did_imputation does not.")
+    if not regular:
+        w.append(f"The {time} column is not a sequence of consecutive integers: att_gt uses g − 1 as the base period;"
+                 " recode time as 1, 2, 3, … first.")
+    if cluster and cl["cluster_periods_with_mixed_treatment"]:
+        w.append(f"The treatment varies inside {cl['cluster_periods_with_mixed_treatment']} {cluster}-period cells: it"
+                 f" is assigned below the {cluster} level. Cluster at the level of assignment.")
+    if cluster and (cl["clusters"] < 30 or cl["treated_clusters"] < 6):
+        w.append(f"{cl['clusters']} clusters ({cl['treated_clusters']} treated): clustered and bootstrap SEs are "
+                 "unreliable; plan causal.randomization_inference.")
+    checks = pd.DataFrame([
+        ("binary treatment", binary, f"values: {', '.join(f'{v:g}' for v in vals[:6])}" + (" …" if len(vals) > 6 else "")),
+        ("absorbing (no 1 → 0)", absorbing if binary else None,
+         "" if not binary else f"{int(units['reversals'].sum())} reversals in {int((units['reversals'] > 0).sum())} units"),
+        ("switchers / stayers", f"{len(switchers)} / {int(stayer.sum())}", ""),
+        ("first-switch dates", len(dates), ", ".join(str(t) for t in dates[:8]) + (" …" if len(dates) > 8 else "")),
+        ("never-treated units", int(never.sum()), ""),
+        ("treated from the first period", int(always.sum()), "no pre-period"),
+        ("switchers with a not-yet-switched comparison", f"{share_comp:.0%}" if len(comp) else "—",
+         "same starting treatment, not switched at that date"),
+        ("all untreated at the start", all_untreated_start, ""),
+        ("balanced panel", balanced, f"{len(units)} units × {len(periods)} periods"),
+        ("consecutive integer periods", regular, ""),
+    ] + [(k.replace("_", " "), v, "") for k, v in cl.items()], columns=["criterion", "value", "note"])
+    out = {"design": design, "label": _DESIGN_LABELS[design], "binary": binary, "absorbing": absorbing,
+           "checks": checks, "units": units, "cohorts": coh, "never_treated": int(never.sum()),
+           "always_treated": int(always.sum()), "share_comparable": share_comp, "balanced": balanced,
+           "control": control, "estimators": {"skill": skill, "external": external}, "gvar": gvar,
+           "n_units": len(units), "n_periods": len(periods), "missing_treatment": n_missing, "warnings": w,
+           **({"clusters": cl} if cluster else {})}
+    if show:
+        print(f"\nDiD design: {out['label']}")
+        print(checks.to_string(index=False))
+        if len(coh):
+            print("Cohorts (first switch):\n" + coh.to_string())
+        print("Estimators in the skill: " + ("; ".join(skill) if skill else "none"))
+        if external:
+            print("Outside the skill: " + "; ".join(external))
+        if control:
+            print(f"Comparison group: control='{control}'")
+        for m in w:
+            print("  WARNING: " + m)
+    return out
+
+
 def event_study(df: pd.DataFrame, unit: str, time: str, y: str, event_time: str, leads: int = 4,
                 lags: int = 4, ref: int = -1, bin_endpoints: bool = True, controls: list[str] | None = None,
                 show: bool = True) -> dict:

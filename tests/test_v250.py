@@ -1,5 +1,12 @@
 """Tests for v2.5.0: DiD design, imputation (Borusyak-Jaravel-Spiess), pre-trend tests, and the GARCH half-life CI.
 
+1. causal.did_design: one hand-built panel per design of the guide (canonical, staggered with and without
+   never-treated units, reversals, heterogeneous adoption, first switch, other), plus unbalanced panels, units treated
+   from the first period, treatment varying inside clusters, missing treatment and irregular periods. The expected
+   classification and counts come from how each panel was built (planted dates, reversals), not from the function.
+4. causal.att_gt: alpha, and the joint pre-trend test (Wald recomputed by a plain inverse, size and power in
+   simulation, the level chosen with few clusters).
+
 8. volatility.garch_fit: half_life_ci from the limits of persistence_ci. The checks never reuse ln 0.5 / ln p: they
    verify that p^h = 0.5 at each limit (the definition of a half-life, inverted), compare with the figures of the
    Ibovespa validation (claude/teste-garch-v2472-2026-11-06.md: CI 0.97138 to 0.99127 → 23.9 and 79.1 trading
@@ -192,6 +199,105 @@ size_c = np.array([p for p in size_c if np.isfinite(p)])
 rc_rate = float(np.mean(size_c < 0.05))
 check("8-cluster pre-trend test (1 restriction): finite p in most panels and size not above 12% (60 panels)",
       len(size_c) >= 50 and rc_rate <= 0.12, f"{len(size_c)} finite, rejection rate {rc_rate:.3f}")
+
+# ---------------------------------------------------------------- 1. did_design
+def treat_panel(paths, T, start=1):
+    """Panel from planted treatment paths: paths[u] = list of T treatment values (None = unit not observed)."""
+    rows = []
+    for u, path in enumerate(paths):
+        for k, v in enumerate(path):
+            if v is not None:
+                rows.append((u, start + k, float(v), u % 4))
+    return pd.DataFrame(rows, columns=["id", "t", "d", "cl"])
+
+
+def adopt(g, T):
+    """Binary absorbing path: 0 before g, 1 from g (g = 0: never treated)."""
+    return [0 if (g == 0 or t < g) else 1 for t in range(1, T + 1)]
+
+
+T8 = 8
+canon = treat_panel([adopt(0, T8)] * 6 + [adopt(5, T8)] * 6, T8)
+r = ca.did_design(canon, "id", "t", "d", show=False)
+check("did_design: canonical (one date, never-treated)", r["design"] == "canonical" and r["control"] == "never"
+      and r["never_treated"] == 6, r["design"])
+
+g_plant = [0] * 4 + [3] * 3 + [5] * 3 + [6] * 2
+stag = treat_panel([adopt(g, T8) for g in g_plant], T8)
+r = ca.did_design(stag, "id", "t", "d", show=False)
+check("did_design: staggered with never-treated, not-yet controls suggested (the guide's recommendation)",
+      r["design"] == "staggered" and r["control"] == "notyet" and list(r["cohorts"].index) == [3, 5, 6]
+      and list(r["cohorts"]["units"]) == [3, 3, 2] and list(r["cohorts"]["pre_periods"]) == [2, 4, 5], r["design"])
+check("did_design: gvar equals the planted adoption dates (0 = never)",
+      r["gvar"] is not None and r["gvar"].tolist() == g_plant)
+stag["y"] = np.random.default_rng(0).normal(size=len(stag)) + stag["d"]
+stag["g"] = stag["id"].map(r["gvar"])
+rr = ca.att_gt(stag, "id", "t", "y", "g", control=r["control"], n_boot=0, show=False)
+check("did_design → att_gt: the returned gvar and control run as they are", np.isfinite(rr["overall"]["estimate"]))
+
+nonever = treat_panel([adopt(g, T8) for g in [3] * 3 + [5] * 3 + [7] * 3], T8)
+r = ca.did_design(nonever, "id", "t", "d", show=False)
+check("did_design: staggered without never-treated → notyet and the last-cohort warning",
+      r["design"] == "staggered" and r["never_treated"] == 0 and r["control"] == "notyet"
+      and any("No never-treated" in w for w in r["warnings"]) and abs(r["share_comparable"] - 6 / 9) < 1e-12,
+      f"comparable {r['share_comparable']:.2f}")
+
+# reversals: 2 units with planted 1 → 0 (one of them twice)
+paths = [adopt(0, T8)] * 4 + [adopt(4, T8)] * 4
+paths += [[0, 0, 1, 1, 0, 0, 0, 0], [0, 0, 1, 0, 1, 0, 1, 1]]
+rev = treat_panel(paths, T8)
+r = ca.did_design(rev, "id", "t", "d", show=False)
+check("did_design: 2 units with 1 → 0 (3 reversals) → not absorbing, first switch, no gvar",
+      not r["absorbing"] and r["design"] == "first_switch" and r["gvar"] is None
+      and int(r["units"]["reversals"].sum()) == 3 and int((r["units"]["reversals"] > 0).sum()) == 2
+      and any("must not enter" in w for w in r["warnings"]))
+# boundary: a single 1 → 0 is enough, and what must NOT happen (a gvar, an absorbing flag)
+one = treat_panel([adopt(0, T8)] * 4 + [adopt(4, T8)] * 3 + [[0, 0, 0, 1, 1, 1, 1, 0]], T8)
+r1 = ca.did_design(one, "id", "t", "d", show=False)
+check("did_design boundary: one reversal in the last period removes absorbing and gvar",
+      r1["absorbing"] is False and r1["gvar"] is None and r1["design"] != "staggered" and r1["design"] != "canonical")
+
+dose = treat_panel([[0] * T8] * 3 + [[0] * 4 + [v] * 4 for v in (0.5, 1.0, 2.0, 3.5)], T8)
+r = ca.did_design(dose, "id", "t", "d", show=False)
+check("did_design: dose at one date, all untreated at the start → heterogeneous adoption, no gvar",
+      r["design"] == "heterogeneous_adoption" and not r["binary"] and r["gvar"] is None
+      and any("did_had" in e for e in r["estimators"]["external"]))
+dose2 = treat_panel([[0] * 4 + [v] * 4 for v in (0.5, 1.0, 2.0, 3.5)], T8)
+check("did_design: heterogeneous adoption also without never-treated units",
+      ca.did_design(dose2, "id", "t", "d", show=False)["design"] == "heterogeneous_adoption")
+
+rng = np.random.default_rng(1)
+every = treat_panel([list(rng.uniform(0, 1, T8)) for _ in range(10)], T8)
+r = ca.did_design(every, "id", "t", "d", show=False)
+check("did_design: a dose that changes for every unit every period → other, TWFE not robust",
+      r["design"] == "other" and any("not a robust causal effect" in w for w in r["warnings"]))
+fs = treat_panel([[1] * T8] * 3 + [[1, 1, 1, 2, 2, 2, 2, 2]] * 3 + [[1] * 5 + [3, 3, 3]] * 3, T8)
+check("did_design: dose with a common start and first changes at two dates, stayers → first switch",
+      ca.did_design(fs, "id", "t", "d", show=False)["design"] == "first_switch")
+
+unb = stag.drop(stag.index[[3, 20, 21]])
+r = ca.did_design(unb, "id", "t", "d", show=False)
+check("did_design: unbalanced panel flagged (att_gt needs balanced, did_imputation does not)",
+      not r["balanced"] and any("Unbalanced" in w for w in r["warnings"]))
+alw = treat_panel([adopt(0, T8)] * 4 + [adopt(4, T8)] * 4 + [adopt(1, T8)] * 2, T8)
+r = ca.did_design(alw, "id", "t", "d", show=False)
+check("did_design: 2 units treated from period 1 are counted and get g = first period (att_gt drops them)",
+      r["always_treated"] == 2 and r["gvar"].tolist()[-2:] == [1, 1] and any("first observed period" in w
+                                                                         for w in r["warnings"]))
+mixed = stag.copy()
+mixed["cl"] = mixed["id"] % 2          # treated and untreated units share clusters
+r = ca.did_design(mixed, "id", "t", "d", cluster="cl", show=False)
+check("did_design: treatment varying inside cluster-period cells is flagged (assignment below the cluster)",
+      r["clusters"]["cluster_periods_with_mixed_treatment"] > 0 and any("assigned below" in w for w in r["warnings"]))
+check("did_design: 2 clusters → few-clusters warning", any("randomization_inference" in w for w in r["warnings"]))
+miss = stag.copy()
+miss.loc[miss.index[:5], "d"] = np.nan
+check("did_design: missing treatment rows counted, not imputed",
+      ca.did_design(miss, "id", "t", "d", show=False)["missing_treatment"] == 5)
+gap = stag.copy()
+gap["t"] = gap["t"] * 2
+check("did_design: periods that are not consecutive integers are flagged",
+      any("consecutive integers" in w for w in ca.did_design(gap, "id", "t", "d", show=False)["warnings"]))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
