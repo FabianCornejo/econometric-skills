@@ -242,7 +242,7 @@ def var_analysis(df, maxlags: int = 8, ic: str = "bic", lags: int | None = None,
                     "as stationary (a unit root is not ruled out): a VAR in levels is consistent but Granger tests and long-horizon IRFs are "
                     "unreliable; test cointegration (vecm_fit) or use differences")
     if trend_only:
-        warn.append(f"{', '.join(trend_only)} is stationary only around a deterministic trend, and this VAR has trend "
+        warn.append(f"{', '.join(trend_only)} {'are' if len(trend_only) > 1 else 'is'} stationary only around a deterministic trend, and this VAR has trend "
                     f"'{trend}': add the trend (trend='ct') or detrend the series before reading the VAR")
     if adf_only:
         warn.append(f"ADF alone does not reject a unit root for {', '.join(adf_only)}, but the joint verdict of ADF, "
@@ -724,7 +724,7 @@ def vecm_fit(df, k_ar_diff: int | None = None, rank: int | None = None, determin
             trend_v = "ct" if deterministic in ("co", "li") else "c"
             unit, adf_only, trend_only, orders, _w = _unit_root_split(d, trend_v, alpha)
             if trend_only:
-                msg += (f"; {', '.join(map(str, trend_only))} is stationary only around a deterministic trend, which "
+                msg += (f"; {', '.join(map(str, trend_only))} {'are' if len(trend_only) > 1 else 'is'} stationary only around a deterministic trend, which "
                         f"case '{deterministic}' does not include: use 'co' or 'li', or detrend")
             if unit:
                 listed = ", ".join(f"{c} ({orders[c].split(' —')[0]})" for c in unit)
