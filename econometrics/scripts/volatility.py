@@ -280,6 +280,20 @@ def _persistence_delta(vol: str, dist: str, params: pd.Series, cov, level: float
     return se, (p - zq * se, p + zq * se)
 
 
+def _half_life(p) -> float:
+    """Half-life of a variance shock, ln 0.5 / ln(p), for a persistence p. Increasing in p on (0, 1), so the limits of a
+    persistence CI map to the limits of the half-life CI in the same order (v2.5.0). p >= 1: infinite (integrated);
+    p <= 0: 0 (the shock is gone after one period; a negative EGARCH β oscillates); NaN stays NaN."""
+    p = float(p)
+    if not np.isfinite(p):
+        return np.inf if p == np.inf else np.nan
+    if p >= 1:
+        return np.inf
+    if p <= 0:
+        return 0.0
+    return float(np.log(0.5) / np.log(p))
+
+
 def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", variance_dummies=None,
               lags: int = 10, alpha: float = ALPHA, show: bool = True) -> dict:
     """GARCH(1,1), GJR-GARCH(1,1) or EGARCH(1,1,1) with the diagnostics that decide whether it is usable.
@@ -288,8 +302,10 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
     the leverage effect). Persistence: α + β (GARCH), α + κγ + β (GJR, κ = E[z²·1(z<0)]: 1/2 for symmetric errors,
     from the fitted η and λ for 'skewt'), β (EGARCH), with a delta-method SE and a (1 - alpha) CI
     (persistence_se, persistence_ci; v2.4.7.2);
-    half-life of a variance shock ln 0.5 / ln(persistence); unconditional variance ω/(1 - persistence) for
-    GARCH/GJR. Diagnostics on the standardized residuals z: Ljung-Box on z (mean) and z² (variance), the
+    half-life of a variance shock ln 0.5 / ln(persistence), with half_life_ci from the limits of persistence_ci (same
+    order: a higher persistence gives a longer half-life; infinite upper limit when the persistence CI reaches 1;
+    v2.5.0); for EGARCH it is the half-life of a shock to the log-variance, not comparable with a GARCH or GJR one;
+    unconditional variance ω/(1 - persistence) for GARCH/GJR. Diagnostics on the standardized residuals z: Ljung-Box on z (mean) and z² (variance), the
     Engle-Ng sign-bias tests. For vol='garch' the asymmetry is tested by the LR of the GJR against the
     symmetric GARCH (γ = 0, χ²(1)): the sign-bias tests are a complement with little power under fat tails, and
     a sign-bias p-value above 0.05 does not show symmetry. With variance_dummies (a DataFrame of regressors aligned with r, e.g. a Monday or
@@ -345,7 +361,8 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
     n = len(s)
     kappa = _neg_weight(dist, params) if vol == "gjr" else np.nan
     pers_se, pers_ci = _persistence_delta(vol, dist, params, param_cov, 1 - alpha)
-    half_life = float(np.log(0.5) / np.log(pers)) if 0 < pers < 1 else np.inf
+    half_life = _half_life(pers)
+    half_life_ci = (_half_life(pers_ci[0]), _half_life(pers_ci[1]))
     uncond = float(omega / (1 - pers)) if vol != "egarch" and pers < 1 else np.nan
     lb_z = acorr_ljungbox(z, lags=[lags], return_df=True).iloc[0]
     lb_z2 = acorr_ljungbox(z ** 2, lags=[lags], return_df=True).iloc[0]
@@ -401,7 +418,8 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
     tab["z"] = tab["coef"] / tab["se"]
     tab["p"] = 2 * stats.norm.sf(np.abs(tab["z"]))
     out = {"params": tab, "persistence": float(pers), "persistence_se": pers_se,
-           "persistence_ci": (float(pers_ci[0]), float(pers_ci[1])), "neg_weight": kappa, "half_life": half_life, "unconditional_variance": uncond,
+           "persistence_ci": (float(pers_ci[0]), float(pers_ci[1])), "neg_weight": kappa, "half_life": half_life, "half_life_ci": half_life_ci,
+           "unconditional_variance": uncond,
            "llf": llf, "aic": -2 * llf + 2 * k_par, "bic": -2 * llf + k_par * np.log(n), "n": n,
            "ljung_box_z": {"stat": float(lb_z["lb_stat"]), "p": float(lb_z["lb_pvalue"])},
            "ljung_box_z2": {"stat": float(lb_z2["lb_stat"]), "p": float(lb_z2["lb_pvalue"])},
@@ -416,7 +434,9 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
         print(tab.to_string(float_format=_fmt))
         print(f"Persistence {pers:.4f} (SE {pers_se:.4f}; {100 * (1 - alpha):g}% CI {pers_ci[0]:.4f} to {pers_ci[1]:.4f})"
               + (f" [κ = E[z²·1(z<0)] = {kappa:.4f}]" if vol == "gjr" and dist in _SKEWT else "")
-              + f"; half-life {half_life:.1f} periods"
+              + f"; half-life {half_life:.1f} periods ({100 * (1 - alpha):g}% CI {half_life_ci[0]:.1f} to "
+              + f"{half_life_ci[1]:.1f})"
+              + (" [log-variance: not comparable with a GARCH/GJR half-life]" if vol == "egarch" else "")
               + (f"; unconditional variance {uncond:.4f}" if np.isfinite(uncond) else ""))
         print(f"Ljung-Box({lags}) z: p = {lb_z['lb_pvalue']:.4f}; z²: p = {lb_z2['lb_pvalue']:.4f}; sign bias joint "
               f"p = {sb['joint_p']:.4f}; AIC {out['aic']:.2f}, BIC {out['bic']:.2f}")

@@ -1,0 +1,137 @@
+panel: tests/data/did_v250_panel.csv  rows: 600 
+md5 of the panel: 7498036256b9e987f01997bc34a57ea0 (expected '7498036256b9e987f01997bc34a57ea0'; a different value means the file changed, e.g. CRLF line endings)
+
+R: R version 4.6.2 (2026-10-29 ucrt) 
+didimputation 0.5.1 
+TwoWayFEWeights 2.1.0 
+jsonlite 2.0.0 
+
+==== didimputation: static ATT, SEs clustered by unit ====
+   term    estimate     std.error    conf.low   conf.high
+1 treat 1.930854715 0.08319652507 1.767789526 2.093919904
+
+==== didimputation: event study (all horizons) with pre-trend coefficients ====
+   term       estimate     std.error      conf.low     conf.high
+1    -7  0.02070151109 0.23368065663 -0.4373125759 0.47871559809
+2    -6 -0.17799252769 0.22943293736 -0.6276810849 0.27169602954
+3    -5  0.05401643168 0.17838902077 -0.2956260490 0.40365891238
+4    -4 -0.25056486943 0.17032442472 -0.5844007419 0.08327100302
+5    -3  0.11344828845 0.12257436843 -0.1267974737 0.35369405058
+6    -2 -0.17679206014 0.15979083726 -0.4899821012 0.13639798088
+7     0  1.42441271444 0.09730912253  1.2336868343 1.61513859459
+8     1  1.55250063666 0.10380008846  1.3490524633 1.75594881004
+9     2  1.64068615982 0.12254810765  1.4004918688 1.88088045081
+10    3  2.08358837306 0.13225377118  1.8243709815 2.34280576458
+11    4  2.25935798457 0.16953791841  1.9270636645 2.59165230465
+12    5  2.98773833835 0.21766403319  2.5611168333 3.41435984340
+13    6  3.43639113835 0.25415649126  2.9382444155 3.93453786121
+
+==== didimputation: static ATT, SEs clustered by state ====
+   term    estimate     std.error    conf.low   conf.high
+1 treat 1.930854715 0.09657672918 1.741564326 2.120145104
+
+==== didimputation: unbalanced version (keep_unb == 1) ====
+   term    estimate    std.error    conf.low   conf.high
+1 treat 1.931157701 0.0912424629 1.752322474 2.109992928
+
+==== TwoWayFEWeights: binary treatment d (feTR) ====
+
+Under the common trends assumption,
+the TWFE coefficient beta, equal to 1.5124, estimates a weighted sum of 225 ATTs.
+180 ATTs receive a positive weight, and 45 receive a negative weight.
+
+───────────────────────────────────── 
+Treat. var: d       ATTs    Σ weights 
+───────────────────────────────────── 
+Positive weights     180       1.0732 
+Negative weights      45      -0.0732 
+───────────────────────────────────── 
+Total                225            1 
+─────────────────────────────────────
+
+Summary Measures:
+  TWFE Coefficient (β_fe): 1.5124
+  min σ(Δ) compatible with β_fe and Δ_TR = 0: 1.7782
+  min σ(Δ) compatible with treatment effect of opposite sign than β_fe in all (g,t) cells: 8.2681
+  Reference: Corollary 1, de Chaisemartin, C and D'Haultfoeuille, X (2020a)
+
+The development of this package was funded by the European Union (ERC, REALLYCREDIBLE,GA N. 101043899).
+
+
+-- str of the result --
+List of 13
+ $ nr_plus         : int 180
+ $ nr_minus        : int 45
+ $ nr_weights      : int 225
+ $ sum_plus        : num 1.07
+ $ sum_minus       : num -0.0732
+ $ dat_result      :Classes 'data.table' and 'data.frame':	600 obs. of  3 variables:
+  ..$ T     : num [1:600] 1 2 3 4 5 6 7 8 9 10 ...
+  ..$ G     : num [1:600] 1 1 1 1 1 1 1 1 1 1 ...
+  ..$ weight: num [1:600] 0 0 0 0 0 0 0 0 0 0 ...
+  ..- attr(*, ".internal.selfref")=<pointer: 0x0000026ce41229c0> 
+ $ beta            : num 1.51
+ $ sensibility     : num 1.78
+ $ sensibility2    : num 8.27
+ $ tot_cells       : int 225
+ $ type            : chr "feTR"
+ $ params          :List of 5
+  ..$ Y : chr "y"
+  ..$ G : chr "id"
+  ..$ T : chr "t"
+  ..$ D : chr "d"
+  ..$ D0: NULL
+ $ summary_measures: logi TRUE
+ - attr(*, "class")= chr "twowayfeweights"
+
+==== TwoWayFEWeights: non-binary treatment dose (feTR) ====
+
+Under the common trends assumption,
+the TWFE coefficient beta, equal to 0.8108, estimates a weighted sum of 225 ATTs.
+165 ATTs receive a positive weight, and 60 receive a negative weight.
+
+───────────────────────────────────── 
+Treat. var: dose    ATTs    Σ weights 
+───────────────────────────────────── 
+Positive weights     165       1.0617 
+Negative weights      60      -0.0617 
+───────────────────────────────────── 
+Total                225            1 
+─────────────────────────────────────
+
+Summary Measures:
+  TWFE Coefficient (β_fe): 0.8108
+  min σ(Δ) compatible with β_fe and Δ_TR = 0: 0.8637
+  min σ(Δ) compatible with treatment effect of opposite sign than β_fe in all (g,t) cells: 4.3040
+  Reference: Corollary 1, de Chaisemartin, C and D'Haultfoeuille, X (2020a)
+
+The development of this package was funded by the European Union (ERC, REALLYCREDIBLE,GA N. 101043899).
+
+
+-- str of the result --
+List of 13
+ $ nr_plus         : int 165
+ $ nr_minus        : int 60
+ $ nr_weights      : int 225
+ $ sum_plus        : num 1.06
+ $ sum_minus       : num -0.0617
+ $ dat_result      :Classes 'data.table' and 'data.frame':	600 obs. of  3 variables:
+  ..$ T     : num [1:600] 1 2 3 4 5 6 7 8 9 10 ...
+  ..$ G     : num [1:600] 1 1 1 1 1 1 1 1 1 1 ...
+  ..$ weight: num [1:600] 0 0 0 0 0 0 0 0 0 0 ...
+  ..- attr(*, ".internal.selfref")=<pointer: 0x0000026ce41229c0> 
+ $ beta            : num 0.811
+ $ sensibility     : num 0.864
+ $ sensibility2    : num 4.3
+ $ tot_cells       : int 225
+ $ type            : chr "feTR"
+ $ params          :List of 5
+  ..$ Y : chr "y"
+  ..$ G : chr "id"
+  ..$ T : chr "t"
+  ..$ D : chr "dose"
+  ..$ D0: NULL
+ $ summary_measures: logi TRUE
+ - attr(*, "class")= chr "twowayfeweights"
+
+TWFE beta (lm with unit and period dummies): d = 1.51245  dose = 0.81081 

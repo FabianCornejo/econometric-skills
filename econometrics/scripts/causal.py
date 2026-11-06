@@ -20,14 +20,26 @@ Regression discontinuity
     density_test(x, cutoff)                       McCrary (2008)-type manipulation test
 
 Panel designs
+    did_design(df, unit, time, d)                 first step of any DiD (v2.5.0): binary or dose, absorbing or
+                                                  reversible, one or several dates, never-treated units and stayers;
+                                                  the design among the five of de Chaisemartin-D'Haultfœuille's guide,
+                                                  the estimators that fit it and gvar (binary absorbing only)
     event_study(df, unit, time, y, event_time)    TWFE leads/lags with clustered SE and joint pre-trend test
     att_gt(df, unit, time, y, gvar)               Callaway-Sant'Anna (2021) group-time ATTs, robust to staggered timing;
                                                   anticipation=δ; warns when the effect starts before the recorded date;
                                                   covariates= in levels (conditional parallel trends): doubly robust
                                                   (Sant'Anna-Zhao 2020), outcome regression or IPW, with the other two
-                                                  recomputed as an independent check
+                                                  recomputed as an independent check; joint pre-trend test
+                                                  (F reference, fewer restrictions with few clusters; v2.5.0)
+    did_imputation(df, unit, time, y, gvar)       Borusyak-Jaravel-Spiess (2024) imputation estimator (v2.5.0): FE fitted
+                                                  on untreated observations only, Theorem 3 clustered SEs, event study,
+                                                  pre-trend test on untreated observations; unbalanced panels allowed
+    did_compare(df, unit, time, y, gvar)          att_gt vs did_imputation on common cells, difference tested with a
+                                                  paired bootstrap (v2.5.0): a gap points to the pre-trends
     bacon_decomposition(df, unit, time, y, gvar)  Goodman-Bacon (2021): TWFE as a weighted average of every 2x2,
                                                   with the weight of forbidden (already-treated control) comparisons
+    twfe_weights(df, unit, time, d, y)            de Chaisemartin-D'Haultfœuille (2020) weights of a TWFE coefficient
+                                                  (binary or dose, unbalanced allowed): negative weights, sigma_fe
     twfe_covariate_diagnostic(df, ..., covariates) hidden linearity bias of TWFE with covariates (Caetano-Callaway
                                                   2024): level test on untreated trends, implicit weights, CS benchmark
     ccc_test(df, y, covariates, group, time)      common causal covariates test (Karim-Webb 2024): are covariate
@@ -59,8 +71,8 @@ def _ci(est, se, alpha=ALPHA):
     return est - z * se, est + z * se
 
 
-def _out(name, est, se, n, **extra):
-    lo, hi = _ci(est, se)
+def _out(name, est, se, n, alpha=ALPHA, **extra):
+    lo, hi = _ci(est, se, alpha)
     p = 2 * (1 - stats.norm.cdf(abs(est / se))) if se > 0 else np.nan
     return {"estimand": name, "estimate": est, "se": se, "ci_low": lo, "ci_high": hi, "p": p, "n": n, **extra}
 
@@ -507,6 +519,241 @@ def rdd_robustness(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: flo
 # =============================================================================
 # Panel designs
 # =============================================================================
+_DESIGN_LABELS = {
+    "canonical": "canonical DiD (binary, absorbing, one adoption date, never-treated units)",
+    "staggered": "staggered adoption (binary, absorbing, several adoption dates)",
+    "heterogeneous_adoption": "heterogeneous adoption (all untreated at the start, one date, different doses)",
+    "first_switch": "staggered first switch (non-binary or non-absorbing treatment; switchers compared with units that "
+                    "have not switched yet)",
+    "other": "other design (no unit to compare with the switchers: no heterogeneity-robust DiD estimator)",
+}
+
+
+def did_design(df: pd.DataFrame, unit: str, time: str, d: str, cluster: str | None = None,
+               show: bool = True) -> dict:
+    """First step of any difference-in-differences (v2.5.0): what kind of treatment is this, and which estimators
+    fit it? Classifies the panel into the five designs of de Chaisemartin & D'Haultfœuille's guide "Which
+    difference-in-differences estimator should I use?" (Credible Answers):
+
+      canonical               binary, absorbing, every treated unit starts at the same date, never-treated units
+      staggered               binary, absorbing, adoption at different dates
+      heterogeneous_adoption  every unit untreated at the start, treated units switch on at one date with
+                              different doses
+      first_switch            first treatment changes at different dates, with a non-binary or non-absorbing
+                              treatment (staggered adoption is its binary-absorbing special case)
+      other                   none of the above: no switcher has a unit with the same starting treatment that has
+                              not switched yet (e.g. the treatment changes for every unit every period); the guide
+                              lists no heterogeneity-robust estimator for these
+
+    d: the treatment of each unit in each period (binary or a dose), not a first-treated date: gvar is an output.
+    Definitions used here (the guide does not define them): a stayer is a unit whose treatment never changes in the
+    panel; a switcher changes at least once; its first switch is the first period whose treatment differs from the
+    unit's first observed one; a switcher is comparable when some unit with the same starting treatment has not
+    switched yet at that date (a stayer or a later switcher). Reversal: a binary treatment going from 1 back to 0.
+
+    Returns: design and label; checks (criterion, value, what it implies); per-unit table (start, number of changes,
+    first switch, reversals); cohorts (first-switch date, units, pre-periods in the panel); estimators of the skill
+    and outside it; the suggested comparison group (the guide recommends not-yet-treated controls when they exist);
+    gvar (first treated period, 0 = never treated, indexed by unit; map it with df[unit].map(res["gvar"])) only for a
+    binary absorbing treatment, else None; warnings. Nothing is imputed: rows with a missing d are counted and left
+    out."""
+    cols = [unit, time, d] + ([cluster] if cluster else [])
+    x = df[cols].copy()
+    n_missing = int(x[d].isna().sum())
+    x = x.dropna(subset=[d]).sort_values([unit, time])
+    if x.empty:
+        raise ValueError("did_design: the treatment column has no observed values")
+    if x.duplicated([unit, time]).any():
+        raise ValueError(f"did_design: repeated ({unit}, {time}) rows; one row per unit and period is needed")
+    vals = np.unique(x[d].to_numpy(float))
+    binary = bool(np.isin(vals, [0.0, 1.0]).all())
+    scaled = False
+    if not binary and len(vals) == 2 and vals[0] == 0.0:
+        # two values {0, c}: binary up to scale (v2.5.0 review); classified on d != 0
+        x[d] = (x[d] != 0).astype(float)
+        binary, scaled, c_val = True, True, float(vals[1])
+    periods = np.sort(x[time].unique())
+    n_per = x.groupby(unit)[time].size()
+    balanced = bool((n_per == len(periods)).all())
+    t_num = pd.api.types.is_numeric_dtype(x[time])
+    regular = bool(t_num and np.allclose(np.diff(periods.astype(float)), 1.0)) if len(periods) > 1 else True
+    # per-unit trajectory
+    prev = x.groupby(unit)[d].shift()
+    chg = prev.notna() & (x[d] != prev)
+    x["_chg"] = chg
+    x["_rev"] = chg & (prev == 1) & (x[d] == 0) if binary else False
+    g_by = x.groupby(unit)
+    start = g_by[d].first()
+    first_t = g_by[time].first()
+    n_chg = g_by["_chg"].sum().astype(int)
+    n_rev = g_by["_rev"].sum().astype(int) if binary else pd.Series(0, index=start.index)
+    first_switch = x[x["_chg"]].groupby(unit)[time].first().reindex(start.index)
+    units = pd.DataFrame({"start": start, "first_period": first_t, "changes": n_chg, "first_switch": first_switch,
+                          "reversals": n_rev})
+    stayer = units["changes"] == 0
+    switchers = units[~stayer]
+    absorbing = bool(binary and (units["reversals"] == 0).all())
+    if binary:
+        never = stayer & (units["start"] == 0)
+        always = units["start"] == 1
+    else:
+        never = stayer & (units["start"] == 0)
+        always = pd.Series(False, index=units.index)
+    late_entry = always & (units["first_period"] > periods[0])
+    # comparable switchers: a unit with the same start that has not switched yet at the switch date
+    observed = set(zip(x[unit], x[time]))
+    comp = pd.Series(False, index=switchers.index)
+    for u, row in switchers.iterrows():
+        f = row["first_switch"]
+        same = units[(units["start"] == row["start"]) & (units.index != u)]
+        later = same[same["first_switch"].isna() | (same["first_switch"] > f)]
+        comp[u] = any((v, f) in observed for v in later.index)     # observed at the switch date
+    share_comp = float(comp.mean()) if len(comp) else np.nan
+    dates = np.sort(switchers["first_switch"].unique())
+    all_untreated_start = bool((units["start"] == 0).all())
+    # design
+    if len(switchers) == 0:
+        design = "other"
+    elif binary and absorbing:
+        if len(dates) == 1:
+            design = "canonical" if never.any() else "other"
+        else:
+            design = "staggered" if share_comp > 0 else "other"
+    elif not binary and all_untreated_start and len(dates) == 1:
+        design = "heterogeneous_adoption"
+    else:
+        design = "first_switch" if share_comp > 0 else "other"
+    # cohorts (first-switch dates) and pre-periods
+    coh = switchers.groupby("first_switch").size().rename("units").to_frame()
+    coh["pre_periods"] = [int((periods < t).sum()) for t in coh.index]
+    coh.index.name = "first_switch"
+    # clusters
+    cl = {}
+    if cluster:
+        cl_treated = x.groupby(cluster)[d].apply(lambda s: bool((s != 0).any()))
+        varies = x.groupby([cluster, time])[d].nunique()
+        cl = {"clusters": int(x[cluster].nunique()), "treated_clusters": int(cl_treated.sum()),
+              "cluster_periods_with_mixed_treatment": int((varies > 1).sum())}
+    # estimators and comparison group
+    # the guide recommends not-yet-treated controls (more transparent than imputation, slightly less noisy)
+    control = {"canonical": "never", "staggered": "notyet"}.get(design)
+    skill, external = [], []
+    if design == "canonical":
+        skill = ["causal.att_gt(control='never')", "causal.did_imputation", "causal.event_study",
+                 "TWFE (acceptable without covariates; with covariates use att_gt(covariates=...))"]
+    elif design == "staggered":
+        skill = [f"causal.att_gt(control='{control}')", "causal.did_imputation", "causal.did_compare",
+                 "causal.did_timing_sensitivity", "for an existing TWFE: causal.bacon_decomposition and "
+                 "causal.twfe_weights"]
+        external = ["R/Stata csdid, did_imputation, did_multiplegt_dyn"]
+    elif design == "heterogeneous_adoption":
+        skill = ["for an existing TWFE: causal.twfe_weights (non-binary treatment)"]
+        external = ["did_had (R, Stata; Python version listed by the guide, not checked)"]
+    elif design == "first_switch":
+        skill = ["for an existing TWFE: causal.twfe_weights"]
+        external = ["did_multiplegt_dyn (R, Stata; Python version listed by the guide, not checked)"]
+        if binary:
+            external.append("if lagged effects are ruled out: did_multiplegt_stat, or imputation estimators "
+                            "(R/Stata did_imputation, did2s, fect), which the guide says are valid only for a "
+                            "binary treatment")
+    else:
+        skill = ["for an existing TWFE: causal.twfe_weights (how much of it rests on negative weights)"]
+    gvar = None
+    if binary and absorbing and design != "other":
+        gvar = pd.Series(np.where(units["start"] == 1, units["first_period"],
+                                  units["first_switch"].fillna(0)), index=units.index, name="gvar")
+    # warnings
+    w = []
+    if scaled:
+        w.append(f"The treatment takes two values, 0 and {c_val:g}: classified as binary. Rescale it to 0/1 before "
+                 "estimating, or say that effects are per unit of that value.")
+    if len(switchers) == 0:
+        w.append("No unit changes treatment in the panel: there is no variation over time to estimate a DiD from.")
+    prev_obs = x.groupby(unit)[time].shift()
+    sw_rows = x[x["_chg"]].groupby(unit).head(1)
+    if regular and len(sw_rows):
+        gap = (sw_rows[time].astype(float) - prev_obs.loc[sw_rows.index].astype(float)) > 1
+        if gap.any():
+            w.append(f"{int(gap.sum())} unit(s) switch across a gap in the panel (periods missing right before the "
+                     "first switch): the switch date is only known to lie within the gap; consider "
+                     "did_uncertain_dates.")
+    if n_missing:
+        w.append(f"{n_missing} rows have a missing treatment and were left out; check whether they are missing at "
+                 "random before estimating.")
+    if binary and not absorbing:
+        nr = int((units["reversals"] > 0).sum())
+        w.append(f"The treatment is reversible: {nr} unit(s) go from 1 back to 0 ({int(units['reversals'].sum())} "
+                 "reversals). It must not enter att_gt, did_imputation, bacon_decomposition or "
+                 "randomization_inference as a first-treated date (gvar): those assume that treatment, once on, "
+                 "stays on. No gvar was built.")
+    if not binary:
+        w.append(f"The treatment is not binary ({len(vals)} distinct values): the skill's DiD estimators take a "
+                 "binary absorbing treatment; none of them may be run on a dichotomized dose without saying that "
+                 "the estimand changed.")
+    if design == "other" and len(switchers):
+        w.append("No heterogeneity-robust DiD estimator applies to this design: a TWFE coefficient here is not a "
+                 "robust causal effect, and must not be reported as one. causal.twfe_weights shows how much of it "
+                 "rests on negative weights.")
+    if design == "first_switch" and share_comp < 1:
+        w.append(f"{1 - share_comp:.0%} of the switchers have no unit with the same starting treatment that has not "
+                 "switched yet: robust estimators drop them.")
+    if always.any():
+        w.append(f"{int(always.sum())} unit(s) are treated from their first observed period (no pre-period): they "
+                 "cannot identify an effect and serve as controls only in a TWFE, where they are forbidden "
+                 "comparisons." + (f" {int(late_entry.sum())} of them enter the panel late already treated: check "
+                                   "whether earlier periods are missing." if late_entry.any() else ""))
+    if design == "staggered" and not never.any():
+        w.append("No never-treated units: use control='notyet'; the last cohort has no comparison group after its "
+                 "own date, so its post-period cells are not estimated.")
+    if design in ("canonical", "staggered") and len(coh) and (coh["pre_periods"] == 0).any():
+        w.append("Some cohorts have no pre-period inside the panel and will be dropped by att_gt.")
+    if not balanced:
+        w.append(f"Unbalanced panel ({int((n_per < len(periods)).sum())} units miss periods): att_gt and "
+                 "bacon_decomposition need a balanced panel; did_imputation does not.")
+    if not regular:
+        w.append(f"The {time} column is not a sequence of consecutive integers: att_gt uses g − 1 as the base period;"
+                 " recode time as 1, 2, 3, … first.")
+    if cluster and cl["cluster_periods_with_mixed_treatment"]:
+        w.append(f"The treatment varies inside {cl['cluster_periods_with_mixed_treatment']} {cluster}-period cells: it"
+                 f" is assigned below the {cluster} level. Cluster at the level of assignment.")
+    if cluster and (cl["clusters"] < 30 or cl["treated_clusters"] < 6):
+        w.append(f"{cl['clusters']} clusters ({cl['treated_clusters']} treated): clustered and bootstrap SEs are "
+                 "unreliable; plan causal.randomization_inference.")
+    checks = pd.DataFrame([
+        ("binary treatment", binary, f"values: {', '.join(f'{v:g}' for v in vals[:6])}" + (" …" if len(vals) > 6 else "")),
+        ("absorbing (no 1 → 0)", absorbing if binary else None,
+         "" if not binary else f"{int(units['reversals'].sum())} reversals in {int((units['reversals'] > 0).sum())} units"),
+        ("switchers / stayers", f"{len(switchers)} / {int(stayer.sum())}", ""),
+        ("first-switch dates", len(dates), ", ".join(str(t) for t in dates[:8]) + (" …" if len(dates) > 8 else "")),
+        ("never-treated units", int(never.sum()), ""),
+        ("treated from the first period", int(always.sum()), "no pre-period"),
+        ("switchers with a not-yet-switched comparison", f"{share_comp:.0%}" if len(comp) else "—",
+         "same starting treatment, not switched at that date"),
+        ("all untreated at the start", all_untreated_start, ""),
+        ("balanced panel", balanced, f"{len(units)} units × {len(periods)} periods"),
+        ("consecutive integer periods", regular, ""),
+    ] + [(k.replace("_", " "), v, "") for k, v in cl.items()], columns=["criterion", "value", "note"])
+    out = {"design": design, "label": _DESIGN_LABELS[design], "binary": binary, "absorbing": absorbing,
+           "checks": checks, "units": units, "cohorts": coh, "never_treated": int(never.sum()),
+           "always_treated": int(always.sum()), "share_comparable": share_comp, "balanced": balanced,
+           "control": control, "estimators": {"skill": skill, "external": external}, "gvar": gvar,
+           "n_units": len(units), "n_periods": len(periods), "missing_treatment": n_missing, "warnings": w,
+           **({"clusters": cl} if cluster else {})}
+    if show:
+        print(f"\nDiD design: {out['label']}")
+        print(checks.to_string(index=False))
+        if len(coh):
+            print("Cohorts (first switch):\n" + coh.to_string())
+        print("Estimators in the skill: " + ("; ".join(skill) if skill else "none"))
+        if external:
+            print("Outside the skill: " + "; ".join(external))
+        if control:
+            print(f"Comparison group: control='{control}'")
+        for m in w:
+            print("  WARNING: " + m)
+    return out
+
+
 def event_study(df: pd.DataFrame, unit: str, time: str, y: str, event_time: str, leads: int = 4,
                 lags: int = 4, ref: int = -1, bin_endpoints: bool = True, controls: list[str] | None = None,
                 show: bool = True) -> dict:
@@ -643,46 +890,12 @@ def _did_cell_cov(dy: np.ndarray, Z: np.ndarray, treat: np.ndarray, methods=("dr
     return out
 
 
-def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str = "never",
-           n_boot: int = 199, seed: int = 0, anticipation: int = 0, covariates: list[str] | None = None,
-           est_method: str = "dr", x_periods: str = "base", verify: bool = True, cluster: str | None = None,
-           show: bool = True) -> dict:
-    """Callaway & Sant'Anna (2021) ATT(g,t) on a balanced panel, with or without covariates.
-    gvar = first treated period (0 or NaN = never treated). control = 'never' or 'notyet'.
-    anticipation = δ periods in which units may react before g (law announced before it
-    takes effect): post cells (t >= g-δ) use base g-δ-1, not-yet controls must be untreated
-    until t+δ. Pre-period cells use the short (t-1) base.
-
-    Covariates (parallel trends that hold only conditional on X; Caetano & Callaway 2024):
-    covariates = columns entered in LEVELS, never differenced away (that is what removes
-    hidden linearity bias from a TWFE regression). est_method = 'dr' (doubly robust,
-    Sant'Anna & Zhao 2020; default), 'reg' (outcome regression) or 'ipw' (normalized IPW).
-    x_periods = 'base': each cell uses X at its base period (pre-treatment values, safe when X
-    could respond to treatment); 'both': X at the base period and its change up to t, for
-    time-varying covariates that are NOT affected by treatment (Caetano & Callaway's setting).
-    Comparison units with propensity >= 0.995 get zero weight (warned). verify=True also
-    computes the other two estimators on the full sample (an independent recomputation, stored as
-    res["cross_check"], a pandas Series indexed dr/reg/ipw that reporting.cross_check takes as is): if
-    they differ from the chosen one by more than one SE, the outcome and propensity models
-    disagree, a sign that at least one is misspecified (warned). Covariate effects that differ
-    ACROSS GROUPS (not only over time) bias every estimator here; check with ccc_test.
-
-    Inference: bootstrap resampling units with replacement and re-estimating every nuisance
-    model; n_boot=0 skips it. cluster = a column constant within unit (the state when a law
-    varies by state, with municipalities as units): the bootstrap then resamples whole
-    clusters, so the SEs allow any correlation within them, while the estimand (an average
-    over units) is unchanged. Do not aggregate the data to the cluster level to get clustered
-    inference: that changes the estimand (unit average -> cluster average). With fewer than
-    ~30 clusters or ~6 treated clusters, the cluster bootstrap is unreliable (warned): add
-    randomization_inference.
-    Warns when either of the two pre-period cells right before the (anticipation-adjusted)
-    date is significant (Bonferroni, ALPHA/2 each): the effect starts before the recorded date (anticipation or a misdated
-    treatment) → check the date and run did_timing_sensitivity."""
-    covs = list(covariates) if covariates else []
-    if est_method not in ("dr", "reg", "ipw"):
-        raise ValueError("est_method must be 'dr', 'reg' or 'ipw'")
-    if x_periods not in ("base", "both"):
-        raise ValueError("x_periods must be 'base' or 'both'")
+def _cs_engine(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str, anticipation: int,
+               covs: list[str], est_method: str, x_periods: str, cluster: str | None) -> dict:
+    """Data preparation and the cell-by-cell Callaway-Sant'Anna computation of att_gt, separated (v2.5.0) so
+    that did_compare can re-estimate CS on the same bootstrap draws as the imputation estimator. Returns the
+    balanced outcome matrix, cohorts, cluster members and compute(idx, methods, record), where idx are row
+    positions of units (repeated when a unit or cluster is drawn more than once)."""
     d = df[[unit, time, y, gvar, *covs] + ([cluster] if cluster and cluster not in (unit, time, y, gvar, *covs)
                                            else [])].copy()
     d[gvar] = d[gvar].fillna(0)
@@ -690,15 +903,17 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
     if Y.isna().any().any():
         raise ValueError("att_gt needs a balanced panel (drop units with missing periods)")
     G = d.groupby(unit)[gvar].first().reindex(Y.index).to_numpy()
+    eng = {"units": Y.index, "cluster": cluster}
     if cluster:
         if (d.groupby(unit)[cluster].nunique() > 1).any():
             raise ValueError(f"att_gt: cluster '{cluster}' must be constant within each {unit}")
         cl_codes = pd.factorize(d.groupby(unit)[cluster].first().reindex(Y.index))[0]
-        cl_members = [np.where(cl_codes == c)[0] for c in range(cl_codes.max() + 1)]
-        n_cl = len(cl_members)
-        n_cl_treated = len({cl_codes[i] for i in np.where(G > 0)[0]})
+        eng["cl_members"] = [np.where(cl_codes == c)[0] for c in range(cl_codes.max() + 1)]
+        eng["n_cl"] = len(eng["cl_members"])
+        eng["n_cl_treated"] = len({cl_codes[i] for i in np.where(G > 0)[0]})
     T = np.array(Y.columns)
     Ym = Y.to_numpy()
+    Xa = None
     # covariates as a (units, periods, k) array; time-invariant columns are simply constant
     if covs:
         Xa = np.stack([d.pivot(index=unit, columns=time, values=c).reindex(index=Y.index, columns=T).to_numpy(float)
@@ -759,6 +974,109 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         cols = ["att"] if len(methods) == 1 else list(methods)
         return pd.DataFrame(cells, columns=["g", "t", "e", *cols, "n_g"])
 
+    eng.update(T=T, Ym=Ym, G=G, cohorts=cohorts, dropped=dropped, dlt=dlt, diag=diag, compute=compute)
+    return eng
+
+
+def _cs_draw(rng, eng: dict) -> np.ndarray:
+    """One bootstrap draw of unit positions: whole clusters when the engine has them, else units."""
+    if eng["cluster"]:
+        n_cl = eng["n_cl"]
+        draw = rng.integers(0, n_cl, n_cl)
+        return np.concatenate([eng["cl_members"][c] for c in draw])
+    n = len(eng["Ym"])
+    return rng.integers(0, n, n)
+
+
+def _wald_boot(b: np.ndarray, draws: np.ndarray, max_rank: int, n_obs: int | None = None):
+    """Wald test of b = 0 with the covariance of bootstrap draws (rows = draws). The rank is computed on the
+    correlation scale (so cells with small SEs do not look degenerate) and capped at max_rank (B − 1 draws, G − 1
+    clusters); below full rank the pseudo-inverse on the effective rank is used, with df = rank.
+    Reference distribution (v2.5.0): with n_obs (the smaller of the resampled units, or clusters, and the draws),
+    W·(n − q)/(q·(n − 1)) ~ F(q, n − q), the small-sample form of a Wald test with an estimated covariance; the χ²(q)
+    over-rejected in the skill's simulations (5% nominal: 12% with 100 units and 9 restrictions, 8% with 200, 5.7%
+    with 800). Without n_obs, or with n ≤ q, χ²(q). Returns (W, df, p, rank, p_chi2, ref)."""
+    V = np.cov(draws, rowvar=False, ddof=1).reshape(len(b), len(b))
+    sd = np.sqrt(np.clip(np.diag(V), 0, None))
+    if not np.all(np.isfinite(V)) or np.any(sd <= 0):
+        return np.nan, 0, np.nan, 0, np.nan, None
+    C = V / np.outer(sd, sd)
+    w, U = np.linalg.eigh(C)
+    keep = w > max(w.max(), 0) * len(b) * 1e-10
+    rank = int(min(keep.sum(), max_rank))
+    if rank < 1:
+        return np.nan, 0, np.nan, 0, np.nan, None
+    order = np.argsort(w)[::-1][:rank]
+    z = b / sd
+    proj = U[:, order].T @ z
+    W = float(np.sum(proj ** 2 / w[order]))
+    p_chi2 = float(stats.chi2.sf(W, rank))
+    if n_obs is not None and n_obs > rank + 1:
+        p = float(stats.f.sf(W * (n_obs - rank) / (rank * (n_obs - 1)), rank, n_obs - rank))
+        return W, rank, p, rank, p_chi2, f"F({rank}, {n_obs - rank})"
+    return W, rank, p_chi2, rank, p_chi2, f"chi2({rank})"
+
+
+def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str = "never",
+           n_boot: int = 199, seed: int = 0, anticipation: int = 0, covariates: list[str] | None = None,
+           est_method: str = "dr", x_periods: str = "base", verify: bool = True, cluster: str | None = None,
+           alpha: float = ALPHA, show: bool = True) -> dict:
+    """Callaway & Sant'Anna (2021) ATT(g,t) on a balanced panel, with or without covariates.
+    gvar = first treated period (0 or NaN = never treated). control = 'never' or 'notyet'.
+    anticipation = δ periods in which units may react before g (law announced before it
+    takes effect): post cells (t >= g-δ) use base g-δ-1, not-yet controls must be untreated
+    until t+δ. Pre-period cells use the short (t-1) base.
+
+    Covariates (parallel trends that hold only conditional on X; Caetano & Callaway 2024):
+    covariates = columns entered in LEVELS, never differenced away (that is what removes
+    hidden linearity bias from a TWFE regression). est_method = 'dr' (doubly robust,
+    Sant'Anna & Zhao 2020; default), 'reg' (outcome regression) or 'ipw' (normalized IPW).
+    x_periods = 'base': each cell uses X at its base period (pre-treatment values, safe when X
+    could respond to treatment); 'both': X at the base period and its change up to t, for
+    time-varying covariates that are NOT affected by treatment (Caetano & Callaway's setting).
+    Comparison units with propensity >= 0.995 get zero weight (warned). verify=True also
+    computes the other two estimators on the full sample (an independent recomputation, stored as
+    res["cross_check"], a pandas Series indexed dr/reg/ipw that reporting.cross_check takes as is): if
+    they differ from the chosen one by more than one SE, the outcome and propensity models
+    disagree, a sign that at least one is misspecified (warned). Covariate effects that differ
+    ACROSS GROUPS (not only over time) bias every estimator here; check with ccc_test.
+
+    Inference: bootstrap resampling units with replacement and re-estimating every nuisance
+    model; n_boot=0 skips it. cluster = a column constant within unit (the state when a law
+    varies by state, with municipalities as units): the bootstrap then resamples whole
+    clusters, so the SEs allow any correlation within them, while the estimand (an average
+    over units) is unchanged. Do not aggregate the data to the cluster level to get clustered
+    inference: that changes the estimand (unit average -> cluster average). With fewer than
+    ~30 clusters or ~6 treated clusters, the cluster bootstrap is unreliable (warned): add
+    randomization_inference.
+    Warns when either of the two pre-period cells right before the (anticipation-adjusted)
+    date is significant (Bonferroni, alpha/2 each): the effect starts before the recorded date (anticipation or a misdated
+    treatment) → check the date and run did_timing_sensitivity.
+
+    Joint pre-trend test (v2.5.0; res["pretrend"], res["pretrend_p"], res["pretrend_df"]): Wald test that the
+    pre-period effects are zero (cells with t < g − anticipation, short t−1 base), with the covariance of the
+    bootstrap draws (those in which every pre cell exists) and an F(q, n − q) reference, n = the smaller of the
+    resampled units (clusters with cluster=) and the draws; the χ²(q) p-value is kept as pretrend["p_chi2"]. A
+    covariance estimated from n units supports few restrictions, so the test uses the most detailed of three levels
+    with q ≤ (n − 1)/10: every pre cell; the pre-period event-time averages (e < −anticipation); their mean (one
+    restriction). A coarser level checks less (a pre-trend that averages out passes) and is warned. Below full rank
+    the pseudo-inverse on the effective rank is used and df = rank. In the skill's simulations (5% test): 9 cells and
+    300 units, 7.5%; 30 to 80 clusters, 5-7%; 8 clusters with the one-restriction level, about 9% (460 panels: the
+    pairs-cluster bootstrap SE is too small with so few clusters); the χ² with 9 cells and 100 units, 13%. Not
+    rejecting does not show parallel trends (low power; Roth 2022).
+    alpha (v2.5.0): level of the CIs, of the joint pre-trend test and of the early-effect warning."""
+    covs = list(covariates) if covariates else []
+    if est_method not in ("dr", "reg", "ipw"):
+        raise ValueError("est_method must be 'dr', 'reg' or 'ipw'")
+    if x_periods not in ("base", "both"):
+        raise ValueError("x_periods must be 'base' or 'both'")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    eng = _cs_engine(df, unit, time, y, gvar, control, anticipation, covs, est_method, x_periods, cluster)
+    Ym, G, cohorts, dropped, dlt, diag, compute = (eng[k] for k in ("Ym", "G", "cohorts", "dropped", "dlt", "diag",
+                                                                    "compute"))
+    n_cl = eng.get("n_cl")
+    n_cl_treated = eng.get("n_cl_treated")
     if not cohorts:
         raise ValueError("att_gt: no cohort has the base period g-anticipation-1 inside the panel")
     all_idx = np.arange(len(Ym))
@@ -768,18 +1086,29 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         base = full[["g", "t", "e", est_method, "n_g"]].rename(columns={est_method: "att"}) if verify else full
     else:
         base = compute(all_idx)
+    if base.empty:
+        raise ValueError("att_gt: no group-time cell has a comparison group"
+                         + (" (no never-treated units: use control='notyet', or check the design with causal.did_design)"
+                            if control == "never" else " (no unit is untreated at the time each cohort is compared)"))
     post = base[base["e"] >= 0]
     simple = np.average(post["att"], weights=post["n_g"]) if len(post) else np.nan
     dyn = base.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False)
+    bs_dyn, bs_cells = [], []
+    n_empty = 0
     if n_boot and n_boot > 1:
         rng = np.random.default_rng(seed)
-        bs_simple, bs_dyn, bs_cells = [], [], []
+        bs_simple = []
+        n_empty = 0
         for _ in range(n_boot):
-            if cluster:
-                draw = rng.integers(0, n_cl, n_cl)
-                b = compute(np.concatenate([cl_members[c] for c in draw]))
-            else:
-                b = compute(rng.integers(0, len(Ym), len(Ym)))
+            b = compute(_cs_draw(rng, eng))
+            if b.empty:
+                # with few clusters a draw can hold no treated cluster (or no control), so no cell is defined: the
+                # draw counts as missing, as np.nanstd already did for the ATT (a guard; no crash was observed on main)
+                n_empty += 1
+                bs_simple.append(np.nan)
+                bs_dyn.append(pd.Series(dtype=float))
+                bs_cells.append(pd.Series(dtype=float, index=pd.MultiIndex.from_tuples([], names=["g", "t"])))
+                continue
             p = b[b["e"] >= 0]
             bs_simple.append(np.average(p["att"], weights=p["n_g"]) if len(p) else np.nan)
             bs_dyn.append(b.groupby("e").apply(lambda s: np.average(s["att"], weights=s["n_g"]), include_groups=False))
@@ -791,19 +1120,52 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         se_simple, dyn_se = np.nan, pd.Series(np.nan, index=dyn.index)
         cell_se = pd.Series(np.nan, index=base.set_index(["g", "t"]).index)
     dyn_tab = pd.DataFrame({"att": dyn, "se": dyn_se})
-    dyn_tab["ci_low"], dyn_tab["ci_high"] = _ci(dyn_tab["att"], dyn_tab["se"])
+    dyn_tab["ci_low"], dyn_tab["ci_high"] = _ci(dyn_tab["att"], dyn_tab["se"], alpha)
     gt = base.set_index(["g", "t"]).join(cell_se.rename("se"))
     # Jump right before the (anticipation-adjusted) date: with the short t-1 base, the cell
     # e = -δ-1 measures the change from g-δ-2 to g-δ-1, which is ~0 if the date is right.
-    # Check the two cells right before it (a date one or two periods too late), each at ALPHA/2.
-    zc = stats.norm.ppf(1 - ALPHA / 4)
+    # Check the two cells right before it (a date one or two periods too late), each at alpha/2.
+    zc = stats.norm.ppf(1 - alpha / 4)
     hits = [k for k in (-dlt - 1, -dlt - 2) if k in dyn_tab.index and np.isfinite(dyn_tab.loc[k, "se"])
             and dyn_tab.loc[k, "se"] > 0 and abs(dyn_tab.loc[k, "att"] / dyn_tab.loc[k, "se"]) > zc]
     flag = bool(hits)
     k_chk = hits[0] if hits else -dlt - 1
+    # joint pre-trend test (v2.5.0). Three levels, from the most to the least detailed, so that the number of
+    # restrictions q stays within (n - 1)/10, n = min(resampled units or clusters, bootstrap draws): a Wald test with
+    # a covariance estimated from n units over-rejects badly when q is close to n (8 clusters, 8 restrictions: 83%
+    # rejections for a 5% test in the skill's simulations; one restriction: 6%).
+    pre = base[base["t"] < base["g"] - dlt].set_index(["g", "t"])["att"].dropna()
+    pt = {"stat": np.nan, "df": 0, "p": np.nan, "p_chi2": np.nan, "reference": None, "rank": 0,
+          "n_cells": int(len(pre)), "test": None, "draws_used": 0, "max_rank": 0}
+    if len(pre) and bs_cells:
+        n_res = n_cl if eng["cluster"] else len(Ym)          # resampled units: the n of the F reference
+        e_pre = [e for e in dyn.index if e < -dlt]
+        Dc = pd.concat(bs_cells, axis=1).reindex(pre.index).T
+        Dc = Dc[Dc.notna().all(axis=1)].to_numpy(float)
+        De = pd.concat(bs_dyn, axis=1).reindex(e_pre).T
+        De = De[De.notna().all(axis=1)].to_numpy(float)
+        levels = [("pre-period cells", pre.to_numpy(float), Dc),
+                  ("pre-period event-time averages", dyn.reindex(e_pre).to_numpy(float), De),
+                  ("average pre-period coefficient", np.array([float(np.mean(dyn.reindex(e_pre)))]),
+                   De.mean(axis=1, keepdims=True))]
+        for name, est_v, draws_v in levels:
+            n_eff = min(n_res, len(draws_v))
+            if len(est_v) <= max(1, (n_eff - 1) / 10) or name == levels[-1][0]:
+                break
+        cap = min(len(draws_v) - 1, n_res - 1)
+        if len(draws_v) >= 2 and len(est_v) <= cap:
+            W, df_, p_, rk, pc, ref = _wald_boot(est_v, draws_v, cap, n_eff)
+            pt.update(stat=W, df=df_, p=p_, p_chi2=pc, reference=ref, rank=rk, test=name,
+                      draws_used=len(draws_v), max_rank=cap, n_restrictions=len(est_v), n_event_times=len(e_pre))
+        pt["n_resampled"] = n_res
+        pt["n_effective"] = min(n_res, pt["draws_used"]) if pt["draws_used"] else 0
     method = "no covariates" if not covs else {"dr": "doubly robust", "reg": "outcome regression",
                                                "ipw": "IPW"}[est_method] + f", X: {', '.join(covs)} ({x_periods})"
     warns = []
+    if n_boot and n_boot > 1 and n_empty:
+        warns.append(f"{n_empty} of {n_boot} bootstrap draws had no treated {'cluster' if cluster else 'unit'} or no "
+                     "control and were left out of the SEs: with this few treated clusters the bootstrap is unreliable;"
+                     " use causal.randomization_inference.")
     if cluster and n_boot and n_boot > 1 and (n_cl < 30 or n_cl_treated < 6):
         warns.append(f"Cluster bootstrap with {n_cl} clusters ({n_cl_treated} treated): pairs-cluster bootstrap SEs are "
                      "unreliable with few (treated) clusters. Report causal.randomization_inference (and a wild cluster "
@@ -812,6 +1174,29 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         warns.append(f"The outcome already moves at e = {k_chk} (|z| > {zc:.2f}): the effect starts before the recorded"
                      " date (anticipation or a misdated treatment). Confirm the date; re-run with anticipation="
                      f"{-k_chk} and did_timing_sensitivity before reporting the ATT.")
+    if pt["test"] and pt["test"] != "pre-period cells":
+        warns.append(f"Joint pre-trend test run on the {pt['test']} ({pt['n_restrictions']} restriction"
+                     f"{'s' if pt['n_restrictions'] > 1 else ''}), not on the {pt['n_cells']} pre-period cells: with "
+                     f"{pt['n_effective']} resampled {'clusters' if cluster else 'units'} (or draws) a covariance of more "
+                     "restrictions is too noisy for a Wald test. It checks less (a pre-trend that averages out passes).")
+    if pt["test"] and pt["rank"] < pt["n_restrictions"]:
+        warns.append(f"Pre-trend covariance below full rank: Wald test on rank {pt['rank']} (pseudo-inverse), df = "
+                     f"{pt['df']}.")
+    if pt["test"] and np.isfinite(pt["p"]) and pt["p"] < alpha:
+        warns.append(f"Joint pre-trend test rejects (p = {pt['p']:.3g}, df = {pt['df']}): parallel trends are doubtful."
+                     " Look at the pre-period cells, compare with did_imputation (did_compare) and consider anticipation"
+                     " or covariates.")
+    if pt["test"] and pt["df"] and pt["n_effective"] < 40 * pt["df"] and pt["test"] == "pre-period cells":
+        warns.append(f"Joint pre-trend test with {pt['df']} restrictions, {pt['n_resampled']} resampled "
+                     f"{'clusters' if cluster else 'units'} and {pt['draws_used']} bootstrap draws: a Wald test with an "
+                     f"estimated covariance can over-reject at this size even with the {pt['reference']} reference; read a"
+                     " rejection near the threshold with care"
+                     + (", raise n_boot (>= 999)" if pt["draws_used"] < 40 * pt["df"] else "")
+                     + " and check with causal.randomization_inference.")
+    if pt["test"] and cluster and (n_cl < 30 or n_cl_treated < 6):
+        warns.append("With few (treated) clusters the bootstrap pre-trend test over-rejects (about 9% for a 5% test "
+                     "with 8 clusters in the skill's simulations): read a rejection near the threshold with care and "
+                     "check the pre-period cells with causal.randomization_inference.")
     cross = None
     if covs:
         if diag["trimmed"]:
@@ -836,11 +1221,12 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
                              f"{cross['reg']:.4f}, IPW {cross['ipw']:.4f} differ by {spread / se_simple:.1f} SE. "
                              "The outcome and propensity models disagree, so at least one is misspecified: add "
                              "flexibility (squares, interactions, logs) or check overlap before reporting.")
-    out = {"overall": _out("ATT (CS, simple)", simple, se_simple, len(Ym), anticipation=dlt,
+    out = {"overall": _out("ATT (CS, simple)", simple, se_simple, len(Ym), alpha=alpha, anticipation=dlt,
                            method=method, warnings=warns, cluster=cluster,
                            n_clusters=n_cl if cluster else len(Ym)),
            "dynamic": dyn_tab, "gt": gt, "flags": {"effect_before_date": flag},
-           "cohorts_dropped": dropped, "warnings": warns}
+           "cohorts_dropped": dropped, "warnings": warns, "pretrend": pt, "pretrend_p": pt["p"],
+           "pretrend_df": pt["df"], "alpha": alpha}
     if covs:
         out["cross_check"] = cross
         out["overlap"] = {k: diag[k] for k in ("ps_max", "trimmed", "ps_failed", "cells")}
@@ -849,8 +1235,13 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         print(f"\nCallaway-Sant'Anna ({control} controls, {len(cohorts)} cohorts, {n_boot} bootstrap reps"
               + (f" by {cluster} ({n_cl} clusters, {n_cl_treated} treated)" if cluster else "")
               + (f", anticipation = {dlt}" if dlt else "") + f"; {method})")
-        print(f"Overall ATT: {o['estimate']:.4f} (SE {o['se']:.4f}, 95% CI {o['ci_low']:.4f} to {o['ci_high']:.4f})")
+        print(f"Overall ATT: {o['estimate']:.4f} (SE {o['se']:.4f}, {100 * (1 - alpha):g}% CI {o['ci_low']:.4f} to "
+              f"{o['ci_high']:.4f})")
         print("Dynamic (event-time) ATT:\n" + dyn_tab.to_string(float_format=lambda v: f"{v:.4f}"))
+        if pt["test"]:
+            print(f"Joint pre-trend test ({pt['test']}, bootstrap covariance): W = {pt['stat']:.3f}, "
+                  f"{pt['reference']} p = {pt['p']:.3f} → " + ("pre-trends detected: parallel trends doubtful" if pt["p"] < alpha else
+                                            "does not reject; this does not show parallel trends (low power is possible)"))
         if cross is not None:
             print("Independent recomputation of the overall ATT: "
                   + ", ".join(f"{k} {v:.4f}" for k, v in cross.items()))
@@ -864,7 +1255,7 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
 def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, max_shift: int = 2,
                            control: str = "never", n_boot: int = 199, seed: int = 0, covariates: list[str] | None = None,
                            est_method: str = "dr", x_periods: str = "base", cluster: str | None = None,
-                           show: bool = True) -> dict:
+                           alpha: float = ALPHA, show: bool = True) -> dict:
     """How much does the Callaway-Sant'Anna result depend on the exact treatment date?
 
     1. Shift table: re-estimates the overall ATT with every treated unit's date moved by
@@ -877,11 +1268,11 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
        are dynamic), at the cost of fewer usable cohorts and wider CIs.
     Verdict: 'survives' if the date-robust CI excludes 0 with the same sign as the
     baseline; otherwise the conclusion depends on the exact date.
-    covariates / est_method / x_periods / cluster: passed to att_gt, so the check uses the same specification
-    and the same (clustered) inference."""
+    covariates / est_method / x_periods / cluster / alpha: passed to att_gt, so the check uses the same specification
+    and the same (clustered) inference at the same level."""
     d = df.copy()
     cov_kw = dict(covariates=covariates, est_method=est_method, x_periods=x_periods, verify=False,
-                  cluster=cluster)
+                  cluster=cluster, alpha=alpha)
     g0 = d[gvar].fillna(0)
     rows = []
     for k in range(-max_shift, max_shift + 1):
@@ -911,7 +1302,7 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
               " treated periods in the base or untreated ones in the post period, so swings are expected;"
               " the date-robust line below is the verdict)")
         print(f"Date-robust ATT (true date anywhere within ±{max_shift}): {ro['estimate']:.4f} "
-              f"(SE {ro['se']:.4f}, 95% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})"
+              f"(SE {ro['se']:.4f}, {100 * (1 - alpha):g}% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})"
               + (f"; cohorts dropped: {rob['cohorts_dropped']}" if rob["cohorts_dropped"] else ""))
         print("  → " + (f"the conclusion survives date errors of up to ±{max_shift} periods." if survives else
                         f"the conclusion DEPENDS on the exact date: with an error of up to ±{max_shift} periods the "
@@ -923,7 +1314,7 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
 def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: str, g_high: str,
                         control: str = "never", n_draws: int = 200, n_boot: int = 199, seed: int = 0,
                         covariates: list[str] | None = None, est_method: str = "dr", x_periods: str = "base",
-                        cluster: str | None = None, show: bool = True) -> dict:
+                        cluster: str | None = None, alpha: float = ALPHA, show: bool = True) -> dict:
     """Staggered DiD when each unit's adoption date is only known to lie in a window
     [g_low, g_high] (e.g. a law phased in court by court with imprecise records).
     Never-treated units: g_low = g_high = 0 or NaN.
@@ -932,10 +1323,10 @@ def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: s
        every base period precedes any plausible adoption (Callaway-Sant'Anna, bootstrap CI).
     2. Date draws: n_draws estimates with each unit's date drawn uniformly from its
        window; the spread shows how much date uncertainty alone moves the ATT.
-    covariates / est_method / x_periods / cluster: passed to att_gt (same specification and inference)."""
+    covariates / est_method / x_periods / cluster / alpha: passed to att_gt (same specification, inference and level)."""
     d = df.copy()
     cov_kw = dict(covariates=covariates, est_method=est_method, x_periods=x_periods, verify=False,
-                  cluster=cluster)
+                  cluster=cluster, alpha=alpha)
     lo = d.groupby(unit)[g_low].first().fillna(0)
     hi = d.groupby(unit)[g_high].first().fillna(0)
     if ((hi > 0) & (lo > hi)).any():
@@ -967,12 +1358,397 @@ def did_uncertain_dates(df: pd.DataFrame, unit: str, time: str, y: str, g_low: s
     if show:
         print(f"\nDiD with uncertain adoption dates (windows up to {width} periods wide, {control} controls)")
         print(f"Window-robust ATT (base before any plausible date): {ro['estimate']:.4f} "
-              f"(SE {ro['se']:.4f}, 95% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})")
+              f"(SE {ro['se']:.4f}, {100 * (1 - alpha):g}% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})")
         print(f"ATT across {len(draws)} random dates inside the windows: median {q50:.4f}, "
               f"5–95% {q05:.4f} to {q95:.4f}, same sign in {share_same:.0%} of draws")
         print("  → " + ("the effect survives the date uncertainty." if survives else
                         "the effect does NOT survive the date uncertainty: narrow the windows with better "
                         "records or report the result as inconclusive."))
+    return out
+
+
+def _fe_design(ui: np.ndarray, ti: np.ndarray, n_u: int, n_t: int, t_ref: int):
+    """Sparse two-way fixed-effects design: n_u unit dummies and n_t − 1 period dummies (period t_ref dropped)."""
+    from scipy import sparse
+    n = len(ui)
+    cols_t = np.where(ti < t_ref, ti, ti - 1) + n_u
+    keep = ti != t_ref
+    rows = np.concatenate([np.arange(n), np.arange(n)[keep]])
+    cols = np.concatenate([ui, cols_t[keep]])
+    return sparse.csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n_u + n_t - 1))
+
+
+def _bjs_core(y: np.ndarray, ui: np.ndarray, ti: np.ndarray, g_t: np.ndarray, treated: np.ndarray,
+              n_u: int, n_t: int):
+    """Imputation step of Borusyak, Jaravel & Spiess (2024) on arrays. ui, ti: unit and period codes; treated:
+    boolean mask of the treated observations (the rest are untreated, Ω0). Fits unit and period effects by OLS on Ω0
+    only, imputes Y(0) for the treated observations and returns their τ̂ = Y − Ŷ(0), plus what the variance needs.
+    Treated observations whose unit or period has no untreated observation connected to the rest cannot be imputed
+    and are flagged (ident = False)."""
+    from scipy import sparse
+    from scipy.sparse.csgraph import connected_components
+    from scipy.sparse.linalg import spsolve
+    u0, t0 = ui[~treated], ti[~treated]
+    # connectedness of the unit-period graph of untreated observations
+    adj = sparse.csr_matrix((np.ones(len(u0)), (u0, t0 + n_u)), shape=(n_u + n_t, n_u + n_t))
+    _, lab = connected_components(adj, directed=False)
+    has0 = np.zeros(n_u + n_t, bool)
+    has0[u0] = True
+    has0[t0 + n_u] = True
+    main = np.bincount(lab[has0]).argmax() if has0.any() else -1
+    in_main = (lab == main) & has0
+    ok0 = in_main[u0] & in_main[t0 + n_u]
+    ident = treated & in_main[ui] & in_main[ti + n_u]
+    t_ref = int(t0[ok0].min())
+    Z0 = _fe_design(u0[ok0], t0[ok0], n_u, n_t, t_ref)
+    keep_col = np.asarray(Z0.sum(axis=0)).ravel() > 0
+    Z0 = Z0[:, keep_col]
+    A = (Z0.T @ Z0).tocsc()
+    coef = spsolve(A, Z0.T @ y[~treated][ok0])
+    Z1 = _fe_design(ui[ident], ti[ident], n_u, n_t, t_ref)[:, keep_col]
+    tau = y[ident] - Z1 @ coef
+    resid0 = y[~treated][ok0] - Z0 @ coef
+    return {"tau": tau, "ident": ident, "ok0": ok0, "Z0": Z0, "Z1": Z1, "A": A, "resid0": resid0}
+
+
+def _bjs_weights_v(core: dict, w1: np.ndarray) -> np.ndarray:
+    """Implied weights on the untreated observations of the linear estimator Σ w1·τ̂: v0 = −Z0 (Z0'Z0)⁻¹ Z1' w1."""
+    from scipy.sparse.linalg import spsolve
+    b = spsolve(core["A"], core["Z1"].T @ w1)
+    return -(core["Z0"] @ b)
+
+
+def did_imputation(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, anticipation: int = 0,
+                   cluster: str | None = None, horizons: int | None = None, pretrends: int | None = None,
+                   alpha: float = ALPHA, show: bool = True) -> dict:
+    """Imputation estimator of Borusyak, Jaravel & Spiess (2024, Review of Economic Studies), the second route for
+    staggered adoption next to att_gt (v2.5.0). gvar = first treated period (0 or NaN = never treated); a binary,
+    absorbing treatment (check with did_design). The panel may be unbalanced.
+
+    1. Unit and period fixed effects are fitted by OLS on the untreated observations only (never-treated units, and
+       treated units before g − anticipation), so treated outcomes never enter the counterfactual model.
+    2. Y(0) is imputed for every treated observation and τ̂_it = Y_it − Ŷ_it(0).
+    3. The overall ATT is the mean of τ̂ over the treated observations with t ≥ g (each treated unit-period weighs the
+       same, as in att_gt's simple aggregation); the event-study coefficient at horizon h ≥ 0 is the mean over
+       t − g = h. With anticipation = δ, the periods g − δ … g − 1 are kept out of the fixed-effects fit and their τ̂
+       are reported as event-study rows flagged anticipation = True, not averaged into the ATT.
+    Treated observations whose unit has no untreated period (always treated) or whose period has no untreated unit
+    cannot be imputed: they are dropped and counted (warned).
+
+    Standard errors: the conservative clustered variance of the paper (Theorem 3): every estimate is linear in Y,
+    Σ v_it Y_it, with v = w on treated observations and v = −Z0(Z0'Z0)⁻¹Z1'w on untreated ones; the variance is
+    Σ_clusters (Σ v_it ε̃_it)², with model residuals on untreated observations and, on treated ones, τ̂ minus the
+    average of τ̂ in its cohort-period cell (weighted by v²). It is conservative when effects vary within cells.
+    Clusters: units by default, cluster= a coarser column (the level of assignment).
+
+    Pre-trend test (separate from estimation, as in the paper): on the untreated observations only, regress Y on unit
+    and period effects and indicators of the pretrends = K periods before adoption (default: all available, cut to
+    keep K ≤ (G − 1)/10 with G clusters, warned); Wald test that they are zero with a clustered covariance and an
+    F(K, G − K) reference. Not rejecting does not show parallel trends. The leads start at e = −1 (reference: the
+    earlier periods); R didimputation's pretrends=TRUE reports e = −2, −3, … with e = −1 as reference, so the lead
+    coefficients of the two are not comparable one by one.
+    Replication: the ATT, SEs (unit and coarser clusters), unbalanced panel and event-study horizons match R
+    didimputation 0.5.1 (estimates within 2e-7; SEs within 1e-8, event-study SEs within 1e-7; tests/test_v250.py,
+    tools/r_reference).
+
+    Returns the contract dict in "overall" (estimand, estimate, se, ci_low, ci_high, p, n, method, warnings), the
+    event-study table "dynamic" (horizons ≥ 0 from the imputation, < 0 from the pre-trend regression), "pretrend",
+    the cell table "gt" (mean τ̂ and count per cohort-period, with an anticipation flag; did_compare recomputes the cells
+    on its bootstrap draws), the per-observation "tau" (same flag) and
+    "converged" (True: the estimator has no iterative step)."""
+    from scipy import sparse
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    cols = [unit, time, y, gvar] + ([cluster] if cluster and cluster not in (unit, time, y, gvar) else [])
+    d = df[cols].dropna(subset=[unit, time, y]).copy()
+    d[gvar] = d[gvar].fillna(0).astype(float)
+    if (d.groupby(unit)[gvar].nunique() > 1).any():
+        raise ValueError(f"did_imputation: {gvar} must be constant within each {unit}")
+    if d.duplicated([unit, time]).any():
+        raise ValueError(f"did_imputation: repeated ({unit}, {time}) rows")
+    if cluster and (d.groupby(unit)[cluster].nunique() > 1).any():
+        raise ValueError(f"did_imputation: cluster '{cluster}' must be constant within each {unit}")
+    dlt = int(anticipation)
+    ui, uniq_u = pd.factorize(d[unit], sort=True)
+    periods = np.sort(d[time].unique())
+    ti = np.searchsorted(periods, d[time].to_numpy())
+    tv = d[time].to_numpy(float)
+    gv = d[gvar].to_numpy(float)
+    treated = (gv > 0) & (tv >= gv - dlt)
+    yv = d[y].to_numpy(float)
+    if treated.all() or not treated.any():
+        raise ValueError("did_imputation: need both treated and untreated observations")
+    core = _bjs_core(yv, ui, ti, gv, treated, len(uniq_u), len(periods))
+    ident = core["ident"]
+    n_drop = int((treated & ~ident).sum())
+    e = (tv - gv)[ident]
+    tau = core["tau"]
+    cl_codes = pd.factorize(d[cluster] if cluster else d[unit])[0]
+    n_cl = int(cl_codes.max() + 1)
+    cl0 = cl_codes[~treated][core["ok0"]]
+    cl1 = cl_codes[ident]
+    g1, t1 = gv[ident], tv[ident]
+    cell = pd.Series(list(zip(g1, t1)))
+
+    def estimate(w1):
+        """Estimate and Theorem 3 SE of Σ w1·τ̂ over the imputed treated observations."""
+        est = float(w1 @ tau)
+        v0 = _bjs_weights_v(core, w1)
+        v2 = pd.Series(w1 ** 2)
+        num = (v2 * tau).groupby(cell).transform("sum")
+        den = v2.groupby(cell).transform("sum")
+        tau_tilde = np.where(den.to_numpy() > 0, (num / den.where(den > 0, 1)).to_numpy(), 0.0)
+        eps1 = tau - tau_tilde
+        s = np.bincount(cl0, weights=v0 * core["resid0"], minlength=n_cl) + np.bincount(cl1, weights=w1 * eps1,
+                                                                                         minlength=n_cl)
+        return est, float(np.sqrt(np.sum(s ** 2)))
+
+    # the ATT averages t >= g only; with anticipation the periods g - δ … g - 1 are kept out of the FE sample (they
+    # may already respond) and reported as separate event-time rows, not mixed into the ATT (review of v2.5.0)
+    post = e >= 0
+    n1 = int(post.sum())
+    if n1 == 0:
+        raise ValueError("did_imputation: no treated observation at or after its adoption date can be imputed")
+    est, se = estimate(np.where(post, 1.0 / n1, 0.0))
+    hs = sorted(set(e.astype(int)))
+    if horizons is not None:
+        hs = [h for h in hs if h <= horizons]
+    rows = []
+    for h in hs:
+        m = e == h
+        w = np.where(m, 1.0 / m.sum(), 0.0)
+        eh, sh = estimate(w)
+        rows.append({"e": h, "att": eh, "se": sh, "n_obs": int(m.sum()), "anticipation": bool(h < 0)})
+    dyn = pd.DataFrame(rows).set_index("e")
+    # ---- pre-trend test on the untreated observations only (separate from estimation, as in the paper). By
+    # Frisch-Waugh: the lead indicators and Y are residualized on the unit and period effects, and leads that the
+    # effects already span are dropped (without never-treated units the full set of leads is collinear with them),
+    # keeping the leads nearest to adoption first.
+    pt = {"stat": np.nan, "df": 0, "p": np.nan, "reference": None, "leads": 0, "n_clusters": n_cl,
+          "leads_dropped_collinear": 0}
+    lead_rows, cut, pre_fail = [], False, None
+    try:
+        unt_idx = np.where(~treated)[0][core["ok0"]]
+        rel = np.where(gv > 0, tv - gv, np.nan)[unt_idx]
+        K_all = sorted({int(-r) for r in rel[np.isfinite(rel)] if r < -dlt})
+        if pretrends is not None:
+            K_all = K_all[:int(pretrends)]
+        Z0, A0 = core["Z0"], core["A"]
+        from scipy.sparse.linalg import splu
+        lu = splu(A0)
+        y_r = core["resid0"]                          # Y residualized on the effects (fitted on these observations)
+        kept, Lr = [], []
+        for k in K_all:
+            col = (rel == -k).astype(float)
+            r = col - Z0 @ lu.solve(np.asarray(Z0.T @ col).ravel())
+            if Lr:
+                M = np.column_stack(Lr)
+                r = r - M @ np.linalg.lstsq(M, r, rcond=None)[0]
+            if r @ r > 1e-10 * max(1.0, col @ col):
+                kept.append(k)
+                Lr.append(col - Z0 @ lu.solve(np.asarray(Z0.T @ col).ravel()))
+        pt["leads_dropped_collinear"] = len(K_all) - len(kept)
+        c0 = cl_codes[unt_idx]
+        Gc = len(np.unique(c0))
+        cap_k = max(1, int((Gc - 1) // 10))
+        if len(kept) > cap_k:
+            kept, Lr, cut = kept[:cap_k], Lr[:cap_k], True
+        if kept:
+            Lm = np.column_stack(Lr)
+            LtL_inv = np.linalg.inv(Lm.T @ Lm)
+            bl = LtL_inv @ (Lm.T @ y_r)
+            res = y_r - Lm @ bl
+            H = Lm @ LtL_inv
+            S = np.vstack([np.bincount(c0, weights=H[:, j] * res, minlength=n_cl) for j in range(len(kept))]).T
+            V = (S.T @ S) * Gc / max(Gc - 1, 1)
+            q = len(kept)
+            W = float(bl @ np.linalg.solve(V, bl))
+            if Gc > q + 1:
+                p_, ref = float(stats.f.sf(W / q * (Gc - q) / (Gc - 1), q, Gc - q)), f"F({q}, {Gc - q})"
+            else:
+                p_, ref = float(stats.chi2.sf(W, q)), f"chi2({q})"
+            pt.update(stat=W, df=q, p=p_, reference=ref, leads=q, n_clusters=Gc)
+            sev = np.sqrt(np.clip(np.diag(V), 0, None))
+            for j, k in enumerate(kept):
+                lead_rows.append({"e": -k, "att": float(bl[j]), "se": float(sev[j]),
+                                  "n_obs": int((rel == -k).sum()), "anticipation": False})
+    except Exception as exc:  # noqa: BLE001 — the pre-trend test must never break the estimate
+        pre_fail = str(exc)
+    if lead_rows:
+        dyn = pd.concat([pd.DataFrame(lead_rows).set_index("e"), dyn]).sort_index()
+    dyn["ci_low"], dyn["ci_high"] = _ci(dyn["att"], dyn["se"], alpha)
+    gt = pd.DataFrame({"g": g1, "t": t1, "tau": tau}).groupby(["g", "t"])["tau"].agg(["mean", "size"])
+    gt.columns = ["att", "n_obs"]
+    gt["e"] = gt.index.get_level_values("t") - gt.index.get_level_values("g")
+    gt["anticipation"] = gt["e"] < 0
+    warns = []
+    if n_drop:
+        warns.append(f"{n_drop} treated observations could not be imputed (their unit has no untreated period, or no "
+                     "untreated unit is observed in their period) and were left out of every estimate.")
+    if cut:
+        warns.append(f"Pre-trend test on the {pt['leads']} lead(s) nearest to adoption only: with {pt['n_clusters']} "
+                     "clusters a clustered covariance of more coefficients is too noisy for a Wald test.")
+    if pt["leads_dropped_collinear"]:
+        warns.append(f"{pt['leads_dropped_collinear']} lead(s) are spanned by the unit and period effects (no "
+                     "never-treated units, or too few untreated periods) and were left out of the pre-trend test.")
+    if pre_fail:
+        warns.append(f"The pre-trend test could not be computed ({pre_fail}); the estimates are unaffected.")
+    if np.isfinite(pt["p"]) and pt["p"] < alpha:
+        warns.append(f"Pre-trend test rejects (p = {pt['p']:.3g}, {pt['reference']}): parallel trends are doubtful; "
+                     "compare with att_gt (did_compare) and look at the leads.")
+    if n_cl < 30:
+        warns.append(f"{n_cl} clusters: the clustered SEs are unreliable and the pre-trend test over-rejects (about 10% "
+                     "for a 5% test with 12 clusters in the skill's simulations); add causal.randomization_inference.")
+    if dlt:
+        warns.append(f"Anticipation = {dlt}: periods g − {dlt} … g − 1 are left out of the fixed-effects fit and reported "
+                     "as separate rows of the event study (anticipation = True); the ATT averages t ≥ g only.")
+    if not (pd.api.types.is_numeric_dtype(d[time]) and (len(periods) < 2
+                                                         or np.allclose(np.diff(periods.astype(float)), 1.0))):
+        warns.append(f"The {time} column is not a sequence of consecutive integers: horizons and anticipation are read "
+                     "in its units, not in periods; recode time as 1, 2, 3, … first.")
+    method = (f"imputation (Borusyak, Jaravel & Spiess 2024), FE fitted on {int((~treated).sum())} untreated "
+              f"observations; SEs clustered by {cluster or unit} ({n_cl} clusters)" + (f", anticipation = {dlt}" if dlt else ""))
+    out = {"overall": _out("ATT (imputation)", est, se, int(len(d)), alpha=alpha, method=method, warnings=warns,
+                           n_treated_obs=n1, n_clusters=n_cl, anticipation=dlt),
+           "dynamic": dyn, "pretrend": pt, "pretrend_p": pt["p"], "gt": gt,
+           "tau": pd.DataFrame({unit: uniq_u[ui[ident]], time: t1, gvar: g1, "e": e, "tau": tau, "anticipation": e < 0}),
+           "dropped_treated_obs": n_drop, "converged": True, "warnings": warns, "alpha": alpha}
+    if show:
+        o = out["overall"]
+        print(f"\nImputation estimator (BJS; {method})")
+        print(f"Overall ATT: {o['estimate']:.4f} (SE {o['se']:.4f}, {100 * (1 - alpha):g}% CI {o['ci_low']:.4f} to "
+              f"{o['ci_high']:.4f}); {n1} treated observations")
+        print("Event study (leads from the pre-trend regression on untreated observations):\n"
+              + dyn.to_string(float_format=lambda v: f"{v:.4f}"))
+        if pt["leads"]:
+            print(f"Pre-trend test ({pt['leads']} leads, untreated observations only): W = {pt['stat']:.3f}, "
+                  f"{pt['reference']} p = {pt['p']:.3f} → " + ("pre-trends detected" if pt["p"] < alpha else
+                                                            "does not reject; this does not show parallel trends"))
+        for w in warns:
+            print("  WARNING: " + w)
+    return out
+
+
+def _bjs_cells(y: np.ndarray, ui: np.ndarray, ti: np.ndarray, tv: np.ndarray, gv: np.ndarray, n_u: int, n_t: int,
+               dlt: int) -> pd.DataFrame:
+    """Mean τ̂ of the imputation estimator per (cohort, period) cell, without SEs (used inside did_compare's bootstrap)."""
+    treated = (gv > 0) & (tv >= gv - dlt)
+    core = _bjs_core(y, ui, ti, gv, treated, n_u, n_t)
+    idt = core["ident"]
+    return pd.DataFrame({"g": gv[idt], "t": tv[idt], "tau": core["tau"]}).groupby(["g", "t"])["tau"].mean()
+
+
+def did_compare(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: str = "notyet",
+                anticipation: int = 0, cluster: str | None = None, n_boot: int = 199, seed: int = 0,
+                alpha: float = ALPHA, show: bool = True) -> dict:
+    """Callaway-Sant'Anna (att_gt) against the imputation estimator (did_imputation) on the same data: a second route
+    with a different method for a staggered DiD (v2.5.0). The guide of de Chaisemartin & D'Haultfœuille reports that
+    the two families are always close except where pre-trend tests reject, so a significant gap is a finding that
+    points to the pre-trends, not a choice between two numbers.
+
+    Same target: both are averaged over the post-period (cohort, period) cells that both define, with the cohort sizes
+    of att_gt as weights (its simple aggregation); cells that only one route estimates (a cohort without a base period
+    in att_gt, a period with no untreated unit in the imputation) are listed and left out, so the gap is not
+    mechanical. The difference is tested with its own SE from a paired bootstrap: in every draw of units (whole
+    clusters with cluster=) both estimators are recomputed on the same resampled data, and the test is at alpha.
+    Requires a balanced panel (att_gt). Both routes run without covariates (the imputation estimator here has none),
+    and control defaults to 'notyet' (the guide's recommended comparison group), while att_gt defaults to 'never':
+    pass the control of the headline att_gt, and if that one uses covariates, say that the comparison checks the
+    unconditional specification. Pass the result to reporting.cross_check(res["cross_check"],
+    se=res["diff_se"], tol_se=Φ⁻¹(1 − alpha/2)) to record it as an independent check (kind "method")."""
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    eng = _cs_engine(df, unit, time, y, gvar, control, anticipation, [], "dr", "base", cluster)
+    Ym, G, T, dlt = eng["Ym"], eng["G"], eng["T"], eng["dlt"]
+    n_u, n_t = Ym.shape
+    tv_full = np.tile(T.astype(float), n_u)
+
+    def routes(idx):
+        cs = eng["compute"](idx)
+        cs = cs[cs["e"] >= 0].set_index(["g", "t"])
+        k = len(idx)
+        yv = Ym[idx].ravel()
+        gv = np.repeat(G[idx].astype(float), n_t)
+        ui = np.repeat(np.arange(k), n_t)
+        ti = np.tile(np.arange(n_t), k)
+        bj = _bjs_cells(yv, ui, ti, np.tile(T.astype(float), k), gv, k, n_t, dlt)
+        return cs, bj
+
+    cs0, bj0 = routes(np.arange(n_u))
+    bj0.index = pd.MultiIndex.from_arrays([bj0.index.get_level_values(0), bj0.index.get_level_values(1)],
+                                          names=["g", "t"])
+    cs0.index = pd.MultiIndex.from_arrays([cs0.index.get_level_values(0).astype(float),
+                                          cs0.index.get_level_values(1).astype(float)], names=["g", "t"])
+    common = cs0.index.intersection(bj0.index)
+    only_cs = [tuple(x) for x in cs0.index.difference(common)]
+    only_bjs = [tuple(x) for x in bj0.index.difference(common)
+                if x[1] >= x[0]]                                  # post cells only
+    if len(common) == 0:
+        raise ValueError("did_compare: the two estimators share no post-period cell")
+    wts = cs0.loc[common, "n_g"].to_numpy(float)
+
+    def agg(cs, bj):
+        cs = cs.copy()
+        cs.index = pd.MultiIndex.from_arrays([cs.index.get_level_values(0).astype(float),
+                                             cs.index.get_level_values(1).astype(float)])
+        a = cs["att"].reindex(common).to_numpy(float)
+        b = bj.reindex(common).to_numpy(float)
+        if np.isnan(a).any() or np.isnan(b).any():
+            return np.nan, np.nan
+        return float(wts @ a / wts.sum()), float(wts @ b / wts.sum())
+
+    est_cs, est_bj = agg(cs0, bj0)
+    diff = est_cs - est_bj
+    draws = []
+    if n_boot and n_boot > 1:
+        rng = np.random.default_rng(seed)
+        for _ in range(n_boot):
+            idx = _cs_draw(rng, eng)
+            try:
+                c, b = routes(idx)
+            except Exception:  # noqa: BLE001 — a degenerate draw (no untreated observation, singular FE): skipped
+                draws.append((np.nan, np.nan))
+                continue
+            draws.append(agg(c, b))
+    D = np.array(draws, float).reshape(-1, 2)
+    okd = np.isfinite(D).all(axis=1)
+    n_ok = int(okd.sum())
+    se_cs = float(np.std(D[okd, 0], ddof=1)) if n_ok > 1 else np.nan
+    se_bj = float(np.std(D[okd, 1], ddof=1)) if n_ok > 1 else np.nan
+    se_d = float(np.std(D[okd, 0] - D[okd, 1], ddof=1)) if n_ok > 1 else np.nan
+    z = diff / se_d if np.isfinite(se_d) and se_d > 0 else np.nan
+    p = float(2 * stats.norm.sf(abs(z))) if np.isfinite(z) else np.nan
+    diverge = bool(np.isfinite(p) and p < alpha)
+    corr = float(np.corrcoef(D[okd].T)[0, 1]) if n_ok > 2 else np.nan
+    warns = []
+    if diverge:
+        warns.append(f"Callaway-Sant'Anna ({est_cs:.4f}) and the imputation estimator ({est_bj:.4f}) differ by "
+                     f"{diff:.4f} (SE of the difference {se_d:.4f}, p = {p:.3g}): the two routes disagree, which in "
+                     "the guide's meta-analysis happened only when pre-trend tests rejected. Look at att_gt's and "
+                     "did_imputation's pre-trend tests and leads before reporting either number.")
+    if only_cs or only_bjs:
+        warns.append(f"Compared on {len(common)} common post-period cells; left out: {len(only_cs)} cell(s) only in "
+                     f"att_gt and {len(only_bjs)} only in did_imputation (each route's overall ATT also averages over "
+                     "its own cells).")
+    if n_boot and n_ok < n_boot:
+        warns.append(f"{n_boot - n_ok} of {n_boot} bootstrap draws could not compute both routes and were skipped.")
+    if cluster and (eng["n_cl"] < 30 or eng["n_cl_treated"] < 6):
+        warns.append(f"{eng['n_cl']} clusters ({eng['n_cl_treated']} treated): the bootstrap SE of the difference is "
+                     "unreliable; read the comparison as descriptive.")
+    out = {"cs": est_cs, "bjs": est_bj, "difference": diff, "diff_se": se_d, "z": z, "p": p, "diverge": diverge,
+           "se_cs": se_cs, "se_bjs": se_bj, "corr": corr, "cells_common": len(common),
+           "cells_only_cs": only_cs, "cells_only_bjs": only_bjs, "draws_used": n_ok, "alpha": alpha,
+           "control": control, "cross_check": pd.Series({"Callaway-Sant'Anna": est_cs, "imputation (BJS)": est_bj},
+                                                        name="ATT on common cells"),
+           "warnings": warns}
+    if show:
+        print(f"\nCallaway-Sant'Anna ({control} controls) vs imputation (BJS), {len(common)} common post cells, "
+              f"{n_ok} paired bootstrap draws" + (f" by {cluster}" if cluster else ""))
+        print(f"  CS {est_cs:.4f} (SE {se_cs:.4f}); BJS {est_bj:.4f} (SE {se_bj:.4f}); difference {diff:.4f} "
+              f"(SE {se_d:.4f}, p = {p:.3f}) → " + ("the routes DISAGREE at alpha = " + f"{alpha:g}" if diverge else
+                                                   f"no significant difference at alpha = {alpha:g}"))
+        for w in warns:
+            print("  WARNING: " + w)
     return out
 
 
@@ -1340,6 +2116,80 @@ def bacon_decomposition(df: pd.DataFrame, unit: str, time: str, y: str, gvar: st
         print(by_type.to_string(float_format=lambda v: f"{v:.4f}"))
         for w_ in warns:
             print("  WARNING: " + w_)
+    return out
+
+
+def twfe_weights(df: pd.DataFrame, unit: str, time: str, d: str, y: str | None = None, show: bool = True) -> dict:
+    """Weights behind a two-way fixed-effects coefficient (de Chaisemartin & D'Haultfœuille 2020, AER; R/Stata
+    twowayfeweights, type "feTR"), for a binary or a non-binary treatment (v2.5.0).
+
+    Under parallel trends, the TWFE coefficient of y on d with unit and period effects is a weighted sum of the
+    treatment effects of the treated cells: β_fe = Σ_{d ≠ 0} w_it Δ_it, with Δ_it the effect per unit of treatment
+    and w_it = d_it ε_it / Σ d ε, where ε is the residual of d on unit and period effects. The weights sum to 1 but can
+    be negative: a negative weight means that a treated cell serves as a control for others (typically early adopters
+    late in the panel). With heterogeneous effects, β_fe can then lie outside the range of every Δ, even with the
+    opposite sign. Unlike bacon_decomposition, this works with a non-binary (dose) and with an unbalanced panel.
+
+    sigma_fe = |β_fe| / σ(w̃), σ(w̃)² = Σ s (w̃ − 1)² · N/(N − 1), s = d / Σ d (the treatment shares), w̃ = w / s,
+    N = treated cells: the dispersion of the effects across treated cells under which β_fe is compatible with an
+    average effect of zero. The N/(N − 1) factor follows the authors' twowayfeweights (R 2.1.0, matched to 1e-9 in the
+    tests), so the value is the population SD of the least dispersed such effects times sqrt((N − 1)/N). A sigma_fe that is small next to plausible heterogeneity means β_fe could have the wrong sign.
+    With y, β_fe is also computed (by Frisch-Waugh, Σ ε y / Σ ε d); without it, only the weights are returned.
+    Returns: weights table (unit, time, d, weight), sum and count of positive and negative weights, sigma_fe (with y),
+    beta (with y), binary flag, warnings."""
+    from scipy.sparse.linalg import spsolve
+    cols = [unit, time, d] + ([y] if y else [])
+    x = df[cols].dropna().copy()
+    if x.duplicated([unit, time]).any():
+        raise ValueError(f"twfe_weights: repeated ({unit}, {time}) rows")
+    ui, uniq_u = pd.factorize(x[unit], sort=True)
+    periods = np.sort(x[time].unique())
+    ti = np.searchsorted(periods, x[time].to_numpy())
+    dv = x[d].to_numpy(float)
+    Z = _fe_design(ui, ti, len(uniq_u), len(periods), 0)
+    Z = Z[:, np.asarray(Z.sum(axis=0)).ravel() > 0]
+    eps = dv - Z @ spsolve((Z.T @ Z).tocsc(), Z.T @ dv)
+    tr = dv != 0
+    if not tr.any():
+        raise ValueError("twfe_weights: no treated cell")
+    denom = float(dv @ eps)
+    if abs(denom) < 1e-12:
+        raise ValueError("twfe_weights: the treatment is fully absorbed by the unit and period effects (no TWFE "
+                         "coefficient)")
+    w = dv * eps / denom
+    s = np.where(tr, dv / dv[tr].sum(), 0.0)
+    wt = np.where(tr, w / np.where(tr, s, 1), 0.0)
+    n_tr = int(tr.sum())
+    # dispersion of the weights with the N/(N − 1) factor of the authors' twowayfeweights (R 2.1.0: its sigma_fe
+    # equals |β| / sqrt(Σ s (w̃ − 1)² · N / (N − 1)), N = treated cells; matched to 1e-9 in tests/test_v250.py)
+    sig_w = float(np.sqrt(np.sum(s[tr] * (wt[tr] - 1) ** 2) * n_tr / max(n_tr - 1, 1)))
+    binary = bool(np.isin(np.unique(dv), [0.0, 1.0]).all())
+    tab = pd.DataFrame({unit: uniq_u[ui[tr]], time: x[time].to_numpy()[tr], d: dv[tr], "weight": w[tr]})
+    neg = tab["weight"] < 0
+    beta = float(eps @ x[y].to_numpy(float) / denom) if y else np.nan
+    sigma_fe = float(abs(beta) / sig_w) if y and sig_w > 0 else np.nan
+    warns = []
+    if neg.any():
+        warns.append(f"{int(neg.sum())} of {len(tab)} treated cells get a negative weight (sum {tab.loc[neg, 'weight'].sum():.3f}):"
+                     " the TWFE coefficient is not a convex average of the effects; with heterogeneous effects it can "
+                     "even have the wrong sign. Report a heterogeneity-robust estimator (causal.did_design says which).")
+        if y and np.isfinite(sigma_fe):
+            warns.append(f"sigma_fe = {sigma_fe:.4g}: effects varying across treated cells with a standard deviation of "
+                         "this size are enough for the average effect to be zero while TWFE reports "
+                         f"{beta:.4g}.")
+    out = {"weights": tab, "n_treated_cells": int(len(tab)), "n_positive": int((~neg).sum()),
+           "n_negative": int(neg.sum()), "sum_positive": float(tab.loc[~neg, "weight"].sum()),
+           "sum_negative": float(tab.loc[neg, "weight"].sum()), "sigma_w": sig_w, "sigma_fe": sigma_fe, "beta": beta,
+           "binary": binary, "warnings": warns,
+           "method": "de Chaisemartin & D'Haultfœuille (2020) weights of the TWFE coefficient (feTR)"}
+    if show:
+        print(f"\nTWFE weights ({'binary' if binary else 'non-binary'} treatment, {len(tab)} treated cells)")
+        print(f"  positive: {out['n_positive']} (sum {out['sum_positive']:.4f}); negative: {out['n_negative']} "
+              f"(sum {out['sum_negative']:.4f})")
+        if y:
+            print(f"  TWFE coefficient {beta:.4f}; sigma_fe {sigma_fe:.4f}")
+        for m in warns:
+            print("  WARNING: " + m)
     return out
 
 
