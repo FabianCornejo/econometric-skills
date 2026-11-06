@@ -38,6 +38,8 @@ Panel designs
                                                   paired bootstrap (v2.5.0): a gap points to the pre-trends
     bacon_decomposition(df, unit, time, y, gvar)  Goodman-Bacon (2021): TWFE as a weighted average of every 2x2,
                                                   with the weight of forbidden (already-treated control) comparisons
+    twfe_weights(df, unit, time, d, y)            de Chaisemartin-D'Haultfœuille (2020) weights of a TWFE coefficient
+                                                  (binary or dose, unbalanced allowed): negative weights, sigma_fe
     twfe_covariate_diagnostic(df, ..., covariates) hidden linearity bias of TWFE with covariates (Caetano-Callaway
                                                   2024): level test on untreated trends, implicit weights, CS benchmark
     ccc_test(df, y, covariates, group, time)      common causal covariates test (Karim-Webb 2024): are covariate
@@ -2069,6 +2071,76 @@ def bacon_decomposition(df: pd.DataFrame, unit: str, time: str, y: str, gvar: st
         print(by_type.to_string(float_format=lambda v: f"{v:.4f}"))
         for w_ in warns:
             print("  WARNING: " + w_)
+    return out
+
+
+def twfe_weights(df: pd.DataFrame, unit: str, time: str, d: str, y: str | None = None, show: bool = True) -> dict:
+    """Weights behind a two-way fixed-effects coefficient (de Chaisemartin & D'Haultfœuille 2020, AER; R/Stata
+    twowayfeweights, type "feTR"), for a binary or a non-binary treatment (v2.5.0).
+
+    Under parallel trends, the TWFE coefficient of y on d with unit and period effects is a weighted sum of the
+    treatment effects of the treated cells: β_fe = Σ_{d ≠ 0} w_it Δ_it, with Δ_it the effect per unit of treatment
+    and w_it = d_it ε_it / Σ d ε, where ε is the residual of d on unit and period effects. The weights sum to 1 but can
+    be negative: a negative weight means that a treated cell serves as a control for others (typically early adopters
+    late in the panel). With heterogeneous effects, β_fe can then lie outside the range of every Δ, even with the
+    opposite sign. Unlike bacon_decomposition, this works with a non-binary (dose) and with an unbalanced panel.
+
+    sigma_fe = |β_fe| / σ(w̃), σ(w̃)² = Σ s (w̃ − 1)², s = d / Σ d (the treatment shares), w̃ = w / s: the smallest
+    standard deviation of the effects across treated cells under which β_fe is compatible with an average effect of
+    zero. A sigma_fe that is small next to plausible heterogeneity means β_fe could have the wrong sign.
+    With y, β_fe is also computed (by Frisch-Waugh, Σ ε y / Σ ε d); without it, only the weights are returned.
+    Returns: weights table (unit, time, d, weight), sum and count of positive and negative weights, sigma_fe (with y),
+    beta (with y), binary flag, warnings."""
+    from scipy.sparse.linalg import spsolve
+    cols = [unit, time, d] + ([y] if y else [])
+    x = df[cols].dropna().copy()
+    if x.duplicated([unit, time]).any():
+        raise ValueError(f"twfe_weights: repeated ({unit}, {time}) rows")
+    ui, uniq_u = pd.factorize(x[unit], sort=True)
+    periods = np.sort(x[time].unique())
+    ti = np.searchsorted(periods, x[time].to_numpy())
+    dv = x[d].to_numpy(float)
+    Z = _fe_design(ui, ti, len(uniq_u), len(periods), 0)
+    Z = Z[:, np.asarray(Z.sum(axis=0)).ravel() > 0]
+    eps = dv - Z @ spsolve((Z.T @ Z).tocsc(), Z.T @ dv)
+    tr = dv != 0
+    if not tr.any():
+        raise ValueError("twfe_weights: no treated cell")
+    denom = float(dv @ eps)
+    if abs(denom) < 1e-12:
+        raise ValueError("twfe_weights: the treatment is fully absorbed by the unit and period effects (no TWFE "
+                         "coefficient)")
+    w = dv * eps / denom
+    s = np.where(tr, dv / dv[tr].sum(), 0.0)
+    wt = np.where(tr, w / np.where(tr, s, 1), 0.0)
+    sig_w = float(np.sqrt(np.sum(s[tr] * (wt[tr] - 1) ** 2)))
+    binary = bool(np.isin(np.unique(dv), [0.0, 1.0]).all())
+    tab = pd.DataFrame({unit: uniq_u[ui[tr]], time: x[time].to_numpy()[tr], d: dv[tr], "weight": w[tr]})
+    neg = tab["weight"] < 0
+    beta = float(eps @ x[y].to_numpy(float) / denom) if y else np.nan
+    sigma_fe = float(abs(beta) / sig_w) if y and sig_w > 0 else np.nan
+    warns = []
+    if neg.any():
+        warns.append(f"{int(neg.sum())} of {len(tab)} treated cells get a negative weight (sum {tab.loc[neg, 'weight'].sum():.3f}):"
+                     " the TWFE coefficient is not a convex average of the effects; with heterogeneous effects it can "
+                     "even have the wrong sign. Report a heterogeneity-robust estimator (causal.did_design says which).")
+        if y and np.isfinite(sigma_fe):
+            warns.append(f"sigma_fe = {sigma_fe:.4g}: effects varying across treated cells with a standard deviation of "
+                         "this size are enough for the average effect to be zero while TWFE reports "
+                         f"{beta:.4g}.")
+    out = {"weights": tab, "n_treated_cells": int(len(tab)), "n_positive": int((~neg).sum()),
+           "n_negative": int(neg.sum()), "sum_positive": float(tab.loc[~neg, "weight"].sum()),
+           "sum_negative": float(tab.loc[neg, "weight"].sum()), "sigma_w": sig_w, "sigma_fe": sigma_fe, "beta": beta,
+           "binary": binary, "warnings": warns,
+           "method": "de Chaisemartin & D'Haultfœuille (2020) weights of the TWFE coefficient (feTR)"}
+    if show:
+        print(f"\nTWFE weights ({'binary' if binary else 'non-binary'} treatment, {len(tab)} treated cells)")
+        print(f"  positive: {out['n_positive']} (sum {out['sum_positive']:.4f}); negative: {out['n_negative']} "
+              f"(sum {out['sum_negative']:.4f})")
+        if y:
+            print(f"  TWFE coefficient {beta:.4f}; sigma_fe {sigma_fe:.4f}")
+        for m in warns:
+            print("  WARNING: " + m)
     return out
 
 

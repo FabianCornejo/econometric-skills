@@ -8,6 +8,9 @@
    of TWFE, coverage and bias in simulation, SE against a unit bootstrap written here, unbalanced panel, pre-trend
    test size and power. R didimputation numbers on tests/data/did_v250_panel.csv: pending (tools/r_reference).
 3. causal.did_compare: size of the paired difference test, power against a pre-trend, paired draws.
+5. causal.twfe_weights: a hand example (weights 1, −1/2, 1/2), the identity TWFE = Σ w·Δ with TWFE computed by dummy
+   regression on noise-free panels (binary and dose, balanced and unbalanced), and sigma_fe checked by building the
+   effect vector with average zero that reproduces β_fe. R TwoWayFEWeights numbers: pending (tools/r_reference).
 4. causal.att_gt: alpha, and the joint pre-trend test (Wald recomputed by a plain inverse, size and power in
    simulation, the level chosen with few clusters).
 
@@ -438,6 +441,60 @@ check("... and the warning points to the pre-trend tests", all(any("pre-trend" i
 c_one = cmp0[0]
 check("did_compare: the cross_check Series has the two routes for reporting.cross_check",
       list(c_one["cross_check"].index) == ["Callaway-Sant'Anna", "imputation (BJS)"])
+
+# ---------------------------------------------------------------- 5. twfe_weights
+# (a) hand example: unit A treated from t = 2, unit B from t = 3, periods 1-3. Two-way demeaned D:
+#     ε = D − D̄_i − D̄_t + D̄ → A2 = 1/3, A3 = −1/6, B3 = 1/6; weights ε / Σε over treated cells = (1, −1/2, 1/2)
+hand = pd.DataFrame({"id": [0, 0, 0, 1, 1, 1], "t": [1, 2, 3, 1, 2, 3], "D": [0, 1, 1, 0, 0, 1]})
+rw = ca.twfe_weights(hand, "id", "t", "D", show=False)
+check("twfe_weights: hand example (A from 2, B from 3) gives weights 1, −1/2, 1/2",
+      np.allclose(rw["weights"]["weight"].to_numpy(), [1.0, -0.5, 0.5], atol=1e-12) and rw["n_negative"] == 1,
+      str(rw["weights"]["weight"].round(4).tolist()))
+
+
+def noise_free(seed, dose=False, drop=0):
+    """y = unit effect + period effect + Δ_it·d_it exactly (parallel trends, no noise), staggered adoption."""
+    rng = np.random.default_rng(seed)
+    g = rng.choice([0, 3, 5, 7], 40)
+    inten = rng.choice([0.5, 1.0, 2.0], 40) if dose else np.ones(40)
+    lam = rng.normal(size=10)
+    rows = []
+    for i in range(40):
+        a = rng.normal()
+        for t in range(1, 11):
+            dd = inten[i] * float(g[i] > 0 and t >= g[i])
+            delta = (1 + 0.5 * (t - g[i])) * (2.0 if g[i] == 3 else 1.0) if dd else 0.0
+            rows.append((i, t, a + lam[t - 1] + delta * dd, dd, delta))
+    out = pd.DataFrame(rows, columns=["id", "t", "y", "D", "delta"])
+    if drop:
+        out = out.drop(rng.choice(len(out), drop, replace=False))
+    return out
+
+
+for lab, kw in (("binary, balanced", {}), ("dose, balanced", {"dose": True}), ("binary, unbalanced", {"drop": 30}),
+                ("dose, unbalanced", {"dose": True, "drop": 30})):
+    nf = noise_free(31, **kw)
+    rw = ca.twfe_weights(nf, "id", "t", "D", y="y", show=False)
+    tw_d = twfe_dummies(nf)
+    m = nf.merge(rw["weights"], on=["id", "t"])
+    check(f"twfe_weights identity ({lab}): TWFE by dummies = Σ w·Δ, weights sum to 1",
+          abs(tw_d - float((m["weight"] * m["delta"]).sum())) < 1e-9 and abs(rw["weights"]["weight"].sum() - 1) < 1e-12
+          and abs(rw["beta"] - tw_d) < 1e-9, f"TWFE {tw_d:.6f}, ΣwΔ {(m['weight'] * m['delta']).sum():.6f}")
+
+# (c) sigma_fe: the effect vector Δ* = c (w̃ − 1) has an average of zero and gives TWFE = β with SD sigma_fe
+#     (built here from the weights, by the Cauchy-Schwarz bound; not by the function's formula)
+nf = noise_free(32)
+rw = ca.twfe_weights(nf, "id", "t", "D", y="y", show=False)
+wv = rw["weights"]["weight"].to_numpy()
+sh = np.full(len(wv), 1 / len(wv))                          # binary: equal treatment shares
+wt = wv / sh
+c = rw["beta"] / np.sum(sh * (wt - 1) * wt)
+dstar = c * (wt - 1)
+check("sigma_fe: Δ* with average 0 reproduces β_fe through the weights, and its SD equals sigma_fe",
+      abs(np.sum(sh * dstar)) < 1e-10 and abs(np.sum(wv * dstar) - rw["beta"]) < 1e-9
+      and abs(np.sqrt(np.sum(sh * dstar ** 2)) - rw["sigma_fe"]) < 1e-9, f"sigma_fe {rw['sigma_fe']:.4f}")
+check("twfe_weights warns on negative weights and on sigma_fe", rw["n_negative"] > 0
+      and any("negative weight" in w for w in rw["warnings"]) and any("sigma_fe" in w for w in rw["warnings"]))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
