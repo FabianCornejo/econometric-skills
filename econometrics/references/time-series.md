@@ -55,6 +55,8 @@ Use **ADF and KPSS together**, because they have opposite nulls:
 | rejects | rejects | Possible deterministic trend or break; test with a trend and Zivot-Andrews |
 | does not reject | does not reject | Inconclusive: low power, high persistence or **long memory** (ARFIMA, section 5) |
 
+`diagnostics.stationarity(y, alpha=0.05)` applies this table with DF-GLS in place of the ADF, at level `alpha`; `multivariate.var_analysis` and `vecm_fit` pass their own `alpha` to it (v2.4.7.2). The KPSS p-value is interpolated from a table that only covers [0.01, 0.10] ("≤ 0.01" or "≥ 0.10" at the bounds): a bound value of 0.01 counts as a rejection at any alpha ≥ 0.01, a bound value of 0.10 never counts as one, and an alpha outside [0.01, 0.10] gets a warning because the KPSS decision is then not exact.
+
 Choosing tests (Stock, *Handbook of Econometrics* ch. 46):
 - **DF-GLS (Elliott-Rothenberg-Stock)** has much more power than the ADF (e.g., 60% vs. 22% against ρ = 0.9) while keeping good size control → use it as the main unit-root test (`arch.unitroot.DFGLS`).
 - ADF: correct size, low power. Phillips-Perron: large size distortions when there is a negative MA component (Schwert) — avoid it as the only test.

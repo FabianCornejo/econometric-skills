@@ -163,3 +163,11 @@ From the validation of v2.4.7 (a VAR of IPCA, Selic and the exchange rate; a GAR
 - **A sign-bias test that does not reject does not show symmetry.** Test omitted asymmetry with the LR of the GJR against the GARCH (`volatility.garch_fit` reports `asymmetry_lr`); the Engle-Ng tests have little power with fat tails and are a complement.
 - **Agreement between routes that are all compatible with zero is not a confirmation.** Two estimates of 0.15 and 0.10 with an SE of 0.12 agree, but neither measures an effect; say "both routes are compatible with zero" (`reporting.cross_check` flags it). Compare only the same quantity in both routes (the same horizon, the same units, cumulative with cumulative).
 - **Unit-root warnings follow the joint verdict.** Classify a series with ADF, DF-GLS and KPSS together (`diagnostics.stationarity`); when only the ADF fails to reject, the series is persistent, a VAR in levels is reasonable, and a Toda-Yamamoto Granger test is the safe check (`multivariate.var_analysis` says so instead of warning of a unit root). A series stationary only around a deterministic trend needs the trend in the VAR (`trend='ct'`) or detrending.
+
+## Rules added in v2.4.7.2
+
+From the pending items of v2.4.7.1 and the second GARCH validation (Ibovespa, 2026-11-06):
+
+- **Report the persistence of a GARCH with its uncertainty.** Give the SE and CI (`volatility.garch_fit` reports `persistence_se` and `persistence_ci`), not only the point estimate; when the CI reaches 1, say that an integrated variance is not ruled out. Do not write an ad hoc delta method.
+- **In a GJR with skewed errors, γ/2 is not the asymmetric share of the persistence.** The weight of γ is E[z²·1(z<0)] of the error distribution: 1/2 only when it is symmetric (`garch_fit` computes it for `dist="skewt"`).
+- **One alpha per analysis.** The threshold for "compatible with zero" (`reporting.cross_check`) and the unit-root verdicts (`diagnostics.stationarity`, `multivariate.var_analysis`, `vecm_fit`) take the analysis's `alpha`; do not mix a 5% test with a hard-coded 10% or 1.96. The KPSS p-value is exact only in [0.01, 0.10].

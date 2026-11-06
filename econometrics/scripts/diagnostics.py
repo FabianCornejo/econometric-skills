@@ -299,9 +299,21 @@ def _tests(x: pd.Series, reg: str):
     return adf[0], adf[1], adf[2], kp[0], kp[1], dg_stat, dg_p
 
 
-def _verdict(p_adf, p_kpss, p_dfgls):
+KPSS_P_BOUNDS = (0.01, 0.10)   # statsmodels interpolates the KPSS p-value inside this table only
+
+
+def _verdict(p_adf, p_kpss, p_dfgls, alpha: float = ALPHA):
     p_ur = p_dfgls if not np.isnan(p_dfgls) else p_adf   # DF-GLS has more power (Stock)
-    rej_ur, rej_kpss = p_ur < ALPHA, p_kpss < ALPHA
+    # the KPSS p-value at the lower bound means "≤ 0.01": a rejection at any alpha ≥ 0.01 (v2.4.7.2)
+    # and at the upper bound "≥ 0.10": never a rejection, whatever alpha (the true p-value is unknown above it)
+    rej_ur = p_ur < alpha
+    lo, hi = KPSS_P_BOUNDS
+    if p_kpss >= hi:
+        rej_kpss = False
+    elif p_kpss <= lo:
+        rej_kpss = alpha >= lo
+    else:
+        rej_kpss = p_kpss < alpha
     if rej_ur and not rej_kpss:
         return "Stationary"
     if not rej_ur and rej_kpss:
@@ -311,12 +323,23 @@ def _verdict(p_adf, p_kpss, p_dfgls):
     return "Inconclusive (high persistence or long memory?)"
 
 
-def stationarity(series: pd.Series, name: str | None = None, show: bool = True) -> pd.DataFrame:
+def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
+                 alpha: float = ALPHA) -> pd.DataFrame:
     """ADF, KPSS and DF-GLS with constant and with trend, in levels and first difference.
 
-    The verdict uses DF-GLS (more power) + KPSS (opposite null). The KPSS p-value is
-    interpolated from a table bounded at [0.01, 0.10]: values at the bounds mean '≤0.01' or '≥0.10'.
+    The verdict uses DF-GLS (more power) + KPSS (opposite null), both at level alpha (v2.4.7.2; default 0.05).
+    The KPSS p-value is interpolated from a table bounded at [0.01, 0.10]: values at the bounds mean '≤0.01' or
+    '≥0.10', so the KPSS decision is only exact for alpha in [0.01, 0.10]; outside that range a warning is
+    attached (tab.attrs["warnings"]) and a p-value at the bound is not counted as a rejection.
     """
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    warns = []
+    lo, hi = KPSS_P_BOUNDS
+    if alpha < lo or alpha > hi:
+        warns.append(f"alpha = {alpha:g} is outside [{lo:g}, {hi:g}], the range of the KPSS p-value table: a KPSS "
+                     "p-value at the table bound cannot be compared with alpha, and the verdict treats it as not "
+                     "rejecting")
     name = name or (series.name if series.name is not None else "series")
     x = pd.Series(series).dropna()
     rows = []
@@ -325,7 +348,7 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True) 
             a, pa, lags, k, pk, g, pg = _tests(data, reg)
             rows.append({"Series": name, "Transform": label, "Deterministics": desc,
                          "ADF": a, "p ADF": pa, "lags": lags, "DF-GLS": g, "p DF-GLS": pg,
-                         "KPSS": k, "p KPSS": pk, "Verdict": _verdict(pa, pk, pg)})
+                         "KPSS": k, "p KPSS": pk, "Verdict": _verdict(pa, pk, pg, alpha)})
     tab = pd.DataFrame(rows)
 
     def v(transf, det):
@@ -341,16 +364,20 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True) 
     else:
         order = "undetermined — inspect the plot; test for a break (Zivot-Andrews) or long memory (ARFIMA)"
     tab.attrs["suggested_order"] = order
+    tab.attrs["alpha"] = alpha
+    tab.attrs["warnings"] = warns
     if show:
-        print(f"\nStationarity — {name} (N={len(x)}): {order}")
+        print(f"\nStationarity — {name} (N={len(x)}, alpha = {alpha:g}): {order}")
         print(tab.drop(columns="Series").to_string(index=False, float_format=_fmt))
+        for w in warns:
+            print("Warning:", w)
     return tab
 
 
-def stationarity_many(df: pd.DataFrame, show: bool = True) -> pd.DataFrame:
+def stationarity_many(df: pd.DataFrame, show: bool = True, alpha: float = ALPHA) -> pd.DataFrame:
     summary = []
     for c in df.columns:
-        t = stationarity(df[c], c, show=show)
+        t = stationarity(df[c], c, show=show, alpha=alpha)
         summary.append({"Series": c, "Suggested order": t.attrs["suggested_order"]})
     out = pd.DataFrame(summary)
     if show:
