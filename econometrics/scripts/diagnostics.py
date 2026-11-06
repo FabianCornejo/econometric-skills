@@ -305,8 +305,15 @@ KPSS_P_BOUNDS = (0.01, 0.10)   # statsmodels interpolates the KPSS p-value insid
 def _verdict(p_adf, p_kpss, p_dfgls, alpha: float = ALPHA):
     p_ur = p_dfgls if not np.isnan(p_dfgls) else p_adf   # DF-GLS has more power (Stock)
     # the KPSS p-value at the lower bound means "≤ 0.01": a rejection at any alpha ≥ 0.01 (v2.4.7.2)
+    # and at the upper bound "≥ 0.10": never a rejection, whatever alpha (the true p-value is unknown above it)
     rej_ur = p_ur < alpha
-    rej_kpss = p_kpss < alpha or (p_kpss <= KPSS_P_BOUNDS[0] and alpha >= KPSS_P_BOUNDS[0])
+    lo, hi = KPSS_P_BOUNDS
+    if p_kpss >= hi:
+        rej_kpss = False
+    elif p_kpss <= lo:
+        rej_kpss = alpha >= lo
+    else:
+        rej_kpss = p_kpss < alpha
     if rej_ur and not rej_kpss:
         return "Stationary"
     if not rej_ur and rej_kpss:

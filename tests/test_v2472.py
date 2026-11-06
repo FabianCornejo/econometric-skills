@@ -112,9 +112,16 @@ va05 = mv.var_analysis(d, maxlags=4, show=False)
 va30 = mv.var_analysis(d, maxlags=4, alpha=0.30, show=False)
 check("var_analysis: Selic stays I(0) with the default alpha, and the ADF-only note (ADF p ≈ 0.27) is said",
       va05["integration_order"]["selic"].startswith("I(0)") and any("ADF alone" in w and "selic" in w for w in va05["warnings"]))
-check("var_analysis(alpha=0.30): the ADF-only note follows alpha (0.27 < 0.30) and the KPSS range warning arrives",
-      not any("ADF alone" in w and "selic" in w for w in va30["warnings"])
+check("var_analysis(alpha=0.30): Selic and noise stay I(0), no unit-root warning, the ADF-only note follows alpha "
+      "(0.27 < 0.30) and the KPSS range warning arrives",
+      all(v.startswith("I(0)") for v in va30["integration_order"].values())
+      and not any("do not classify" in w for w in va30["warnings"])
+      and not any("ADF alone" in w and "selic" in w for w in va30["warnings"])
       and any("outside [0.01, 0.1]" in w for w in va30["warnings"]))
+wn = pd.Series(np.random.default_rng(6).normal(size=300))
+check("stationarity at alpha 0.20: a KPSS p-value at the upper bound (≥ 0.10) never rejects (white noise stays I(0))",
+      all(diagnostics.stationarity(wn, show=False, alpha=a).attrs["suggested_order"] == "I(0)" for a in (0.05, 0.10, 0.20, 0.30))
+      and diagnostics._verdict(0.001, 0.10, 0.001, 0.20) == "Stationary")
 
 rng5 = np.random.default_rng(5)
 stat2 = pd.DataFrame({"a": rng5.normal(size=300), "b": rng5.normal(size=300)})
@@ -123,6 +130,11 @@ vs = mv.vecm_fit(stat2, k_ar_diff=1, rank=2, show=False)
 vr = mv.vecm_fit(rw2, k_ar_diff=1, rank=2, show=False)
 check("vecm_fit, full rank: stationary series → no unit-root disagreement; random walks → joint verdict disagreement",
       "do not classify" not in vs["message"] and "do not classify" in vr["message"] and "DF-GLS" in vr["message"])
+ttr = np.arange(300)
+tr2 = pd.DataFrame({"a": 0.05 * ttr + rng5.normal(size=300), "b": 0.03 * ttr + rng5.normal(size=300)})
+vt = mv.vecm_fit(tr2, k_ar_diff=1, rank=2, show=False)
+check("vecm_fit, full rank, case 'ci': trend-stationary series are flagged (the case lacks a trend)",
+      "deterministic trend" in vt["message"] and "'ci'" in vt["message"])
 
 
 # ---------------------------------------------------------------- 3a. persistence SE: closed form for the GARCH
@@ -229,7 +241,25 @@ k_q = kappa_quad(P["eta"], P["lambda"])
 check("garch_fit GJR skewt: persistence = α + β + κγ with κ from the integral (not γ/2), and κ differs from 1/2",
       abs(fs["persistence"] - (P["alpha[1]"] + P["beta[1]"] + k_q * P["gamma[1]"])) < 1e-6 and abs(k_q - 0.5) > 0.01,
       f"(λ̂ {P['lambda']:.3f}, κ {k_q:.4f})")
-check("garch_fit GJR skewt: persistence SE finite (gradient also in η and λ)", np.isfinite(fs["persistence_se"]))
+# gradient in η and λ checked by an independent route: finite differences of the integral, coarse step
+pt = pd.Series({"mu": 0.0, "omega": 0.05, "alpha[1]": 0.03, "gamma[1]": 0.10, "beta[1]": 0.85, "eta": 6.0, "lambda": -0.3})
+Ct = np.diag([1e-4, 1e-4, 4e-5, 2e-4, 1e-4, 0.25, 0.004])
+Ct[5, 6] = Ct[6, 5] = 0.005
+hq = 0.01
+dk_eta = (kappa_quad(6.0 + hq, -0.3) - kappa_quad(6.0 - hq, -0.3)) / (2 * hq)
+dk_lam = (kappa_quad(6.0, -0.3 + hq) - kappa_quad(6.0, -0.3 - hq)) / (2 * hq)
+g_ind = np.array([0, 0, 1, kappa_quad(6.0, -0.3), 1, 0.10 * dk_eta, 0.10 * dk_lam])
+se_ind = float(np.sqrt(g_ind @ Ct @ g_ind))
+se_code, _ci = vo._persistence_delta("gjr", "skewt", pt, Ct, 0.95)
+check("skewt persistence SE: gradient in η and λ matches finite differences of the numerical integral",
+      abs(se_code - se_ind) < 1e-3 * se_ind, f"({se_code:.6f} vs {se_ind:.6f})")
+edge = []
+for lam_e in (1 - 1e-6, -(1 - 1e-6)):
+    pe = pt.copy()
+    pe["lambda"] = lam_e
+    edge.append(vo._persistence_delta("gjr", "skewt", pe, np.eye(7) * 1e-6, 0.95)[0])
+check("skewt persistence SE with λ̂ at ±(1 − 1e-6): finite and small (one-sided step towards the interior)",
+      all(np.isfinite(e_) and e_ < 0.01 for e_ in edge), f"({edge[0]:.4g}, {edge[1]:.4g})")
 
 
 # ---------------------------------------------------------------- 3d. no ConvergenceWarning leak

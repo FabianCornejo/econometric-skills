@@ -722,7 +722,10 @@ def vecm_fit(df, k_ar_diff: int | None = None, rank: int | None = None, determin
         if r == k:
             # same joint verdict and alpha as var_analysis (v2.4.7.2: before, ADF alone at a fixed 0.10)
             trend_v = "ct" if deterministic in ("co", "li") else "c"
-            unit, adf_only, _, orders, _w = _unit_root_split(d, trend_v, alpha)
+            unit, adf_only, trend_only, orders, _w = _unit_root_split(d, trend_v, alpha)
+            if trend_only:
+                msg += (f"; {', '.join(map(str, trend_only))} is stationary only around a deterministic trend, which "
+                        f"case '{deterministic}' does not include: use 'co' or 'li', or detrend")
             if unit:
                 listed = ", ".join(f"{c} ({orders[c].split(' —')[0]})" for c in unit)
                 msg += (f"; but the unit-root tests (ADF, DF-GLS, KPSS) do not classify {listed} as stationary: the "

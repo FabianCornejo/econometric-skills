@@ -8,15 +8,15 @@ Pending items of v2.4.7.1 and of the second GARCH validation (Ibovespa, 2026-11-
 
 - **`volatility.garch_fit`**
   - **Persistence with uncertainty**: `persistence_se` and `persistence_ci` (level 1 − alpha) by the delta method with the parameter covariance (arch's, or the QML sandwich when there are regressors in the variance). A CI that reaches 1 gets a warning: an integrated variance is not ruled out. In 200 simulated GJR samples (t(6) errors, persistence 0.95, n = 2000) the 95% CI covered the true value in 94%.
-  - **GJR with skewed-t errors**: the persistence is α + κγ + β with κ = E[z²·1(z<0)] of the fitted Hansen distribution (`neg_weight`), not γ/2, which holds only for symmetric errors. On the Ibovespa the difference was about 0.001; with λ = −0.36 it is about 0.12·γ. κ is checked against a numerical integral of the density.
+  - **GJR with skewed-t errors**: the persistence is α + κγ + β with κ = E[z²·1(z<0)] of the fitted Hansen distribution (`neg_weight`), not γ/2, which holds only for symmetric errors. On the Ibovespa the difference was about 0.001; with λ = −0.36 and η ≈ 6 it is about 0.12·γ. κ is checked against a numerical integral of the density.
   - **No more `ConvergenceWarning` on stderr**: arch's `fit(show_warning=True)` installs its own "always" filter, which overrode the skill's "ignore"; both fits now pass `show_warning=False`. Convergence is still read from the convergence flag and reported.
 - **One alpha per analysis**
   - **`reporting.cross_check`**: new `alpha` (default 0.05); the "compatible with zero" threshold is z = Φ⁻¹(1 − alpha/2) instead of a fixed 1.96.
-  - **`diagnostics.stationarity`** (and `stationarity_many`): new `alpha` for the joint ADF/DF-GLS/KPSS verdict. A KPSS p-value at the lower table bound (≤ 0.01) now counts as a rejection at alpha = 0.01; an alpha outside [0.01, 0.10], where the KPSS table is exact, gets a warning.
-  - **`multivariate.var_analysis`**: its `alpha` reaches the joint verdict, and the ADF-only note uses it instead of a fixed 0.10.
-  - **`multivariate.vecm_fit`**: in the full-rank case the unit-root cross-check uses the joint verdict at `alpha` (before: ADF alone at a fixed 0.10).
+  - **`diagnostics.stationarity`** (and `stationarity_many`): new `alpha` for the joint ADF/DF-GLS/KPSS verdict. A KPSS p-value at the lower table bound (≤ 0.01) counts as a rejection at any alpha ≥ 0.01, and one at the upper bound (≥ 0.10) never does; an alpha outside [0.01, 0.10], where the KPSS table is exact, gets a warning.
+  - **`multivariate.var_analysis`**: its `alpha` reaches the joint verdict, and the ADF-only note uses it instead of a fixed 0.10. This changes the output at the default alpha: a series with ADF p between 0.05 and 0.10 and a joint verdict I(0) now gets the ADF-only note.
+  - **`multivariate.vecm_fit`**: in the full-rank case the unit-root cross-check uses the joint verdict at `alpha` (before: ADF alone at a fixed 0.10), and series stationary only around a trend that the deterministic case lacks are flagged.
 - **Rules**: report the persistence with its CI; κ, not γ/2, with skewed errors; one alpha per analysis (`interpretation-rules.md`, `volatility.md`, `time-series.md`).
-- **Tests**: `tests/test_v2472.py` (24 checks): closed-form SEs, CI coverage by simulation, κ by numerical integration of Hansen's density written in the test, boundary cases for alpha, the Selic series of the v2.4.7 validation and a forced arch failure with the warnings recorded.
+- **Tests**: `tests/test_v2472.py` (27 checks): closed-form SEs, CI coverage by simulation, κ and its gradient by numerical integration of Hansen's density written in the test, boundary cases for alpha, the Selic series of the v2.4.7 validation and a forced arch failure with the warnings recorded.
 
 ## v2.4.7.1 — Fixes from the v2.4.7 validation
 

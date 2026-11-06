@@ -223,14 +223,20 @@ def _neg_weight(dist: str, params: pd.Series) -> float:
     return k if 0 < k < 1 else np.nan
 
 
-def _persistence(vol: str, dist: str, params: pd.Series) -> float:
+def _persistence(vol: str, dist: str, params: pd.Series, strict: bool = False) -> float:
+    """strict=True (used for the delta-method gradient) raises instead of falling back to κ = 1/2, so a step
+    outside the distribution's support is detected rather than mixed with the symmetric formula."""
     a = params.get("alpha[1]", np.nan)
     b = params.get("beta[1]", np.nan)
     if vol == "egarch":
         return float(b)
     if vol == "gjr":
         k = _neg_weight(dist, params)
-        return float(a + b + (k if np.isfinite(k) else 0.5) * params.get("gamma[1]", 0.0))
+        if not np.isfinite(k):
+            if strict:
+                raise ValueError("κ not computable at these parameters")
+            k = 0.5
+        return float(a + b + k * params.get("gamma[1]", 0.0))
     return float(a + b)
 
 
@@ -251,10 +257,20 @@ def _persistence_delta(vol: str, dist: str, params: pd.Series, cov, level: float
         up, dn = base.copy(), base.copy()
         up.iloc[i] += h
         dn.iloc[i] -= h
-        try:
-            grad[i] = (_persistence(vol, dist, up) - _persistence(vol, dist, dn)) / (2 * h)
-        except Exception:  # noqa: BLE001 — a step outside the distribution's support: one-sided difference
-            grad[i] = (_persistence(vol, dist, base) - _persistence(vol, dist, dn)) / h
+        vals = {}
+        for key, par in (("up", up), ("dn", dn), ("c", base)):
+            try:
+                vals[key] = _persistence(vol, dist, par, strict=True)
+            except Exception:  # noqa: BLE001 — a step outside the support (e.g. λ near ±1): handled below
+                vals[key] = np.nan
+        if np.isfinite(vals["up"]) and np.isfinite(vals["dn"]):
+            grad[i] = (vals["up"] - vals["dn"]) / (2 * h)
+        elif np.isfinite(vals["c"]) and np.isfinite(vals["dn"]):     # one-sided, towards the interior
+            grad[i] = (vals["c"] - vals["dn"]) / h
+        elif np.isfinite(vals["c"]) and np.isfinite(vals["up"]):
+            grad[i] = (vals["up"] - vals["c"]) / h
+        else:
+            return np.nan, (np.nan, np.nan)
     var = float(grad @ cov @ grad)
     if not np.isfinite(var) or var < 0:
         return np.nan, (np.nan, np.nan)
@@ -365,7 +381,7 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
         warn.append("E[z²·1(z<0)] of the fitted skewed t could not be computed: the persistence uses γ/2, which is "
                     "exact only for symmetric errors")
     if pers < 1 and np.isfinite(pers_ci[1]) and pers_ci[1] >= 1:
-        warn.append(f"the {1 - alpha:.0%} CI of the persistence reaches 1 ({pers_ci[0]:.4f} to {pers_ci[1]:.4f}): an "
+        warn.append(f"the {100 * (1 - alpha):g}% CI of the persistence reaches 1 ({pers_ci[0]:.4f} to {pers_ci[1]:.4f}): an "
                     "integrated variance (IGARCH) is not ruled out, and the half-life is imprecise")
     if pers >= 1:
         warn.append(f"persistence {pers:.4f} ≥ 1: integrated (IGARCH-like); unconditional variance undefined. Check "
@@ -398,7 +414,7 @@ def garch_fit(r, vol: str = "garch", dist: str = "t", mean: str = "Constant", va
     if show:
         print(f"\n{out['method']} (n = {n})")
         print(tab.to_string(float_format=_fmt))
-        print(f"Persistence {pers:.4f} (SE {pers_se:.4f}; {1 - alpha:.0%} CI {pers_ci[0]:.4f} to {pers_ci[1]:.4f})"
+        print(f"Persistence {pers:.4f} (SE {pers_se:.4f}; {100 * (1 - alpha):g}% CI {pers_ci[0]:.4f} to {pers_ci[1]:.4f})"
               + (f" [κ = E[z²·1(z<0)] = {kappa:.4f}]" if vol == "gjr" and dist in _SKEWT else "")
               + f"; half-life {half_life:.1f} periods"
               + (f"; unconditional variance {uncond:.4f}" if np.isfinite(uncond) else ""))
