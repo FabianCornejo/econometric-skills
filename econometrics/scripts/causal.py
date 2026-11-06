@@ -1421,7 +1421,11 @@ def did_imputation(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, an
     Pre-trend test (separate from estimation, as in the paper): on the untreated observations only, regress Y on unit
     and period effects and indicators of the pretrends = K periods before adoption (default: all available, cut to
     keep K ≤ (G − 1)/10 with G clusters, warned); Wald test that they are zero with a clustered covariance and an
-    F(K, G − K) reference. Not rejecting does not show parallel trends.
+    F(K, G − K) reference. Not rejecting does not show parallel trends. The leads start at e = −1 (reference: the
+    earlier periods); R didimputation's pretrends=TRUE reports e = −2, −3, … with e = −1 as reference, so the lead
+    coefficients of the two are not comparable one by one.
+    Replication: the ATT, SEs (unit and coarser clusters), unbalanced panel and event-study horizons match R
+    didimputation 0.5.1 (estimates within 2e-7, SEs within 1e-8; tests/test_v250.py, tools/r_reference).
 
     Returns the contract dict in "overall" (estimand, estimate, se, ci_low, ci_high, p, n, method, warnings), the
     event-study table "dynamic" (horizons ≥ 0 from the imputation, < 0 from the pre-trend regression), "pretrend",
@@ -2085,9 +2089,10 @@ def twfe_weights(df: pd.DataFrame, unit: str, time: str, d: str, y: str | None =
     late in the panel). With heterogeneous effects, β_fe can then lie outside the range of every Δ, even with the
     opposite sign. Unlike bacon_decomposition, this works with a non-binary (dose) and with an unbalanced panel.
 
-    sigma_fe = |β_fe| / σ(w̃), σ(w̃)² = Σ s (w̃ − 1)², s = d / Σ d (the treatment shares), w̃ = w / s: the smallest
-    standard deviation of the effects across treated cells under which β_fe is compatible with an average effect of
-    zero. A sigma_fe that is small next to plausible heterogeneity means β_fe could have the wrong sign.
+    sigma_fe = |β_fe| / σ(w̃), σ(w̃)² = Σ s (w̃ − 1)² · N/(N − 1), s = d / Σ d (the treatment shares), w̃ = w / s,
+    N = treated cells: the dispersion of the effects across treated cells under which β_fe is compatible with an
+    average effect of zero. The N/(N − 1) factor follows the authors' twowayfeweights (R 2.1.0, matched to 1e-9 in the
+    tests), so the value is the population SD of the least dispersed such effects times sqrt((N − 1)/N). A sigma_fe that is small next to plausible heterogeneity means β_fe could have the wrong sign.
     With y, β_fe is also computed (by Frisch-Waugh, Σ ε y / Σ ε d); without it, only the weights are returned.
     Returns: weights table (unit, time, d, weight), sum and count of positive and negative weights, sigma_fe (with y),
     beta (with y), binary flag, warnings."""
@@ -2113,7 +2118,10 @@ def twfe_weights(df: pd.DataFrame, unit: str, time: str, d: str, y: str | None =
     w = dv * eps / denom
     s = np.where(tr, dv / dv[tr].sum(), 0.0)
     wt = np.where(tr, w / np.where(tr, s, 1), 0.0)
-    sig_w = float(np.sqrt(np.sum(s[tr] * (wt[tr] - 1) ** 2)))
+    n_tr = int(tr.sum())
+    # dispersion of the weights with the N/(N − 1) factor of the authors' twowayfeweights (R 2.1.0: its sigma_fe
+    # equals |β| / sqrt(Σ s (w̃ − 1)² · N / (N − 1)), N = treated cells; matched to 1e-9 in tests/test_v250.py)
+    sig_w = float(np.sqrt(np.sum(s[tr] * (wt[tr] - 1) ** 2) * n_tr / max(n_tr - 1, 1)))
     binary = bool(np.isin(np.unique(dv), [0.0, 1.0]).all())
     tab = pd.DataFrame({unit: uniq_u[ui[tr]], time: x[time].to_numpy()[tr], d: dv[tr], "weight": w[tr]})
     neg = tab["weight"] < 0

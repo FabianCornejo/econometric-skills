@@ -6,11 +6,13 @@
    classification and counts come from how each panel was built (planted dates, reversals), not from the function.
 2. causal.did_imputation: closed form in the canonical design (group means, pre-period average base), sign reversal
    of TWFE, coverage and bias in simulation, SE against a unit bootstrap written here, unbalanced panel, pre-trend
-   test size and power. R didimputation numbers on tests/data/did_v250_panel.csv: pending (tools/r_reference).
+   test size and power. Replicated against R didimputation 0.5.1 on tests/data/did_v250_panel.csv (static, state clusters,
+   unbalanced, event-study horizons).
 3. causal.did_compare: size of the paired difference test, power against a pre-trend, paired draws.
 5. causal.twfe_weights: a hand example (weights 1, −1/2, 1/2), the identity TWFE = Σ w·Δ with TWFE computed by dummy
    regression on noise-free panels (binary and dose, balanced and unbalanced), and sigma_fe checked by building the
-   effect vector with average zero that reproduces β_fe. R TwoWayFEWeights numbers: pending (tools/r_reference).
+   effect vector with average zero that reproduces β_fe. Replicated against R TwoWayFEWeights 2.1.0
+   (β, counts and sums of weights, sigma_fe), binary and dose.
 4. causal.att_gt: alpha, and the joint pre-trend test (Wald recomputed by a plain inverse, size and power in
    simulation, the level chosen with few clusters).
 
@@ -490,11 +492,50 @@ sh = np.full(len(wv), 1 / len(wv))                          # binary: equal trea
 wt = wv / sh
 c = rw["beta"] / np.sum(sh * (wt - 1) * wt)
 dstar = c * (wt - 1)
-check("sigma_fe: Δ* with average 0 reproduces β_fe through the weights, and its SD equals sigma_fe",
+n_c = len(wv)
+# Δ* is the smallest-dispersion effect vector with average 0 that gives β_fe; twowayfeweights (and the skill) report
+# its population SD times sqrt((N − 1)/N), because the N/(N − 1) factor enters the dispersion of the weights
+check("sigma_fe: Δ* with average 0 reproduces β_fe, and sigma_fe = SD(Δ*)·sqrt((N − 1)/N) (twowayfeweights convention)",
       abs(np.sum(sh * dstar)) < 1e-10 and abs(np.sum(wv * dstar) - rw["beta"]) < 1e-9
-      and abs(np.sqrt(np.sum(sh * dstar ** 2)) - rw["sigma_fe"]) < 1e-9, f"sigma_fe {rw['sigma_fe']:.4f}")
+      and abs(np.std(dstar) * np.sqrt((n_c - 1) / n_c) - rw["sigma_fe"]) < 1e-9, f"sigma_fe {rw['sigma_fe']:.4f}")
 check("twfe_weights warns on negative weights and on sigma_fe", rw["n_negative"] > 0
       and any("negative weight" in w for w in rw["warnings"]) and any("sigma_fe" in w for w in rw["warnings"]))
+
+# ---------------------------------------------------------------- replication against R (tools/r_reference)
+# Numbers from tools/r_reference/output/did_v250_reference.json: R 4.6.2, didimputation 0.5.1, TwoWayFEWeights 2.1.0,
+# run on 2026-11-06 on tests/data/did_v250_panel.csv (MD5 7498036256b9e987f01997bc34a57ea0).
+import hashlib  # noqa: E402
+import json  # noqa: E402
+REF = json.load(open(ROOT / "tools" / "r_reference" / "output" / "did_v250_reference.json", encoding="utf-8"))
+csv_path = ROOT / "tests" / "data" / "did_v250_panel.csv"
+check("replication panel unchanged (MD5 recorded by the R run)",
+      hashlib.md5(csv_path.read_bytes()).hexdigest() == REF["panel_md5"] == "7498036256b9e987f01997bc34a57ea0")
+pan = pd.read_csv(csv_path)
+r_st, r_cl, r_ub = REF["bjs_static"][0], REF["bjs_static_state"][0], REF["bjs_static_unbalanced"][0]
+o = ca.did_imputation(pan, "id", "t", "y", "g", show=False)
+# estimates within 1e-6 (R's fixest demeans iteratively; the gap is 2e-7), SEs within 1e-8
+check("R didimputation, static ATT (unit clusters): estimate within 1e-6, SE within 1e-8",
+      abs(o["overall"]["estimate"] - r_st["estimate"]) < 1e-6 and abs(o["overall"]["se"] - r_st["std.error"]) < 1e-8,
+      f"{o['overall']['estimate']:.9f}/{o['overall']['se']:.10f} vs {r_st['estimate']:.9f}/{r_st['std.error']:.10f}")
+oc = ca.did_imputation(pan, "id", "t", "y", "g", cluster="state", show=False)["overall"]
+check("R didimputation, static ATT clustered by state: SE within 1e-8", abs(oc["se"] - r_cl["std.error"]) < 1e-8,
+      f"{oc['se']:.10f} vs {r_cl['std.error']:.10f}")
+ou = ca.did_imputation(pan[pan.keep_unb == 1], "id", "t", "y", "g", show=False)["overall"]
+check("R didimputation, unbalanced panel: estimate within 1e-6, SE within 1e-8",
+      abs(ou["estimate"] - r_ub["estimate"]) < 1e-6 and abs(ou["se"] - r_ub["std.error"]) < 1e-8)
+ev = {int(row["term"]): row for row in REF["bjs_event"] if int(row["term"]) >= 0}
+dyn = o["dynamic"]
+check("R didimputation, event study horizons 0-6: estimates within 1e-6, SEs within 1e-7",
+      all(abs(dyn.loc[h, "att"] - ev[h]["estimate"]) < 1e-6 and abs(dyn.loc[h, "se"] - ev[h]["std.error"]) < 1e-7
+          for h in range(7)))
+for D, key in (("d", "twfe_weights_binary"), ("dose", "twfe_weights_dose")):
+    R = {k: (next(iter(v[0].values())) if isinstance(v, list) and v and isinstance(v[0], dict) else v)
+         for k, v in REF[key].items() if k in ("beta", "sensibility", "sum_plus", "sum_minus", "nr_plus", "nr_minus")}
+    w = ca.twfe_weights(pan, "id", "t", D, y="y", show=False)
+    check(f"R TwoWayFEWeights ({D}): β, counts and sums of positive/negative weights, sigma_fe (1e-9)",
+          abs(w["beta"] - R["beta"]) < 1e-9 and w["n_positive"] == R["nr_plus"] and w["n_negative"] == R["nr_minus"]
+          and abs(w["sum_positive"] - R["sum_plus"]) < 1e-9 and abs(w["sum_negative"] - R["sum_minus"]) < 1e-9
+          and abs(w["sigma_fe"] - R["sensibility"]) < 1e-9, f"sigma_fe {w['sigma_fe']:.10f} vs {R['sensibility']:.10f}")
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
