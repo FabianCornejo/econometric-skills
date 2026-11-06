@@ -198,16 +198,18 @@ d100 = did_panel(4, N=1000, T=8, cohorts=(0, 4, 5, 6), n_states=100)
 p100 = ca.att_gt(d100, "id", "t", "y", "g", cluster="state", n_boot=199, seed=4, show=False)["pretrend"]
 check("100 clusters: 9 cells ≤ (100 − 1)/10, so every cell is tested (F(9, 91))",
       p100["test"] == "pre-period cells" and p100["reference"] == "F(9, 91)", f"{p100['reference']}")
-check("... with the few-clusters fragility warning", any("fragile" in w for w in rc["warnings"]))
+check("... with the few-clusters warning that the pre-trend test over-rejects",
+      any("pre-trend test over-rejects" in w for w in rc["warnings"]))
 e_nn = _err(lambda: ca.att_gt(did_panel(5, N=200, cohorts=(4, 5, 6)), "id", "t", "y", "g", n_boot=0, show=False))
 check("att_gt with no never-treated unit and control='never': a clear error, not a pandas one (crashed before v2.5.0)",
       isinstance(e_nn, ValueError) and "never-treated" in str(e_nn), str(e_nn)[:80])
-size_c = [ca.att_gt(did_panel(9000 + s, N=400, T=12, cohorts=(0, 7, 8, 9, 10), n_states=8), "id", "t", "y", "g",
-                    cluster="state", n_boot=199, seed=s, show=False)["pretrend_p"] for s in range(60)]
+size_c = [ca.att_gt(did_panel(9000 + s_, N=400, T=12, cohorts=(0, 7, 8, 9, 10), n_states=8), "id", "t", "y", "g",
+                    cluster="state", n_boot=199, seed=s_, show=False)["pretrend_p"] for s_ in range(200)]
 size_c = np.array([p for p in size_c if np.isfinite(p)])
 rc_rate = float(np.mean(size_c < 0.05))
-check("8-cluster pre-trend test (1 restriction): finite p in most panels and size not above 12% (60 panels)",
-      len(size_c) >= 50 and rc_rate <= 0.12, f"{len(size_c)} finite, rejection rate {rc_rate:.3f}")
+# documented as about 9% (460 panels in the v2.5.0 review); the bound catches a doubling of that
+check("8-cluster pre-trend test (1 restriction): finite p in most panels and size ≤ 14% over 200 panels (about 9% "
+      "documented)", len(size_c) >= 180 and rc_rate <= 0.14, f"{len(size_c)} finite, rejection rate {rc_rate:.3f}")
 
 # ---------------------------------------------------------------- 1. did_design
 def treat_panel(paths, T, start=1):
@@ -303,6 +305,24 @@ miss = stag.copy()
 miss.loc[miss.index[:5], "d"] = np.nan
 check("did_design: missing treatment rows counted, not imputed",
       ca.did_design(miss, "id", "t", "d", show=False)["missing_treatment"] == 5)
+two = stag.copy()
+two["d"] = two["d"] * 2.5
+r2v = ca.did_design(two, "id", "t", "d", show=False)
+check("did_design: a treatment with values {0, 2.5} is binary up to scale (staggered, gvar, rescale warning)",
+      r2v["design"] == "staggered" and r2v["gvar"] is not None and any("two values" in w for w in r2v["warnings"]))
+oth = treat_panel([adopt(1, T8)] * 3 + [adopt(4, T8)] * 3, T8)
+ro = ca.did_design(oth, "id", "t", "d", show=False)
+check("did_design: one date with only always-treated comparators → other, and no gvar",
+      ro["design"] == "other" and ro["gvar"] is None)
+gp = treat_panel([adopt(0, T8)] * 4 + [adopt(5, T8)] * 3 + [[0, 0, None, None, 1, 1, 1, 1]], T8)
+rg = ca.did_design(gp, "id", "t", "d", show=False)
+check("did_design: a switch observed across a gap (seen at 1, 2, then 5) gets the uncertain-date warning",
+      any("across a gap" in w for w in rg["warnings"]))
+flat = treat_panel([adopt(0, T8)] * 5, T8)
+rf = ca.did_design(flat, "id", "t", "d", show=False)
+check("did_design: no treatment variation → its own message, not the TWFE one",
+      any("No unit changes treatment" in w for w in rf["warnings"])
+      and not any("not a robust causal effect" in w for w in rf["warnings"]))
 gap = stag.copy()
 gap["t"] = gap["t"] * 2
 check("did_design: periods that are not consecutive integers are flagged",
@@ -398,18 +418,42 @@ check("did_imputation: 95% CI covers the sample ATT in 92-99.5% of 200 panels (c
       0.92 <= cov <= 0.995, f"coverage {cov:.3f}")
 check("did_imputation: no bias (mean error within 3 Monte Carlo SE)",
       abs(np.mean(ests)) < 3 * np.std(ests) / np.sqrt(len(ests)), f"mean error {np.mean(ests):.4f}")
-dd = stag_het(77)
-o = ca.did_imputation(dd, "id", "t", "y", "g", show=False)["overall"]
-ids = dd["id"].unique()
-rngb = np.random.default_rng(5)
-bs = []
-for _ in range(199):
-    pick = rngb.choice(ids, len(ids))
-    bd = pd.concat([dd[dd.id == u].assign(id=k) for k, u in enumerate(pick)])
-    bs.append(ca.did_imputation(bd, "id", "t", "y", "g", show=False)["overall"]["estimate"])
-ratio = o["se"] / np.std(bs, ddof=1)
-check("did_imputation: Theorem 3 SE against a unit bootstrap computed here (ratio 0.85-1.35)", 0.85 <= ratio <= 1.35,
-      f"ratio {ratio:.3f}")
+# Theorem 3 targets the sample ATT: compare the mean SE with the Monte Carlo SD of (estimate − sample ATT) over the
+# same 200 panels (band fixed before running: 0.85-1.25; v2.5.0 review replaced a unit-bootstrap ratio, which targets
+# a different quantity and whose band had been set at the observed value)
+se_list = []
+for s_ in range(200):
+    se_list.append(ca.did_imputation(stag_het(3000 + s_), "id", "t", "y", "g", show=False)["overall"]["se"])
+ratio = float(np.mean(se_list) / np.std(ests, ddof=1))
+check("did_imputation: mean Theorem 3 SE / Monte Carlo SD of (estimate − sample ATT) within 0.85-1.25 (200 panels)",
+      0.85 <= ratio <= 1.25, f"ratio {ratio:.3f}")
+
+# (c2) anticipation: effect 0.5 one period before adoption, 1 from adoption on; anticipation=1 must keep g − 1 out of
+#      the ATT and report it as its own row (v2.5.0 review: it had been averaged into the ATT)
+def antic_panel(seed, N=300, T=10):
+    rng = np.random.default_rng(seed)
+    g = rng.choice([0, 5, 7], N)
+    rows = []
+    for i in range(N):
+        a = rng.normal()
+        for t in range(1, T + 1):
+            eff = 1.0 if g[i] and t >= g[i] else (0.5 if g[i] and t == g[i] - 1 else 0.0)
+            rows.append((i, t, a + 0.2 * t + eff + rng.normal(0, 0.5), g[i]))
+    return pd.DataFrame(rows, columns=["id", "t", "y", "g"])
+
+
+ap = antic_panel(41)
+ra = ca.did_imputation(ap, "id", "t", "y", "g", anticipation=1, show=False)
+n_post = int(((ap.g > 0) & (ap.t >= ap.g)).sum())
+check("did_imputation(anticipation=1): the ATT averages t ≥ g only (planted effect 1) and counts only those rows",
+      abs(ra["overall"]["estimate"] - 1.0) < 3 * ra["overall"]["se"] and ra["overall"]["n_treated_obs"] == n_post,
+      f"{ra['overall']['estimate']:.3f} (SE {ra['overall']['se']:.3f}), rows {ra['overall']['n_treated_obs']} vs {n_post}")
+check("... and reports e = −1 as an anticipation row (planted 0.5), not as part of the ATT",
+      bool(ra["dynamic"].loc[-1, "anticipation"]) and abs(ra["dynamic"].loc[-1, "att"] - 0.5) < 3 * ra["dynamic"].loc[-1, "se"]
+      and any("Anticipation = 1" in w for w in ra["warnings"]), f"e = −1: {ra['dynamic'].loc[-1, 'att']:.3f}")
+cs_a = ca.att_gt(ap, "id", "t", "y", "g", anticipation=1, n_boot=0, show=False)["overall"]["estimate"]
+check("... same target as att_gt(anticipation=1): the two estimates within 0.1", abs(cs_a - ra["overall"]["estimate"]) < 0.1,
+      f"CS {cs_a:.3f}, BJS {ra['overall']['estimate']:.3f}")
 
 # (d) unbalanced panel
 pan = pd.read_csv(ROOT / "tests" / "data" / "did_v250_panel.csv")

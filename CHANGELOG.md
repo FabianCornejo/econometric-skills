@@ -4,7 +4,7 @@ All releases of the `econometrics` skill, newest first. Each release is tagged o
 
 ## v2.5.0 — DiD: design, imputation (BJS) and pre-trend tests
 
-Difference-in-differences that starts from the design: what kind of treatment it is, which estimators fit it, a second route with a different method for staggered adoption, and pre-trend tests whose size holds with few clusters. Source: the guide of de Chaisemartin & D'Haultfœuille, "Which DiD estimator should I use?" (Credible Answers). The new estimators are replicated against R.
+Difference-in-differences that starts from the design: what kind of treatment it is, which estimators fit it, a second route with a different method for staggered adoption, and pre-trend tests whose reference distribution is corrected for an estimated covariance (their remaining over-rejection with few clusters is measured and warned). Source: the guide of de Chaisemartin & D'Haultfœuille, "Which DiD estimator should I use?" (Credible Answers). The new estimators are replicated against R.
 
 - **`causal.did_design`** (new): the first step of any DiD. From the treatment column (binary or a dose), it classifies the panel into the guide's five designs (canonical, staggered, heterogeneous adoption, first switch, other). It reports:
   - reversals, stayers and never-treated units;
@@ -12,14 +12,18 @@ Difference-in-differences that starts from the design: what kind of treatment it
   - cohorts and their pre-periods;
   - balance, irregular periods, and assignment below the cluster.
 
+  A treatment with two values {0, c} is classified as binary, with a warning to rescale it. A switch observed across a gap in the panel is flagged as having an uncertain date. The "other" design never returns a `gvar`.
+
   It returns the estimators that fit and the comparison group (not-yet-treated for staggered adoption, as the guide recommends). It returns a `gvar` only for a binary absorbing treatment: a reversible treatment or a dose never becomes a first-treated date.
 - **`causal.did_imputation`** (new): the imputation estimator of Borusyak, Jaravel & Spiess (2024).
   - Unit and period effects are fitted on untreated observations only, and Y(0) is imputed for treated ones.
   - It returns the ATT and the event study, with the paper's clustered SEs (Theorem 3).
   - Unbalanced panels are allowed. Observations that cannot be imputed are dropped and counted.
   - The pre-trend test uses untreated observations only and leaves out leads that the fixed effects span.
+  - With `anticipation`, the periods g − δ … g − 1 stay out of the fixed-effects fit and are reported as their own event-study rows, not averaged into the ATT, which covers t ≥ g as in `att_gt`.
+  - In simulation, the mean Theorem 3 SE equals the Monte Carlo SD of (estimate − sample ATT): ratio 1.00 over 200 panels.
   - Matches R `didimputation` 0.5.1: estimates within 2e-7, SEs within 1e-8.
-- **`causal.did_compare`** (new): Callaway-Sant'Anna against the imputation estimator.
+- **`causal.did_compare`** (new): Callaway-Sant'Anna against the imputation estimator. Both run without covariates, and `control` defaults to `"notyet"`; pass the headline `att_gt`'s control.
   - The comparison uses only the post-period cells both define, with the same weights.
   - The difference is tested at alpha with a paired bootstrap. A significant gap is a finding that points to the pre-trends.
   - Power against pre-trends is modest (43% against a linear pre-trend of 0.2 per period in the tests), so it does not replace the pre-trend tests.
@@ -28,11 +32,11 @@ Difference-in-differences that starts from the design: what kind of treatment it
   - Matches R `TwoWayFEWeights` 2.1.0 to 1e-9.
 - **`causal.att_gt`**
   - **Joint pre-trend test** (`pretrend`, `pretrend_p`, `pretrend_df`): a Wald test with the bootstrap covariance and an F(q, n − q) reference, n = the smaller of the resampled units (or clusters) and the draws. It uses the most detailed level with q ≤ (n − 1)/10: every pre cell, the event-time averages, or their mean. A coarser level is warned.
-  - Size of a 5% test in simulation: 5–7.5% from 100 units to 80 clusters. With the χ² reference it was 13% with 100 units and 9 cells, and 83% with 8 clusters and 8 restrictions.
+  - Size of a 5% test in simulation: 7.5% with 100 to 300 units, 5–7% with 30 to 80 clusters, about 9% with 8 clusters (warned). With the χ² reference it was 13% with 100 units and 9 cells, and 83% with 8 clusters and 8 restrictions.
   - **`alpha`** for the CIs, the early-effect warning and the pre-trend test, also passed by `did_timing_sensitivity` and `did_uncertain_dates`.
   - **Fixes:**
     - with no never-treated unit and `control="never"`, it raised a pandas error; now it says what is missing;
-    - cluster-bootstrap draws with no treated cluster or no control crashed it; now they are left out of the SEs and counted.
+    - a bootstrap draw in which no cell is defined (no treated cluster, or no control) is now left out of the SEs and counted in a warning; this is a guard, not the fix of an observed crash.
   - Outputs on designs that ran before are unchanged: bit-identical in 7 configurations.
 - **`volatility.garch_fit`**: `half_life_ci` from the limits of the persistence CI, with an infinite upper limit when that CI reaches 1. A persistence ≤ 0 gives a half-life of 0 (before: infinite). The EGARCH half-life is labelled as that of the log-variance.
 - **Rules**: `interpretation-rules.md` gains six rules (see its v2.5.0 section). `causal-inference.md` §6 gains a table of the five designs with what the skill covers in each.
@@ -43,7 +47,7 @@ Difference-in-differences that starts from the design: what kind of treatment it
   - the tolerance of an agreement and agreement compatible with zero;
   - relay verdicts as printed.
 - **Evals**: two find-the-error routing cases (`review-twfe-staggered`, `review-reversible-treatment`).
-- **Tests**: `tests/test_v250.py` (74 checks). It covers:
+- **Tests**: `tests/test_v250.py` (81 checks). It covers:
   - hand-built panels for each design;
   - a closed form in the canonical design;
   - a TWFE sign reversal;
