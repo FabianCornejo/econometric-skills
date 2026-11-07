@@ -1,7 +1,7 @@
 ---
 description: "Estimating a beta for the WACC inside a valuation: statistical work that the note must not exclude as 'valuation'"
 tags: [routing, finance]
-max_turns: 8
+max_turns: 12
 timeout_seconds: 300
 allowed_tools: [Read, Glob, Grep, Skill]
 ---
