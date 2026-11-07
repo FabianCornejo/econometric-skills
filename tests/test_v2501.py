@@ -245,13 +245,17 @@ def fake_run_py(cmd, timeout):
     return 0, PY0P
 
 
-cands = se.python_candidates(os_name="nt", run=fake_run_py, which=lambda n: "C:\\py.exe" if n == "py" else None)
-check("interpreters: 'py -0p' of notebook 2 gives both Pythons (3.14 and 3.12), in order",
-      [c.split("\\")[-2] for c in cands] == ["pythoncore-3.14-64", "Python312"], cands)
+cands = se.python_candidates(os_name="nt", run=fake_run_py, which=lambda n: "C:\\Windows\\py.exe" if n == "py" else None)
+check("interpreters: 'py -0p' of notebook 2 gives both Pythons by tag, started through the launcher's full path",
+      cands == [["C:\\Windows\\py.exe", "-V:3.14"], ["C:\\Windows\\py.exe", "-V:3.12"]], cands)
+cands = se.python_candidates(os_name="nt", run=lambda c, t: (0, " -3.12-64        C:\\Users\\Jo\ufffdo\\py312\\python.exe\n"),
+                             which=lambda n: "C:\\py.exe")
+check("interpreters: the older 'py -0p' format, and a path mangled in decoding does not matter (the tag is used)",
+      cands == [["C:\\py.exe", "-V:3.12-64"]], cands)
 cands = se.python_candidates(os_name="posix", run=None,
                              which=lambda n: {"python3.12": "/usr/bin/python3.12",
                                               "python3.13": "/usr/bin/python3.13"}.get(n))
-check("interpreters: python3.X on the PATH off Windows", cands == ["/usr/bin/python3.12", "/usr/bin/python3.13"])
+check("interpreters: python3.X on the PATH off Windows", cands == [["/usr/bin/python3.12"], ["/usr/bin/python3.13"]])
 real = se.probe_interpreter(sys.executable)
 check("interpreters: probing a real interpreter returns its version and missing core packages",
       real is not None and real["version"].startswith(f"{sys.version_info[0]}.{sys.version_info[1]}")
@@ -313,7 +317,14 @@ check("To do: run from an updated marketplace checkout, the installed plugin beh
 acts = se.doctor_actions(base_report(latest={"version": "2.5.1", "status": "ok"}, skill={"dir": "clone", "version": "2.5.0"},
                                      copies=[{"kind": "plugin", "version": "2.5.1", "path": "p"}]))
 check("To do: a running clone behind the release -> git pull item; the up-to-date plugin -> none",
-      len(acts) == 1 and "git pull" in acts[0] and "this copy" in acts[0], acts)
+      len(acts) == 1 and "git pull" in acts[0] and "copy in use" in acts[0], acts)
+cache_old = "/home/u/.claude/plugins/cache/econometric-skills/econometrics/2.5.0.1"
+acts = se.doctor_actions(base_report(latest={"version": "2.5.1", "status": "ok"}, skill={"dir": cache_old, "version": "2.5.0.1"},
+                                     copies=[{"kind": "plugin", "version": "2.5.1",
+                                              "path": "/home/u/.claude/plugins/cache/econometric-skills/econometrics/2.5.1"}]))
+check("To do: auto-update already installed 2.5.1 but the session runs the 2.5.0.1 cache folder -> one item: restart; "
+      "never 'replace' or 'git pull' a plugin cache folder", len(acts) == 1 and "restart Claude Code" in acts[0]
+      and "git pull" not in acts[0] and "replace" not in acts[0], acts)
 check("To do: an older or equal 'latest' never asks for an update",
       se.doctor_actions(base_report(latest={"version": "2.5.0", "status": "ok"})) == []
       and se.doctor_actions(base_report(latest={"version": None, "status": "not checked"})) == [])
@@ -474,6 +485,59 @@ check("doctor on a cp1252 console with a user path outside the code page (\u0141
       all(b"Traceback" not in e and rc in (0, 1) for rc, _o, e in outs) and b"manual copy 2.3.8" in outs[0][1]
       and json.loads(outs[1][1].decode("ascii"))["copies"][0]["version"] == "2.3.8",
       [(rc, e[-200:]) for rc, _o, e in outs])
+bad2 = tmp / "bad2"
+(bad2 / "plugins").mkdir(parents=True)
+(bad2 / "plugins" / "installed_plugins.json").write_text(json.dumps(
+    {"plugins": {"econometrics@econometric-skills": {"installPath": str(tmp / "nowhere"), "version": 2}}}),
+    encoding="utf-8")
+try:
+    rb2 = se.doctor(offline=False, cdir=bad2, env={}, opener=fake_opener({"tag_name": "v2.6"}), run=lambda c, t: (0, "[]"),
+                    which=lambda n: None, os_name="posix")
+    ok = [c["version"] for c in rb2["copies"]] == [None] and isinstance(rb2["actions"], list)
+except Exception as e:
+    ok, rb2 = False, repr(e)
+check("doctor: a non-string version in installed_plugins.json with a release online does not crash it", ok, rb2)
+check("versions: a commit SHA or a number is not a version (no silent 'up to date')",
+      se._version_or_none("7f3a9c21b0") is None and se._version_or_none(2) is None
+      and se._version_or_none("2.5.0.1") == "2.5.0.1"
+      and se.latest_release(opener=fake_opener({"tag_name": "7f3a9c2"}))[0] is None)
+if os.name == "posix":
+    c7 = tmp / "c7"
+    (c7 / "plugins").mkdir(parents=True)
+    (c7 / "plugins" / "known_marketplaces.json").write_text(json.dumps({"econometric-skills": {"source": fork}}),
+                                                           encoding="utf-8")
+    dot = tmp / "dotfiles"
+    dot.mkdir()
+    target = dot / "claude-settings.json"
+    target.write_text(json.dumps({"env": {"TOKEN": "secret"}}), encoding="utf-8")
+    os.chmod(target, 0o600)
+    (c7 / "settings.json").symlink_to(target)
+    se.enable_autoupdate(c7, now=0)
+    check("--enable-autoupdate: a symlinked settings.json stays a symlink, its target gets the change, mode 600 kept",
+          (c7 / "settings.json").is_symlink() and json.loads(target.read_text(encoding="utf-8"))[
+              "extraKnownMarketplaces"]["econometric-skills"]["autoUpdate"] is True
+          and (target.stat().st_mode & 0o777) == 0o600 and not list(dot.glob(".*.tmp-*")))
+    import time as _t
+    t0 = _t.time()
+    code_, out_ = se._run(["sh", "-c", "echo '[1]'; sleep 30 & sleep 30"], 2)
+    check("_run: a command whose grandchild keeps the output open returns at the timeout, not after it",
+          code_ == -1 and _t.time() - t0 < 10, (code_, round(_t.time() - t0, 1)))
+    check("_run: normal output is returned and decoded with replacement",
+          se._run(["sh", "-c", "printf 'ok\\377'"], 20) == (0, "ok\ufffd"))
+if os.name == "nt":
+    wb = tmp / "fake bin"
+    wb.mkdir()
+    (wb / "claude.cmd").write_text('@echo [{"id": "econometrics@econometric-skills", "enabled": true}]\r\n',
+                                   encoding="ascii")
+    lst_w = se.skill_listing(tmp / "empty", which=lambda n: str(wb / "claude.cmd"))
+    check("Windows: a claude.cmd wrapper in a folder with a space is run and parsed", lst_w.get("checked")
+          and lst_w.get("enabled_plugins") == 1, lst_w)
+    (wb / "hang.cmd").write_text("@ping -n 30 127.0.0.1 >nul\r\n", encoding="ascii")
+    import time as _t
+    t0 = _t.time()
+    code_, _o = se._run([str(wb / "hang.cmd")], 3)
+    check("Windows: a hanging .cmd wrapper returns at the timeout (process tree killed)",
+          code_ == -1 and _t.time() - t0 < 15, round(_t.time() - t0, 1))
 r = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), "--json"], capture_output=True, text=True)
 check("--json without --doctor is an argument error, not silently ignored", r.returncode == 2 and "--doctor" in r.stderr)
 

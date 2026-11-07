@@ -113,6 +113,21 @@ check("extra 'excel' is openpyxl, with the same minimum as requirements-dev.txt"
       "openpyxl" in opt and all(dev.get(k) == v for k, v in opt.items()), f"{opt} vs dev")
 check("extras outside CI (UNTESTED_MINIMUM) are not in requirements-dev.txt",
       bool(opt_untested) and not (opt_untested & set(dev)), sorted(opt_untested & set(dev)))
+pins = {}
+for line in (ROOT / "ci" / "constraints-min.txt").read_text(encoding="utf-8").splitlines():
+    m = re.match(r"^([A-Za-z0-9_.-]+)==([0-9.]+)", line.strip())
+    if m:
+        pins[m.group(1).lower()] = m.group(2)
+
+
+def _pad(v, n=4):
+    t_ = se._vtuple(v)
+    return t_ + (0,) * (n - len(t_))
+
+
+check("the minimum CI job pins every tested extra exactly at its setup_env minimum (so 'tested' stays true)",
+      all(k in pins and _pad(pins[k]) == _pad(v) for k, v in opt.items()),
+      {k: (v, pins.get(k)) for k, v in opt.items() if k not in pins or _pad(pins[k]) != _pad(v)})
 
 
 class blocked:

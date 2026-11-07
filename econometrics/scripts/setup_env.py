@@ -28,6 +28,7 @@ before installing or changing anything.
 from __future__ import annotations
 
 import argparse
+import functools
 import importlib.util
 import json
 import os
@@ -72,7 +73,7 @@ OPTIONAL = {
     "excel": {"openpyxl": ("openpyxl", "3.1")},
     "plots": {"matplotlib": ("matplotlib", "3.9.2")},      # 3.8 needs numpy < 2
     "rd": {"rdrobust": ("rdrobust", "1.3")},
-    "regimes": {"hmmlearn": ("hmmlearn", "0.3.2"), "ruptures": ("ruptures", "1.1.9")},
+    "regimes": {"hmmlearn": ("hmmlearn", "0.3.3"), "ruptures": ("ruptures", "1.1.9")},   # 0.3.2 mis-fits on numpy 2
     "panel": {"pydynpd": ("pydynpd", "0.2")},
     "ml": {"econml": ("econml", "0.16")},                  # 0.17 needs scikit-learn 1.6
     "pdf": {"pymupdf": ("pymupdf", "1.24.3")},             # first release importable as 'pymupdf'
@@ -107,12 +108,14 @@ UNTESTED_MINIMUM = ("ocr", "text", "llm")      # torch-based: not installed in C
 # Known gaps of upstream packages for some Pythons (checked 2026-11-06):
 # dist -> (from Python version, platform or None for all, pip cannot install it at all, note)
 PY_CAVEATS = {
-    "ruptures": ((3, 14), None, True, "has no release for Python 3.14 yet (it declares requires-python <3.14)"),
+    "ruptures": ((3, 14), None, True, "has no release for Python 3.14 (the latest excludes it, older ones need a "
+                                      "source build with a C compiler)"),
     "hmmlearn": ((3, 14), None, False, "has no wheel for Python 3.14: pip builds it from source, which needs a "
                                        "C++ compiler (Microsoft C++ Build Tools on Windows, Xcode tools on macOS)"),
 }
 SKILL_DIR = Path(__file__).resolve().parents[1]
-STABLE_PLUGIN_DIR = Path.home() / ".claude" / "plugins" / "marketplaces" / "econometric-skills" / "econometrics"
+STABLE_PLUGIN_DIR = (Path(os.environ["CLAUDE_CONFIG_DIR"]) if os.environ.get("CLAUDE_CONFIG_DIR")
+                     else Path.home() / ".claude") / "plugins" / "marketplaces" / "econometric-skills" / "econometrics"
 
 REPO = "FabianCornejo/econometric-skills"
 MARKETPLACE = "econometric-skills"
@@ -207,10 +210,14 @@ def _same_file(a, b) -> bool:
         return False
 
 
+@functools.lru_cache(maxsize=None)
 def _py_launcher_exe(tag: str):
-    """The interpreter that the Windows 'py -X.Y' launcher starts, or None."""
+    """The interpreter that the Windows 'py -X.Y' launcher starts, or None (cached: one call per run)."""
+    py = shutil.which("py")
+    if not py:
+        return None
     try:
-        r = subprocess.run(["py", f"-{tag}", "-c", "import sys; print(sys.executable)"],
+        r = subprocess.run([py, f"-{tag}", "-c", "import sys; print(sys.executable)"],
                            capture_output=True, text=True, errors="replace", timeout=20)
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
@@ -344,6 +351,14 @@ def _dict(x) -> dict:
     return x if isinstance(x, dict) else {}
 
 
+_VERSION_RE = re.compile(r"^\d+(\.\d+)*$")
+
+
+def _version_or_none(v):
+    """A release-like version string ('2.5.0.1'), or None for anything else (a number, a commit SHA)."""
+    return v if isinstance(v, str) and _VERSION_RE.match(v.strip()) else None
+
+
 def read_skill_version(folder) -> str | None:
     """SKILL_VERSION of the copy of the skill in `folder` (from scripts/reporting.py), or None.
 
@@ -354,7 +369,7 @@ def read_skill_version(folder) -> str | None:
     except OSError:
         return None
     m = re.search(r'^SKILL_VERSION = "([^"]+)"', text, re.M)
-    return m.group(1) if m else None
+    return _version_or_none(m.group(1)) if m else None
 
 
 def skill_copies(cdir: Path) -> list[dict]:
@@ -368,7 +383,8 @@ def skill_copies(cdir: Path) -> list[dict]:
         entry = next((e for e in entry if isinstance(e, dict)), None)
     if isinstance(entry, dict) and isinstance(entry.get("installPath"), str) and entry["installPath"]:
         p = Path(entry["installPath"])
-        out.append({"kind": "plugin", "path": str(p), "version": read_skill_version(p) or entry.get("version")})
+        out.append({"kind": "plugin", "path": str(p),
+                    "version": read_skill_version(p) or _version_or_none(entry.get("version"))})
     mk = cdir / "plugins" / "marketplaces" / MARKETPLACE / "econometrics"
     if (mk / "SKILL.md").exists():
         out.append({"kind": "marketplace checkout", "path": str(mk), "version": read_skill_version(mk)})
@@ -394,7 +410,7 @@ def latest_release(opener=None, timeout: float = 4.0) -> tuple[str | None, str]:
     except Exception as e:                           # no network, proxy, rate limit, bad JSON
         return None, f"not checked ({type(e).__name__})"
     tag = tag[1:] if tag[:1] in "vV" else tag
-    return (tag, "ok") if _vtuple(tag) else (None, "not checked (no version in the reply)")
+    return (tag, "ok") if _version_or_none(tag) else (None, "not checked (no version in the reply)")
 
 
 def marketplace_autoupdate(cdir: Path, env=None) -> dict:
@@ -467,9 +483,16 @@ def enable_autoupdate(cdir: Path, now=None) -> tuple[Path, Path | None]:
     settings = dict(settings)
     settings["extraKnownMarketplaces"] = ekm
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".settings.json.tmp-{os.getpid()}")
-    tmp.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)                            # atomic on the same folder
+    real = path.resolve() if path.exists() else path  # a symlinked settings.json: write its target, keep the link
+    tmp = real.with_name(f".{real.name}.tmp-{os.getpid()}")
+    try:
+        tmp.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if real.exists():
+            shutil.copymode(real, tmp)               # keep the permissions (it may hold tokens under "env")
+        os.replace(tmp, real)                        # atomic in the same folder
+    finally:
+        if tmp.exists():
+            tmp.unlink()
     return path, backup
 
 
@@ -503,45 +526,49 @@ _PROBE = ("import json,sys,importlib.util as u\n"
           "    try:\n        return m.version(d) if u.find_spec(n) is not None else None\n"
           "    except Exception:\n        return None\n"
           "print(json.dumps({'exe': sys.executable, 'v': list(sys.version_info[:3]),"
-          " 'ver': {n: f(n, d) for n, d in %r}}))")
+          " 'ver': {n: f(n, d) for n, d in %r}}, ensure_ascii=True))")
 
 
-def python_candidates(os_name=os.name, run=None, which=shutil.which) -> list[str]:
-    """Other Python executables on the machine: 'py -0p' on Windows, python3.X on the PATH elsewhere.
-    run(cmd, timeout) -> (code, stdout), _run by default (tests pass a fake)."""
+def python_candidates(os_name=os.name, run=None, which=shutil.which) -> list[list[str]]:
+    """Commands that start the other Pythons on the machine. On Windows, the tags listed by 'py -0p' (ASCII,
+    such as -V:3.14) are started through the launcher, so a user folder with accents in its path never has to
+    be decoded from the launcher's output; elsewhere, python3.X on the PATH. run(cmd, timeout) -> (code, out)."""
     run = run or _run
     found = []
-    if os_name == "nt" and which("py"):
-        try:
-            out = run(["py", "-0p"], 20)[1] or ""
-        except Exception:                            # never let a probe crash the doctor
-            out = ""
-        for line in out.splitlines():
-            m = re.search(r"([A-Za-z]:\\.*?python(?:w)?\.exe)\s*$", line.strip(), re.I)
-            if m:
-                found.append(m.group(1))
+    if os_name == "nt":
+        py = which("py")
+        if py:
+            try:
+                out = run([py, "-0p"], 20)[1] or ""
+            except Exception:                        # never let a probe crash the doctor
+                out = ""
+            for line in out.splitlines():
+                m = re.match(r"\s*-V:(\S+?)\s", line + " ") or re.match(r"\s*-(\d+\.\d+(?:-\d+)?)\s", line + " ")
+                if m:
+                    found.append([py, f"-V:{m.group(1)}"])
     else:
+        seen = []
         for minor in range(MIN_PYTHON[1], 20):
             p = which(f"python3.{minor}")
-            if p:
-                found.append(p)
-    uniq = []
-    for p in found:
-        if not any(_same_file(p, q) for q in uniq):
-            uniq.append(p)
-    return uniq
+            if p and not any(_same_file(p, q) for q in seen):
+                seen.append(p)
+                found.append([p])
+    return found
 
 
-def probe_interpreter(exe: str, run=None) -> dict | None:
-    """Version of another interpreter and its core packages that are missing or below the minimums
-    ('numpy>=2.1' strings), or None if it does not start. It runs from the temporary folder, so a module in
-    the user's analysis folder (a json.py, say) cannot shadow the standard library there."""
-    run = run or (lambda cmd, timeout: _run(cmd, timeout, cwd=tempfile.gettempdir()))
+def probe_interpreter(cmd, run=None) -> dict | None:
+    """Executable and version of another interpreter and its core packages that are missing or below the
+    minimums ('numpy>=2.1' strings), or None if it does not start. `cmd` starts it (a list, or one path).
+    It runs from the temporary folder, so a module in the user's analysis folder (a json.py, say) cannot
+    shadow the standard library there; its reply is ASCII-only JSON, so no path is lost in decoding."""
+    run = run or (lambda c, timeout: _run(c, timeout, cwd=tempfile.gettempdir()))
+    cmd = [cmd] if isinstance(cmd, str) else list(cmd)
     try:
-        code, out = run([exe, "-c", _PROBE % ([(k, d) for k, (d, _m) in CORE.items()],)], 60)
+        code, out = run(cmd + ["-c", _PROBE % ([(k, d) for k, (d, _m) in CORE.items()],)], 60)
         d = json.loads(out.strip().splitlines()[-1])
         vers = d["ver"]
         v = [int(x) for x in d["v"]]
+        exe = str(d.get("exe") or cmd[0])
     except Exception:
         return None
     need = [f"{dist}>={m}" for imp, (dist, m) in CORE.items()
@@ -616,11 +643,10 @@ def doctor(offline: bool = False, *, cdir=None, env=None, opener=None, run=None,
         "listing": _safe(lambda: skill_listing(cdir, run=run, which=which, cwd=cwd), lambda: {"checked": False}),
     }
     others = []
-    for exe in _safe(lambda: python_candidates(os_name=os_name, run=run, which=which), list):
-        if _same_file(exe, sys.executable):
-            continue
-        info = _safe(lambda: probe_interpreter(exe, run=run), None)
-        if info:
+    for cmd in _safe(lambda: python_candidates(os_name=os_name, run=run, which=which), list):
+        info = _safe(lambda: probe_interpreter(cmd, run=run), None)
+        if info and not _same_file(info["exe"], sys.executable) \
+                and not any(_same_file(info["exe"], o["exe"]) for o in others):
             others.append(info)
     rep["interpreters"] = others
     if offline:
@@ -628,7 +654,7 @@ def doctor(offline: bool = False, *, cdir=None, env=None, opener=None, run=None,
     else:
         v, status = latest_release(opener=opener)
         rep["latest"] = {"version": v, "status": status}
-    rep["actions"] = doctor_actions(rep, os_name=os_name)
+    rep["actions"] = _safe(lambda: doctor_actions(rep, os_name=os_name), list)
     return rep
 
 
@@ -662,8 +688,17 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
         # marketplace checkout is only the source of the next plugin update, so it is not one of them
         loaded = [c for c in rep["copies"] if c["kind"] != "marketplace checkout"]
         here = rep["skill"]
-        if here["version"] and not any(_same_file(c["path"], here["dir"]) for c in rep["copies"]):
-            loaded.append({"kind": "this copy", "version": here["version"], "path": here["dir"]})
+        in_cache = "cache" in Path(here["dir"]).parts and any(
+            part == MARKETPLACE for part in Path(here["dir"]).parts)
+        plugin = next((c for c in loaded if c["kind"] == "plugin"), None)
+        if (here["version"] and in_cache and plugin and plugin["version"]
+                and _vtuple(plugin["version"]) > _vtuple(here["version"])
+                and not _same_file(plugin["path"], here["dir"])):
+            # an update was installed (auto-update, say) but this session still runs the old cache folder
+            acts.append(f"the plugin {plugin['version']} is installed but this session still runs "
+                        f"{here['version']}: restart Claude Code to load it")
+        elif here["version"] and not in_cache and not any(_same_file(c["path"], here["dir"]) for c in rep["copies"]):
+            loaded.append({"kind": "copy in use", "version": here["version"], "path": here["dir"]})
         for c in loaded:
             if not c["version"] or _vtuple(latest) <= _vtuple(c["version"]):
                 continue
