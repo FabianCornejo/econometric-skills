@@ -219,6 +219,61 @@ rt.annotate_nameonly(miss)
 check("annotate: a run without a kept directory counts as not captured (never as name only)",
       {x["name"]: x["passed"] for x in miss["cases"][0]["arms"]["with"][0]["graders"]}
       == {"listing-captured": False, "description-dropped": False})
+# review round 2 (SF-2): each half of the deletion guard on its own
+scratch = ROOT / "_scratch_v2502"                         # inside the repository, never under the temp folder
+far = scratch / "claude-eval-far"
+(far / "out").mkdir(parents=True, exist_ok=True)
+under_temp = True
+try:
+    far.resolve().relative_to(Path(tempfile.gettempdir()).resolve())
+except ValueError:
+    under_temp = False
+far_res = {"cases": [{"name": "nameonly-a", "arms": {"with": [{"tracePath": str(far / "out" / "trace.jsonl"),
+                                                               "graders": []}]}}]}
+left_far = rt.remove_kept_dirs(far_res)
+check("deletion guard: a claude-eval-* directory with out/ OUTSIDE the temp folder is refused, kept and reported",
+      not under_temp and not rt._is_eval_sandbox(far) and far.exists() and left_far == [str(far)], str(left_far))
+shutil.rmtree(scratch)
+no_out = Path(tempfile.mkdtemp(prefix="claude-eval-"))     # under temp, right prefix, but no out/
+(no_out / "x").mkdir()
+nores = {"cases": [{"name": "nameonly-a", "arms": {"with": [{"tracePath": str(no_out / "out" / "trace.jsonl"),
+                                                             "graders": []}]}}]}
+left_no = rt.remove_kept_dirs(nores)
+check("deletion guard: a claude-eval-* directory under temp WITHOUT out/ is refused, kept and reported",
+      not rt._is_eval_sandbox(no_out) and no_out.exists() and left_no == [str(no_out)], str(left_no))
+shutil.rmtree(no_out)
+untr = {"cases": [{"name": "nameonly-a", "arms": {"with": [{"error": "exit 1: limit", "graders": []}]}}]}
+left_u = rt.remove_kept_dirs(untr)
+check("remove_kept_dirs: a run without a trace path is not silent (one line pointing at leftover claude-eval-* "
+      "directories)", len(left_u) == 1 and "claude-eval-*" in left_u[0] and "1 run(s)" in left_u[0], str(left_u))
+check("remove_kept_dirs: every run traced and removed -> nothing to report (no false alarm)", left == [])
+# N-7: a transcript that cannot be read marks that run only, and the annotation goes on
+bad = Path(tempfile.mkdtemp(prefix="claude-eval-")); (bad / "out").mkdir()
+good = Path(tempfile.mkdtemp(prefix="claude-eval-")); (good / "out").mkdir()
+(good / "config" / "projects" / "p").mkdir(parents=True)
+(good / "config" / "projects" / "p" / "s.jsonl").write_text(name_only + "\n", encoding="utf-8")
+real_ld = rt.listing_diagnostics
+def flaky(kept):
+    if kept.resolve() == bad.resolve():
+        raise PermissionError("locked")
+    return real_ld(kept)
+rt.listing_diagnostics = flaky
+two = {"cases": [{"name": "nameonly-a", "arms": {"with": [
+    {"tracePath": str(bad / "out" / "trace.jsonl"), "graders": []},
+    {"tracePath": str(good / "out" / "trace.jsonl"), "graders": []}]}}]}
+try:
+    recs2 = rt.annotate_nameonly(two)
+    ok_flaky = (two["cases"][0]["arms"]["with"][0]["harnessUnreadable"]
+                and not two["cases"][0]["arms"]["with"][1]["harnessUnreadable"]
+                and [r["description-dropped"] for r in recs2] == [False, True])
+except OSError as e:
+    ok_flaky = False
+finally:
+    rt.listing_diagnostics = real_ld
+check("annotate: a transcript that cannot be read (locked on Windows) marks that run unreadable and the next run "
+      "is still read", ok_flaky)
+rt.remove_kept_dirs(two)
+check("the kept directories of that test are removed", not bad.exists() and not good.exists())
 src = (ROOT / "tools" / "routing_evals.py").read_text(encoding="utf-8")
 # main(): the command it builds, with the CLI and the eval tool replaced by stubs
 calls = []
@@ -286,6 +341,29 @@ check("summary: name-only runs that ended on an API error before grading are rep
       "'did not reproduce' (seen on the notebook: 18 runs hit the 5-hour usage limit)",
       "ended on an error before grading" in t_err and "this arm did not reproduce" not in t_err
       and "Routing rate, nameonly" not in t_err, t_err)
+no_listing = {"cases": [{"name": "nameonly-a", "arms": {"with": [
+    run(listing_captured=False, description_dropped=False, skill_fired=False),
+    run(listing_captured=False, description_dropped=False, skill_fired=True)]}}]}
+t_nl, _ = rt.summarize(no_listing)
+check("summary (review SF-1): when no transcript showed the listing at all, it reports a harness or format problem, "
+      "not 'did not reproduce', and gives no rate",
+      "not found in any transcript" in t_nl and "this arm did not reproduce" not in t_nl
+      and "Routing rate, nameonly" not in t_nl, t_nl)
+err_nolist = {"cases": [{"name": "nameonly-a", "arms": {"with": [
+    {"error": "exit 1: You've hit your 5-hour limit", "graders": [{"name": "listing-captured", "passed": False},
+                                                                  {"name": "description-dropped", "passed": False}]}]}}]}
+t_en, _ = rt.summarize(err_nolist)
+check("summary (review SF-1): a run that errored before its listing was captured is reported as an error, "
+      "not as 'did not reproduce' nor as a format problem",
+      "1 name-only run(s) ended on an error before grading" in t_en and "this arm did not reproduce" not in t_en
+      and "not found in any transcript" not in t_en, t_en)
+mixed = {"cases": [{"name": "nameonly-a", "arms": {"with": [
+    run(listing_captured=True, description_dropped=True, skill_fired=True),
+    {"error": "exit 1: limit", "graders": [{"name": "listing-captured", "passed": False},
+                                           {"name": "description-dropped", "passed": False}]}]}}]}
+t_mx, _ = rt.summarize(mixed)
+check("summary: one graded run and one errored run -> the rate uses the graded run only and the error is reported",
+      "Routing rate, nameonly: 100% over 1 cases" in t_mx and "1 name-only run(s) ended on an error" in t_mx, t_mx)
 t3, _ = rt.summarize({"cases": [{"name": "clean-a", "arms": {"with": [run(skill_fired=True)]}}]})
 check("summary without a name-only arm is unchanged (no name-only section)", "Name-only" not in t3)
 

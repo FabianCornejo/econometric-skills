@@ -223,9 +223,12 @@ def annotate_nameonly(result: dict) -> list[dict]:
         for i, r in enumerate(c.get("arms", {}).get("with", [])):
             kept = _kept_dir(r)
             readable = kept is not None and _is_eval_sandbox(kept)
-            diag = (listing_diagnostics(kept) if readable else
-                    {"listing-captured": False, "description-dropped": False, "skills": None,
-                     "with_description": None, "econometrics_described": None})
+            empty = {"listing-captured": False, "description-dropped": False, "skills": None,
+                     "with_description": None, "econometrics_described": None}
+            try:
+                diag = listing_diagnostics(kept) if readable else empty
+            except OSError:              # a transcript locked or vanished (Windows): this run only is unreadable
+                readable, diag = False, empty
             r["graders"] = [g for g in r.get("graders", []) if g.get("name") not in ("listing-captured",
                                                                                       "description-dropped")]
             r["graders"] += [{"name": "listing-captured", "passed": diag["listing-captured"], "source": "transcript"},
@@ -240,16 +243,20 @@ def annotate_nameonly(result: dict) -> list[dict]:
 def remove_kept_dirs(result: dict) -> list[str]:
     """Remove the kept directory of every run, in every arm (--keep-temp keeps them all). Returns the paths that
     could not be removed or were refused (not an eval run directory under the temp folder), to print."""
-    left = []
+    left, untraced = [], 0
     for c in result.get("cases", []):
         for r in c.get("arms", {}).get("with", []):
             kept = _kept_dir(r)
             if kept is None:
+                untraced += 1
                 continue
             if _is_eval_sandbox(kept):
                 shutil.rmtree(kept, ignore_errors=True)
             if kept.exists():
                 left.append(str(kept))
+    if untraced:
+        left.append(f"{untraced} run(s) gave no trace path; look for leftover "
+                    f"{Path(tempfile.gettempdir()) / 'claude-eval-*'} directories")
     return left
 
 
@@ -390,7 +397,7 @@ def nameonly_summary(result: dict) -> str:
     """Name-only arm: routing counted only over the runs whose transcript shows econometrics listed by name only.
     A run where the listing was not captured, or where econometrics kept its description, does not test the
     failure of 2026-11-07, so it is reported but left out of the rate."""
-    lines, pos, neg, unreadable, ungraded = [], [], [], 0, 0
+    lines, pos, neg, unreadable, ungraded, captured_total = [], [], [], 0, 0, 0
     for c in result.get("cases", []):
         arm, base = c["name"].split("-", 1)
         if arm != "nameonly":
@@ -399,7 +406,8 @@ def nameonly_summary(result: dict) -> str:
         captured = sum(1 for r in runs if _grade(r, "listing-captured"))
         unreadable += sum(1 for r in runs if r.get("harnessUnreadable"))
         valid = [r for r in runs if _grade(r, "listing-captured") and _grade(r, "description-dropped")]
-        ungraded += sum(1 for r in valid if r.get("error") and not any(
+        captured_total += captured
+        ungraded += sum(1 for r in runs if r.get("error") and not any(
             _grade(r, g) is not None for g in ("skill-fired", "reached", "skill-not-fired", "answer")))
         negative = any(_grade(r, "skill-not-fired") is not None for r in runs)
         fired = []
@@ -436,6 +444,9 @@ def nameonly_summary(result: dict) -> str:
                     "they are not counted. Re-run them.")
     if not pos and not neg and ungraded:
         tail.append("No graded run: no routing rate is reported, and nothing is concluded about the failure.")
+    elif not pos and not neg and not captured_total:
+        tail.append("\nThe skill listing was not found in any transcript: a harness or transcript-format problem "
+                    "(for example a new Claude Code version), not a result. Nothing is concluded about the failure.")
     elif not pos and not neg:
         tail.append("\nNo readable run showed econometrics listed by name only" + (
             "" if not unreadable else " (see the unreadable runs above)") + ": this arm did not reproduce the failure, "

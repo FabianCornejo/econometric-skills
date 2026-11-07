@@ -1,5 +1,5 @@
 {
-  "description": "One line at session start pointing statistics, econometrics and risk requests to the econometrics skill, for listings so crowded that Claude Code shows the skill by name only.",
+  "description": "One line at session start pointing statistical work to the econometrics skill, for listings so crowded that Claude Code shows the skill by name only.",
   "hooks": {
     "SessionStart": [
       {
