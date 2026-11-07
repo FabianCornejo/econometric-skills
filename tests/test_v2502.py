@@ -129,7 +129,23 @@ with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
     d1 = rt.listing_diagnostics(sandbox(root, "claude-eval-a", ["not json", tool_call, name_only]))
     check("transcript: name-only listing found; econometrics by name only; counts of skills and descriptions",
-          d1 == {"listing-captured": True, "description-dropped": True, "skills": 855, "with_description": 1}, str(d1))
+          d1 == {"listing-captured": True, "description-dropped": True, "skills": 855, "with_description": 1,
+                 "econometrics_described": []}, str(d1))
+    stat_kept = listing_line("- data-suite:sql\n- econometrics:econometrics\n"
+                             "- econometrics:statistics: Statistics and hypothesis tests in Python")
+    d1b = rt.listing_diagnostics(sandbox(root, "claude-eval-a2", [stat_kept]))
+    check("transcript: econometrics:statistics kept its description -> not the failure under test (not counted)",
+          d1b["listing-captured"] and not d1b["description-dropped"]
+          and d1b["econometrics_described"] == ["econometrics:statistics"], str(d1b))
+    sb_bom = sandbox(root, "claude-eval-a3", [])
+    (sb_bom / "config" / "projects" / "C--tmp-cwd" / "s.jsonl").write_bytes(b"\xef\xbb\xbf" + (name_only + "\r\n").encode())
+    check("transcript: a UTF-8 BOM and CRLF line ends do not hide the listing",
+          rt.listing_diagnostics(sb_bom)["description-dropped"])
+    sb_sub = sandbox(root, "claude-eval-a4", [name_only])
+    (sb_sub / "config" / "projects" / "C--tmp-cwd" / "s" / "subagents").mkdir(parents=True)
+    (sb_sub / "config" / "projects" / "C--tmp-cwd" / "s" / "subagents" / "agent-1.jsonl").write_text(with_desc + "\n")
+    check("transcript: the main session's listing is read before a subagent's (shallower file first)",
+          rt.listing_diagnostics(sb_sub)["description-dropped"])
     d2 = rt.listing_diagnostics(sandbox(root, "claude-eval-b", [with_desc]))
     check("transcript: econometrics kept its description -> description-dropped False",
           d2["listing-captured"] and not d2["description-dropped"] and d2["with_description"] == 2, str(d2))
@@ -141,8 +157,10 @@ with tempfile.TemporaryDirectory() as tmp:
           d4["listing-captured"] and not d4["description-dropped"], str(d4))
     both = listing_line("- econometrics:econometrics\n- econometrics:econometrics-extra: another skill")
     d4b = rt.listing_diagnostics(sandbox(root, "claude-eval-d2", [both]))
-    check("transcript: econometrics by name only is found next to a skill whose name only starts like it",
-          d4b["description-dropped"], str(d4b))
+    check("transcript: a described entry of the plugin whose name only starts like the skill is not mistaken for it, "
+          "and still excludes the run (any econometrics:* description does)",
+          not d4b["description-dropped"] and d4b["econometrics_described"] == ["econometrics:econometrics-extra"],
+          str(d4b))
     d5 = rt.listing_diagnostics(sandbox(root, "claude-eval-e", [name_only, with_desc]))
     check("transcript: the first listing is the one used (the request was answered with it)",
           d5["description-dropped"], str(d5))
@@ -172,21 +190,62 @@ fake_res = {"cases": [
                                                        "graders": [{"name": "skill-fired", "passed": False}]}]}},
     {"name": "clean-two-groups", "arms": {"with": [{"tracePath": str(base / "out" / "trace.jsonl"),
                                                     "graders": [{"name": "skill-fired", "passed": True}]}]}}]}
+base2 = Path(tempfile.mkdtemp(prefix="claude-eval-"))    # a kept clean-arm run (--arm all keeps every run)
+(base2 / "out").mkdir()
+fake_res["cases"][1]["arms"]["with"][0]["tracePath"] = str(base2 / "out" / "trace.jsonl")
 recs = rt.annotate_nameonly(fake_res)
 g = {x["name"]: x["passed"] for x in fake_res["cases"][0]["arms"]["with"][0]["graders"]}
 check("annotate: the name-only run gets listing-captured and description-dropped from its transcript",
       g == {"skill-fired": False, "listing-captured": True, "description-dropped": True}, str(g))
 check("annotate: other arms are untouched and one record per name-only run is returned",
       len(fake_res["cases"][1]["arms"]["with"][0]["graders"]) == 1 and len(recs) == 1 and recs[0]["skills"] == 855)
-check("annotate: the kept run directory is removed afterwards", not base.exists())
+left = rt.remove_kept_dirs(fake_res)
+check("remove_kept_dirs: the kept directories of every arm are removed, nothing left to report",
+      not base.exists() and not base2.exists() and left == [])
+keep_out = Path(tempfile.mkdtemp(prefix="v2502-keep-"))   # a path that is not an eval run directory
+(keep_out / "out").mkdir()
+odd = {"cases": [{"name": "nameonly-two-groups", "arms": {"with": [
+    {"tracePath": str(keep_out / "out" / "trace.jsonl"), "graders": [{"name": "skill-fired", "passed": True}]}]}}]}
+rt.annotate_nameonly(odd)
+left2 = rt.remove_kept_dirs(odd)
+t_odd, _ = rt.summarize(odd)
+check("an unreadable kept directory is marked, left in place, reported, and the summary says the harness could not "
+      "read it instead of 'did not reproduce' alone",
+      odd["cases"][0]["arms"]["with"][0]["harnessUnreadable"] and keep_out.exists() and left2 == [str(keep_out)]
+      and "could not read the kept directory of 1 run" in t_odd, t_odd)
+shutil.rmtree(keep_out)
 miss = {"cases": [{"name": "nameonly-a", "arms": {"with": [{"tracePath": None, "graders": []}]}}]}
 rt.annotate_nameonly(miss)
 check("annotate: a run without a kept directory counts as not captured (never as name only)",
       {x["name"]: x["passed"] for x in miss["cases"][0]["arms"]["with"][0]["graders"]}
       == {"listing-captured": False, "description-dropped": False})
 src = (ROOT / "tools" / "routing_evals.py").read_text(encoding="utf-8")
-check("the name-only arm runs with --keep-temp and writes nameonly-diagnostics.json",
-      '"--keep-temp"' in src and "nameonly-diagnostics.json" in src)
+# main(): the command it builds, with the CLI and the eval tool replaced by stubs
+calls = []
+
+
+def fake_run(cmd, *a, **k):
+    calls.append(cmd)
+    out = Path(cmd[cmd.index("--json") + 1])
+    out.write_text(json.dumps({"cases": [], "costUsd": 0}), encoding="utf-8")
+    return type("P", (), {"returncode": 0})()
+
+
+orig = (rt.shutil.which, rt.subprocess.run)
+rt.shutil.which, rt.subprocess.run = (lambda name: "/usr/bin/claude"), fake_run
+try:
+    with tempfile.TemporaryDirectory() as tmp:
+        for arm in ("both", "nameonly", "all"):
+            rt.main(["--arm", arm, "--runs", "1", "--case", "two-groups", "--out", str(Path(tmp) / arm)])
+        rt.main(["--arm", "nameonly", "--no-hooks", "--runs", "1", "--case", "two-groups", "--out", str(Path(tmp) / "nh")])
+        heads = {d: (Path(tmp) / d / "summary.md").read_text(encoding="utf-8").splitlines()[0] for d in ("both", "nh")}
+        diag = (Path(tmp) / "nameonly" / "nameonly-diagnostics.json").exists()
+finally:
+    rt.shutil.which, rt.subprocess.run = orig
+check("main(): --keep-temp only when the name-only arm runs (not for both), and the diagnostics file is written",
+      ["--keep-temp" in c for c in calls] == [False, True, True, True] and diag)
+check("main(): the summary header says whether the plugin hooks were on",
+      "plugin hooks on" in heads["both"] and "plugin hooks off" in heads["nh"], str(heads))
 
 # ---------------------------------------------------------------- 4. the summary
 
@@ -234,9 +293,18 @@ check("hook: a plain echo of one single-quoted line, the same in bash and PowerS
       "inside, no Python needed)", m is not None and not re.search(r"[$`\"'\n]", note))
 check("hook: the note names the skill, says to load it with the name only, and to ignore it otherwise",
       "econometrics:econometrics" in note and "only its name" in note and "Ignore this note" in note)
+check("hook: the note is limited to statistical work and names what stays out (budgets, valuations, legal risk)",
+      note.startswith("Note from the econometrics plugin: statistical work")
+      and all(w in note for w in ("budgets", "valuations", "legal risk")) and "judge numbers" not in note)
+bash = shutil.which("bash")
+if bash and sys.platform != "win32":
+    import subprocess  # noqa: E402
+    printed = subprocess.run([bash, "-c", h0["command"]], capture_output=True, text=True).stdout
+    check("hook: run by bash, it prints exactly the note", printed == note + "\n", repr(printed[:60]))
 check("hook: short (at most 400 characters, under 1% of the 40,000-character listing budget seen on the notebook)",
       0 < len(note) <= 400, f"{len(note)} chars")
-check("hook: runs on startup, /clear and compaction, not on resume (a resumed session replays the saved note)",
+check("hook: runs on startup, /clear and compaction; not on resume or fork (assumed to replay the saved note: "
+      "NOT verified, checked in the real validation)",
       set(ss[0]["matcher"].split("|")) == {"startup", "clear", "compact"})
 check("hook: a short timeout (the first answer waits for SessionStart hooks)", 0 < h0.get("timeout", 600) <= 10)
 readme = (ROOT / "README.md").read_text(encoding="utf-8")

@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Note from the econometrics plugin: requests that test, estimate or judge numbers (statistics, hypothesis tests, regression, the effect of a promotion or policy, forecasts, VaR or risk) are handled by the skill econometrics:econometrics. Load it before answering, even if the skill list shows only its name. Ignore this note for anything else.'",
+            "command": "echo 'Note from the econometrics plugin: statistical work (hypothesis tests, confidence intervals, sample size, regression, the effect of a promotion or policy, forecasts from statistical models, VaR or ES) goes to the skill econometrics:econometrics. Load it before answering, even if the skill list shows only its name. Ignore this note for anything else, such as budgets, valuations or legal risk.'",
             "timeout": 10
           }
         ]

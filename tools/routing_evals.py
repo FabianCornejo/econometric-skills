@@ -169,11 +169,16 @@ def write_nameonly_crowd(dst: Path) -> tuple[list[str], int, int]:
 def listing_diagnostics(sandbox: Path) -> dict:
     """Read the skill listing of one kept eval run from its session transcript (config/projects/**/*.jsonl).
     An entry is "- <name>" without a description or "- <name>: <description>" with it (format of the attachment
-    "skill_listing", read from a real transcript on 2026-11-07). Returns listing-captured, description-dropped,
-    the number of skills and of descriptions in the listing."""
-    out = {"listing-captured": False, "description-dropped": False, "skills": None, "with_description": None}
-    for f in sorted((sandbox / "config" / "projects").rglob("*.jsonl")):
-        for raw in f.read_text(encoding="utf-8", errors="replace").splitlines():
+    "skill_listing", read from a real transcript on 2026-11-07). description-dropped is True only when
+    econometrics:econometrics is listed AND no econometrics:* entry (econometrics:statistics included) keeps a
+    description: a run in which the statistics entry point kept its description is not the failure under test.
+    The main session transcript is read before any subagent transcript (shallower files first)."""
+    out = {"listing-captured": False, "description-dropped": False, "skills": None, "with_description": None,
+           "econometrics_described": None}
+    files = sorted((sandbox / "config" / "projects").rglob("*.jsonl"),
+                   key=lambda f: (len(f.relative_to(sandbox).parts), str(f)))
+    for f in files:
+        for raw in f.read_text(encoding="utf-8-sig", errors="replace").splitlines():
             try:
                 msg = json.loads(raw)
             except ValueError:
@@ -182,10 +187,12 @@ def listing_diagnostics(sandbox: Path) -> dict:
             if not isinstance(att, dict) or att.get("type") != "skill_listing" or not isinstance(att.get("content"), str):
                 continue
             entries = [e for e in att["content"].splitlines() if e.startswith("- ")]
-            econ = [e for e in entries if e == "- econometrics:econometrics" or e.startswith("- econometrics:econometrics:")]
+            described = sorted(e[2:].split(": ", 1)[0] for e in entries
+                               if e.startswith("- econometrics:") and ": " in e[2:])
             out.update({"listing-captured": True, "skills": att.get("skillCount", len(entries)),
                         "with_description": sum(1 for e in entries if ": " in e[2:]),
-                        "description-dropped": econ == ["- econometrics:econometrics"]})
+                        "econometrics_described": described,
+                        "description-dropped": "- econometrics:econometrics" in entries and not described})
             return out                            # the first listing is the one the request was answered with
     return out
 
@@ -199,28 +206,51 @@ def _is_eval_sandbox(path: Path) -> bool:
     return path.name.startswith("claude-eval-") and (path / "out").is_dir()
 
 
-def annotate_nameonly(result: dict, remove: bool = True) -> list[dict]:
-    """Add the transcript diagnostics to every run of the name-only cases, as two graders the summary reads,
-    and remove each kept run directory. Returns one record per run (saved next to the results)."""
+def _kept_dir(run: dict) -> Path | None:
+    tp = run.get("tracePath")
+    return Path(tp).parent.parent if tp else None
+
+
+def annotate_nameonly(result: dict) -> list[dict]:
+    """Add the transcript diagnostics to every run of the name-only cases, as two graders the summary reads.
+    A run whose kept directory cannot be read (no tracePath, or a path that is not an eval run directory under the
+    temp folder) is marked unreadable, so the summary never reads it as "the failure was not reproduced".
+    Returns one record per run (saved next to the results). Directories are removed by remove_kept_dirs."""
     records = []
     for c in result.get("cases", []):
         if not c.get("name", "").startswith("nameonly-"):
             continue
         for i, r in enumerate(c.get("arms", {}).get("with", [])):
-            tp = r.get("tracePath")
-            sandbox = Path(tp).parent.parent if tp else None
-            diag = (listing_diagnostics(sandbox) if sandbox is not None and _is_eval_sandbox(sandbox)
-                    else {"listing-captured": False, "description-dropped": False, "skills": None,
-                          "with_description": None})
-            r.setdefault("graders", [])
-            r["graders"] = [g for g in r["graders"] if g.get("name") not in ("listing-captured", "description-dropped")]
+            kept = _kept_dir(r)
+            readable = kept is not None and _is_eval_sandbox(kept)
+            diag = (listing_diagnostics(kept) if readable else
+                    {"listing-captured": False, "description-dropped": False, "skills": None,
+                     "with_description": None, "econometrics_described": None})
+            r["graders"] = [g for g in r.get("graders", []) if g.get("name") not in ("listing-captured",
+                                                                                      "description-dropped")]
             r["graders"] += [{"name": "listing-captured", "passed": diag["listing-captured"], "source": "transcript"},
                              {"name": "description-dropped", "passed": diag["description-dropped"],
                               "source": "transcript"}]
-            records.append({"case": c["name"], "run": i, **diag})
-            if remove and sandbox is not None and _is_eval_sandbox(sandbox):
-                shutil.rmtree(sandbox, ignore_errors=True)
+            r["harnessUnreadable"] = not readable
+            records.append({"case": c["name"], "run": i, "readable": readable,
+                            "kept_dir": str(kept) if kept else None, **diag})
     return records
+
+
+def remove_kept_dirs(result: dict) -> list[str]:
+    """Remove the kept directory of every run, in every arm (--keep-temp keeps them all). Returns the paths that
+    could not be removed or were refused (not an eval run directory under the temp folder), to print."""
+    left = []
+    for c in result.get("cases", []):
+        for r in c.get("arms", {}).get("with", []):
+            kept = _kept_dir(r)
+            if kept is None:
+                continue
+            if _is_eval_sandbox(kept):
+                shutil.rmtree(kept, ignore_errors=True)
+            if kept.exists():
+                left.append(str(kept))
+    return left
 
 
 def write_crowd(dst: Path) -> int:
@@ -357,16 +387,17 @@ def _grade(run: dict, name: str):
 
 
 def nameonly_summary(result: dict) -> str:
-    """Name-only arm: routing counted only over the runs whose trace shows econometrics listed by name only.
+    """Name-only arm: routing counted only over the runs whose transcript shows econometrics listed by name only.
     A run where the listing was not captured, or where econometrics kept its description, does not test the
     failure of 2026-11-07, so it is reported but left out of the rate."""
-    lines, pos, neg = [], [], []
+    lines, pos, neg, unreadable = [], [], [], 0
     for c in result.get("cases", []):
         arm, base = c["name"].split("-", 1)
         if arm != "nameonly":
             continue
         runs = c.get("arms", {}).get("with", [])
         captured = sum(1 for r in runs if _grade(r, "listing-captured"))
+        unreadable += sum(1 for r in runs if r.get("harnessUnreadable"))
         valid = [r for r in runs if _grade(r, "listing-captured") and _grade(r, "description-dropped")]
         negative = any(_grade(r, "skill-not-fired") is not None for r in runs)
         fired = []
@@ -388,16 +419,22 @@ def nameonly_summary(result: dict) -> str:
         return ""
     head = ["Name-only arm (econometrics listed without its description)",
             "",
-            "| Case | Runs | Listing in trace | Name only | Skill fired (name-only runs) | Answer ok (name-only runs) |",
+            "| Case | Runs | Listing in transcript | Name only | Skill fired (name-only runs) | Answer ok (name-only runs) |",
             "|---|---|---|---|---|---|"]
     tail = []
     if pos:
         tail.append(f"\nRouting rate, nameonly: {sum(pos) / len(pos):.0%} over {len(pos)} cases")
     if neg:
         tail.append(f"False triggers, nameonly: {sum(neg) / len(neg):.0%} over {len(neg)} unrelated requests")
+    if unreadable:
+        tail.append(f"\nThe harness could not read the kept directory of {unreadable} run(s) (path outside the temp "
+                    "folder, or a layout it does not know): those runs say nothing about Claude Code.")
     if not pos and not neg:
-        tail.append("\nNo run showed econometrics listed by name only: this arm did not reproduce the failure, and "
-                    "its routing rate is not reported.")
+        tail.append("\nNo readable run showed econometrics listed by name only" + (
+            "" if not unreadable else " (see the unreadable runs above)") + ": this arm did not reproduce the failure, "
+                    "and its routing rate is not reported.")
+    tail.append("Rates are per case (mean over cases); routing.json and the eval report count every run, "
+                "including those that did not reproduce the failure.")
     return "\n".join(head + lines + tail)
 
 
@@ -446,13 +483,22 @@ def main(argv=None) -> int:
         if a.max_cost_usd:
             cmd += ["--max-cost-usd", str(a.max_cost_usd)]
         proc = subprocess.run(cmd)
+    keep = "--keep-temp" in cmd
     if not out_json.exists():
         print("claude plugin eval wrote no result; exit code", proc.returncode)
+        if keep:
+            print(f"Kept run directories (claude-eval-*) may remain in {tempfile.gettempdir()}: remove them.")
         return proc.returncode or 1
     result = json.loads(out_json.read_text(encoding="utf-8"))
-    if "nameonly" in ARM_CHOICES[a.arm]:
-        records = annotate_nameonly(result)
-        (a.out / "nameonly-diagnostics.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+    try:
+        if keep:
+            records = annotate_nameonly(result)
+            (a.out / "nameonly-diagnostics.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+    finally:
+        if keep:
+            left = remove_kept_dirs(result)
+            if left:
+                print("Kept run directories not removed (remove them by hand):\n  " + "\n  ".join(left))
     table, _ = summarize(result)
     head = (f"Routing evals, {datetime.now():%Y-%m-%d %H:%M}, Claude Code {result.get('claudeVersion')}, "
             f"{a.runs} run(s) per case and arm, plugin hooks {'off' if a.no_hooks else 'on'}, "
