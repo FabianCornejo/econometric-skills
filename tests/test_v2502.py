@@ -239,6 +239,10 @@ check("hook: short (at most 400 characters, under 1% of the 40,000-character lis
 check("hook: runs on startup, /clear and compaction, not on resume (a resumed session replays the saved note)",
       set(ss[0]["matcher"].split("|")) == {"startup", "clear", "compact"})
 check("hook: a short timeout (the first answer waits for SessionStart hooks)", 0 < h0.get("timeout", 600) <= 10)
+readme = (ROOT / "README.md").read_text(encoding="utf-8")
+check("README: describes the session-start note with its real length and how to turn it off",
+      f"one line of {len(note)} characters" in readme and "turn the plugin off" in readme
+      and "least" in readme and "--arm nameonly" in readme)
 with tempfile.TemporaryDirectory() as tmp:
     rt.build(Path(tmp) / "on", ["two-groups"], ("nameonly",))
     rt.build(Path(tmp) / "off", ["two-groups"], ("nameonly",), hooks=False)
