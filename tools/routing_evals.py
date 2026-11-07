@@ -390,7 +390,7 @@ def nameonly_summary(result: dict) -> str:
     """Name-only arm: routing counted only over the runs whose transcript shows econometrics listed by name only.
     A run where the listing was not captured, or where econometrics kept its description, does not test the
     failure of 2026-11-07, so it is reported but left out of the rate."""
-    lines, pos, neg, unreadable = [], [], [], 0
+    lines, pos, neg, unreadable, ungraded = [], [], [], 0, 0
     for c in result.get("cases", []):
         arm, base = c["name"].split("-", 1)
         if arm != "nameonly":
@@ -399,6 +399,8 @@ def nameonly_summary(result: dict) -> str:
         captured = sum(1 for r in runs if _grade(r, "listing-captured"))
         unreadable += sum(1 for r in runs if r.get("harnessUnreadable"))
         valid = [r for r in runs if _grade(r, "listing-captured") and _grade(r, "description-dropped")]
+        ungraded += sum(1 for r in valid if r.get("error") and not any(
+            _grade(r, g) is not None for g in ("skill-fired", "reached", "skill-not-fired", "answer")))
         negative = any(_grade(r, "skill-not-fired") is not None for r in runs)
         fired = []
         for r in valid:
@@ -429,7 +431,12 @@ def nameonly_summary(result: dict) -> str:
     if unreadable:
         tail.append(f"\nThe harness could not read the kept directory of {unreadable} run(s) (path outside the temp "
                     "folder, or a layout it does not know): those runs say nothing about Claude Code.")
-    if not pos and not neg:
+    if ungraded:
+        tail.append(f"\n{ungraded} name-only run(s) ended on an error before grading (for example a usage limit): "
+                    "they are not counted. Re-run them.")
+    if not pos and not neg and ungraded:
+        tail.append("No graded run: no routing rate is reported, and nothing is concluded about the failure.")
+    elif not pos and not neg:
         tail.append("\nNo readable run showed econometrics listed by name only" + (
             "" if not unreadable else " (see the unreadable runs above)") + ": this arm did not reproduce the failure, "
                     "and its routing rate is not reported.")

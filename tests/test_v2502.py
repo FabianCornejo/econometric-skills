@@ -278,6 +278,14 @@ none_valid = {"cases": [{"name": "nameonly-a", "arms": {"with": [
 t2, _ = rt.summarize(none_valid)
 check("summary: when no run lost the description, it says the arm did not reproduce the failure and gives no rate",
       "did not reproduce the failure" in t2 and "Routing rate, nameonly" not in t2, t2)
+errored = {"cases": [{"name": "nameonly-a", "arms": {"with": [
+    {"error": "exit 1: You've hit your 5-hour limit", "graders": [{"name": "listing-captured", "passed": True},
+                                                                  {"name": "description-dropped", "passed": True}]}]}}]}
+t_err, _ = rt.summarize(errored)
+check("summary: name-only runs that ended on an API error before grading are reported as such, not as "
+      "'did not reproduce' (seen on the notebook: 18 runs hit the 5-hour usage limit)",
+      "ended on an error before grading" in t_err and "this arm did not reproduce" not in t_err
+      and "Routing rate, nameonly" not in t_err, t_err)
 t3, _ = rt.summarize({"cases": [{"name": "clean-a", "arms": {"with": [run(skill_fired=True)]}}]})
 check("summary without a name-only arm is unchanged (no name-only section)", "Name-only" not in t3)
 
