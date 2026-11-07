@@ -1,0 +1,17 @@
+{
+  "description": "One line at session start pointing statistics, econometrics and risk requests to the econometrics skill, for listings so crowded that Claude Code shows the skill by name only.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Note from the econometrics plugin: requests that test, estimate or judge numbers (statistics, hypothesis tests, regression, the effect of a promotion or policy, forecasts, VaR or risk) are handled by the skill econometrics:econometrics. Load it before answering, even if the skill list shows only its name. Ignore this note for anything else.'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

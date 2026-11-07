@@ -32,6 +32,7 @@ Usage (from the repository root; needs Claude Code >= 2.1.269 and runs on your a
     python tools/routing_evals.py --runs 1 --case two-groups
     python tools/routing_evals.py --build-only out/  # write the harness and stop (no model calls)
     python tools/routing_evals.py --arm nameonly --runs 1 --case two-stores-promo two-groups excel-formula
+    python tools/routing_evals.py --arm nameonly --no-hooks ...   # the same without the plugin's SessionStart note
 
 The cases grant only read-only tools (no Bash), so they run on native Windows too. Results go to
 routing-results/<timestamp>/ (summary.md, routing.json, the harness's report.html).
@@ -240,9 +241,11 @@ def write_crowd(dst: Path) -> int:
     return total
 
 
-def write_plugin_copy(dst: Path) -> None:
-    """Copy of econometrics/ with a plugin.json built from the marketplace entry (no evals inside)."""
-    shutil.copytree(PLUGIN, dst, ignore=shutil.ignore_patterns("evals", "__pycache__", "*.pyc"))
+def write_plugin_copy(dst: Path, hooks: bool = True) -> None:
+    """Copy of econometrics/ with a plugin.json built from the marketplace entry (no evals inside). hooks=False
+    leaves out hooks/, to measure the plugin with and without its SessionStart note in the same commit."""
+    skip = ("evals", "__pycache__", "*.pyc") + (() if hooks else ("hooks",))
+    shutil.copytree(PLUGIN, dst, ignore=shutil.ignore_patterns(*skip))
     entry = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))["plugins"][0]
     manifest = {k: entry[k] for k in ("name", "version", "description", "author", "skills") if k in entry}
     (dst / ".claude-plugin").mkdir(exist_ok=True)
@@ -265,7 +268,7 @@ ARM_CHOICES = {"both": ("clean", "crowded"), "all": ARMS, "clean": ("clean",), "
                "nameonly": ("nameonly",)}
 
 
-def build(harness: Path, cases: list[str] | None = None, arms=("clean", "crowded")) -> dict:
+def build(harness: Path, cases: list[str] | None = None, arms=("clean", "crowded"), hooks: bool = True) -> dict:
     """Write the harness plugin; returns {"cases": [...], "crowd_chars": int}."""
     (harness / ".claude-plugin").mkdir(parents=True, exist_ok=True)
     (harness / ".claude-plugin" / "plugin.json").write_text(json.dumps(
@@ -286,7 +289,7 @@ def build(harness: Path, cases: list[str] | None = None, arms=("clean", "crowded
         for arm in arms:
             d = harness / "evals" / f"{arm}-{n}"
             shutil.copytree(CASES / n / "graders", d / "graders")
-            write_plugin_copy(d / "econometrics")
+            write_plugin_copy(d / "econometrics", hooks=hooks)
             plugins = ["econometrics"]
             if arm == "crowded":
                 crowd_chars = write_crowd(d / "crowd")
@@ -410,6 +413,8 @@ def main(argv=None) -> int:
                     help="both = clean and crowded (default); nameonly = the ~850-skill listing in which econometrics "
                          "keeps only its name; all = the three")
     ap.add_argument("--build-only", type=Path, metavar="DIR", help="write the harness to DIR and stop")
+    ap.add_argument("--no-hooks", action="store_true",
+                    help="leave the plugin's hooks out of the copies (baseline for measuring the SessionStart note)")
     a = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):      # Windows consoles: never crash on "≈" or "—"
         try:
@@ -417,7 +422,7 @@ def main(argv=None) -> int:
         except (AttributeError, ValueError):
             pass
     if a.build_only:
-        info = build(a.build_only, a.case, ARM_CHOICES[a.arm])
+        info = build(a.build_only, a.case, ARM_CHOICES[a.arm], hooks=not a.no_hooks)
         print(f"Harness written to {a.build_only}: {len(info['cases'])} cases; decoy descriptions "
               f"{info['crowd_chars']} characters" + (f"; name-only arm: {info['nameonly_skills']} decoy skills, "
                                                     f"{info['nameonly_chars']} characters" if info["nameonly_skills"] else ""))
@@ -428,7 +433,7 @@ def main(argv=None) -> int:
     a.out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="econ-routing-") as tmp:
         harness = Path(tmp) / "harness"
-        info = build(harness, a.case, ARM_CHOICES[a.arm])
+        info = build(harness, a.case, ARM_CHOICES[a.arm], hooks=not a.no_hooks)
         print(f"{len(info['cases'])} cases ({a.arm}); decoy descriptions {info['crowd_chars']} characters"
               + (f"; name-only arm: {info['nameonly_skills']} decoy skills" if info["nameonly_skills"] else ""))
         out_json = (a.out / "routing.json").resolve()
@@ -450,7 +455,8 @@ def main(argv=None) -> int:
         (a.out / "nameonly-diagnostics.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
     table, _ = summarize(result)
     head = (f"Routing evals, {datetime.now():%Y-%m-%d %H:%M}, Claude Code {result.get('claudeVersion')}, "
-            f"{a.runs} run(s) per case and arm, cost ≈ ${result.get('costUsd', 0):.2f}"
+            f"{a.runs} run(s) per case and arm, plugin hooks {'off' if a.no_hooks else 'on'}, "
+            f"cost ≈ ${result.get('costUsd', 0):.2f}"
             + (" (PARTIAL: " + str(result.get("partialReason")) + ")" if result.get("partial") else ""))
     text = head + "\n\n" + table + "\n"
     (a.out / "summary.md").write_text(text, encoding="utf-8")

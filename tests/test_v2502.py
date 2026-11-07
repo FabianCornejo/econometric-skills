@@ -222,7 +222,39 @@ check("summary: when no run lost the description, it says the arm did not reprod
 t3, _ = rt.summarize({"cases": [{"name": "clean-a", "arms": {"with": [run(skill_fired=True)]}}]})
 check("summary without a name-only arm is unchanged (no name-only section)", "Name-only" not in t3)
 
-# ---------------------------------------------------------------- 5. the real request as a routing case
+# ---------------------------------------------------------------- 5. the SessionStart note (remedy under test)
+hj = json.loads((SKILL / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+ss = hj["hooks"]["SessionStart"]
+h0 = ss[0]["hooks"][0]
+m = re.fullmatch(r"echo '([^']*)'", h0["command"])
+note = m.group(1) if m else ""
+check("hook: one SessionStart command hook, the only event the plugin hooks",
+      list(hj["hooks"]) == ["SessionStart"] and len(ss) == 1 and len(ss[0]["hooks"]) == 1 and h0["type"] == "command")
+check("hook: a plain echo of one single-quoted line, the same in bash and PowerShell (no $, backtick or quotes "
+      "inside, no Python needed)", m is not None and not re.search(r"[$`\"'\n]", note))
+check("hook: the note names the skill, says to load it with the name only, and to ignore it otherwise",
+      "econometrics:econometrics" in note and "only its name" in note and "Ignore this note" in note)
+check("hook: short (at most 400 characters, under 1% of the 40,000-character listing budget seen on the notebook)",
+      0 < len(note) <= 400, f"{len(note)} chars")
+check("hook: runs on startup, /clear and compaction, not on resume (a resumed session replays the saved note)",
+      set(ss[0]["matcher"].split("|")) == {"startup", "clear", "compact"})
+check("hook: a short timeout (the first answer waits for SessionStart hooks)", 0 < h0.get("timeout", 600) <= 10)
+with tempfile.TemporaryDirectory() as tmp:
+    rt.build(Path(tmp) / "on", ["two-groups"], ("nameonly",))
+    rt.build(Path(tmp) / "off", ["two-groups"], ("nameonly",), hooks=False)
+    on = Path(tmp) / "on" / "evals" / "nameonly-two-groups" / "econometrics" / "hooks" / "hooks.json"
+    off = Path(tmp) / "off" / "evals" / "nameonly-two-groups" / "econometrics" / "hooks"
+    check("harness: the plugin copy carries the hook by default and leaves it out with hooks=False (--no-hooks)",
+          on.exists() and not off.exists() and "--no-hooks" in src)
+import zipfile  # noqa: E402
+with zipfile.ZipFile(ROOT / "dist" / "econometrics.skill") as z:
+    check("app package (dist) carries no hooks/ (the app does not run plugin hooks)",
+          not any(n.startswith("econometrics/hooks/") for n in z.namelist()))
+wf = (ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+check("CI: the dist check excludes hooks/ from the comparison and refuses it in the package",
+      "-x hooks" in wf and "evals|hooks)/" in wf and '\\"econometrics/hooks/*\\"' in wf)
+
+# ---------------------------------------------------------------- 6. the real request as a routing case
 case = SKILL / "evals" / "routing" / "two-stores-promo"
 pm, body = front(case / "prompt.md")
 fired = front(case / "graders" / "skill-fired.md")[0]
