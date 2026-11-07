@@ -11,6 +11,16 @@ window) and offers skills by name only. This script builds a harness in which ev
                      descriptions add up to about 35,000 characters, enough to overflow the listing
 
 and then prints, for each case, how often the skill fired and how often the answer check passed in each arm.
+
+A third arm, run only when asked for (`--arm nameonly` or `--arm all`), reproduces the failure seen on the
+user's notebook on 2026-11-07 (865 skills, 14 with a description, econometrics listed by name only):
+
+    nameonly-<case>  the econometrics plugin plus about 850 decoy skills spread over 12 decoy plugins, so that
+                     Claude Code keeps only a few descriptions (it drops the least-invoked skills' first)
+
+Whether econometrics really lost its description is not assumed: two diagnostic graders read the session trace,
+`listing-captured` (the skill listing is in the trace at all, a positive control) and `description-dropped`
+(econometrics appears there by name only). The summary reports routing among the runs where both held.
 The plugin is copied into each case (the eval harness loads only plugins inside the case directory), with a
 `plugin.json` built from the marketplace entry, so the copy declares the same skills, commands and agent.
 
@@ -18,6 +28,7 @@ Usage (from the repository root; needs Claude Code >= 2.1.269 and runs on your a
     python tools/routing_evals.py                    # 3 runs per case and arm (~$3-6 at list price)
     python tools/routing_evals.py --runs 1 --case two-groups
     python tools/routing_evals.py --build-only out/  # write the harness and stop (no model calls)
+    python tools/routing_evals.py --arm nameonly --runs 1 --case two-stores-promo two-groups excel-formula
 
 The cases grant only read-only tools (no Bash), so they run on native Windows too. Results go to
 routing-results/<timestamp>/ (summary.md, routing.json, the harness's report.html).
@@ -96,6 +107,71 @@ FILLER = ("Use it whenever the user mentions data, numbers, a spreadsheet, a CSV
           "It works with Python, R, SQL, Excel and BI tools, and adapts the depth of the explanation to the reader.")
 
 
+# The name-only arm: a listing the size of a real crowded installation. Names follow the "plugin:skill" shape of
+# the real listing, and a share of them sound like data and statistics work, as in the user's listing.
+NAMEONLY_PLUGINS = ("data-suite", "finance-desk", "research-kit", "legal-ops", "marketing-hub", "dev-workflow",
+                    "education-kit", "strategy-kit", "productivity-pack", "analytics-office-x", "career-tools",
+                    "consulting-kit")
+NAMEONLY_TOPICS = (
+    "statistical-analysis", "explore-data", "variance-analysis", "scenario-analysis", "sensitivity", "forecast",
+    "experiment", "ab-test", "survey", "cohort", "kpi", "dashboard", "metrics", "data-quality", "sql", "excel",
+    "pivot", "budget", "cash-flow", "valuation", "dcf", "comps", "lbo", "credit", "portfolio", "risk", "pricing",
+    "market-sizing", "segmentation", "churn", "retention", "attribution", "campaign", "seo", "content", "brand",
+    "contract", "compliance", "policy", "board-memo", "meeting-notes", "email", "slides", "report", "proposal",
+    "roadmap", "okr", "hiring", "onboarding", "performance", "training", "lesson", "quiz", "rubric", "literature",
+    "citation", "paper", "thesis", "code-review", "testing", "debugging", "deploy", "architecture", "security",
+    "documentation", "spec", "research", "interview", "workshop", "negotiation")
+NAMEONLY_FORMS = ("", "-review", "-builder", "-planner", "-checklist", "-audit", "-assistant", "-tracker",
+                  "-guide", "-coach", "-template", "-helper")
+NAMEONLY_FILLER = ("Use it when the user brings numbers, files, notes or a goal in this area, even without naming "
+                   "the skill: it plans the work, drafts the output, checks it against a checklist and suggests "
+                   "next steps, with templates for teams in finance, operations, product and HR.")
+
+
+def nameonly_decoys() -> dict[str, list[tuple[str, str]]]:
+    """{decoy plugin: [(skill name, description)]}, about 850 skills, the same on every call."""
+    out: dict[str, list[tuple[str, str]]] = {p: [] for p in NAMEONLY_PLUGINS}
+    i = 0
+    for form in NAMEONLY_FORMS:
+        for topic in NAMEONLY_TOPICS:
+            name = topic + form
+            words = name.replace("-", " ")
+            out[NAMEONLY_PLUGINS[i % len(NAMEONLY_PLUGINS)]].append(
+                (name, f"Helps with {words}: frameworks, worked examples and a ready-to-use output. {NAMEONLY_FILLER}"))
+            i += 1
+    return out
+
+
+def write_nameonly_crowd(dst: Path) -> tuple[list[str], int, int]:
+    """The decoy plugins of the name-only arm under dst/; returns (plugin dirs, skill count, description chars)."""
+    dirs, n, chars = [], 0, 0
+    for plugin, skills in nameonly_decoys().items():
+        root = dst / plugin
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(json.dumps(
+            {"name": plugin, "version": "1.0.0", "description": "Decoy skills for routing evals (not a real plugin)."},
+            indent=2) + "\n", encoding="utf-8")
+        for name, desc in skills:
+            d = root / "skills" / name
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(f'---\nname: {name}\ndescription: "{desc}"\n---\n\n# {name}\n\nAnswer the '
+                                        "request directly, with a short explanation.\n", encoding="utf-8")
+            n += 1
+            chars += len(desc)
+        dirs.append(plugin)
+    return dirs, n, chars
+
+
+# Diagnostic graders of the name-only arm. The trace is JSON per line, so a newline inside the listing appears as
+# the two characters backslash and n. The listing writes "- <name>" for a skill without a description and
+# "- <name>: <description>" for one with it.
+LISTING_CAPTURED = ("---\n# Positive control: the skill listing (with the decoy plugins) is in the session trace.\n"
+                    "# If it fails, description-dropped says nothing.\n"
+                    "type: regex\npattern: '\\\\n- data-suite:'\ntarget: trace\narm: both\n---\n")
+DESCRIPTION_DROPPED = ("---\n# econometrics is listed by name only, without its description (the notebook-2 failure).\n"
+                       "type: regex\npattern: '\\\\n- econometrics:econometrics(?!:)'\ntarget: trace\narm: both\n---\n")
+
+
 def write_crowd(dst: Path) -> int:
     """The decoy plugin; returns the total length of its skill descriptions."""
     (dst / ".claude-plugin").mkdir(parents=True)
@@ -134,6 +210,11 @@ def set_frontmatter(text: str, name: str, plugins: list[str], extra_tag: str) ->
     return "---\n" + "\n".join(lines) + "\n---\n" + m.group(2)
 
 
+ARMS = ("clean", "crowded", "nameonly")
+ARM_CHOICES = {"both": ("clean", "crowded"), "all": ARMS, "clean": ("clean",), "crowded": ("crowded",),
+               "nameonly": ("nameonly",)}
+
+
 def build(harness: Path, cases: list[str] | None = None, arms=("clean", "crowded")) -> dict:
     """Write the harness plugin; returns {"cases": [...], "crowd_chars": int}."""
     (harness / ".claude-plugin").mkdir(parents=True, exist_ok=True)
@@ -145,7 +226,11 @@ def build(harness: Path, cases: list[str] | None = None, arms=("clean", "crowded
         names = [n for n in names if any(re.fullmatch(c.replace("*", ".*"), n) for c in cases)]
     if not names:
         raise SystemExit("no routing case matches")
+    unknown = set(arms) - set(ARMS)
+    if unknown:
+        raise ValueError(f"unknown arm(s): {sorted(unknown)}")
     crowd_chars = 0
+    nameonly = {"skills": 0, "chars": 0}
     built = []
     for n in names:
         for arm in arms:
@@ -156,16 +241,24 @@ def build(harness: Path, cases: list[str] | None = None, arms=("clean", "crowded
             if arm == "crowded":
                 crowd_chars = write_crowd(d / "crowd")
                 plugins.append("crowd")
+            elif arm == "nameonly":
+                dirs, nameonly["skills"], nameonly["chars"] = write_nameonly_crowd(d)
+                plugins += dirs
+                (d / "graders" / "listing-captured.md").write_text(LISTING_CAPTURED, encoding="utf-8")
+                (d / "graders" / "description-dropped.md").write_text(DESCRIPTION_DROPPED, encoding="utf-8")
             src = (CASES / n / "prompt.md").read_text(encoding="utf-8")
             (d / "prompt.md").write_text(set_frontmatter(src, f"{arm}-{n}", plugins, arm), encoding="utf-8")
             built.append(f"{arm}-{n}")
-    return {"cases": built, "crowd_chars": crowd_chars}
+    return {"cases": built, "crowd_chars": crowd_chars, "nameonly_skills": nameonly["skills"],
+            "nameonly_chars": nameonly["chars"]}
 
 
 def summarize(result: dict) -> tuple[str, list[dict]]:
     rows = {}
     for c in result.get("cases", []):
         arm, base = c["name"].split("-", 1)
+        if arm == "nameonly":                     # reported apart, over the runs that reproduce the failure
+            continue
         runs = c.get("arms", {}).get("with", [])
         def rate(grader):
             vals = [g["passed"] for r in runs for g in r.get("graders", []) if g["name"] == grader]
@@ -200,7 +293,61 @@ def summarize(result: dict) -> tuple[str, list[dict]]:
         w = [r[f"{arm} skill fired"] for r in neg_rows if r.get(f"{arm} skill fired") is not None]
         if w:
             out.append(f"False triggers, {arm}: {sum(w) / len(w):.0%} over {len(w)} unrelated requests")
+    nameonly = nameonly_summary(result)
+    if nameonly:
+        out.append("\n" + nameonly)
     return "\n".join(out), list(rows.values())
+
+
+def _grade(run: dict, name: str):
+    """True/False for the grader `name` in one run, None when the run has no such grader."""
+    vals = [g["passed"] for g in run.get("graders", []) if g["name"] == name]
+    return all(vals) if vals else None
+
+
+def nameonly_summary(result: dict) -> str:
+    """Name-only arm: routing counted only over the runs whose trace shows econometrics listed by name only.
+    A run where the listing was not captured, or where econometrics kept its description, does not test the
+    failure of 2026-11-07, so it is reported but left out of the rate."""
+    lines, pos, neg = [], [], []
+    for c in result.get("cases", []):
+        arm, base = c["name"].split("-", 1)
+        if arm != "nameonly":
+            continue
+        runs = c.get("arms", {}).get("with", [])
+        captured = sum(1 for r in runs if _grade(r, "listing-captured"))
+        valid = [r for r in runs if _grade(r, "listing-captured") and _grade(r, "description-dropped")]
+        negative = any(_grade(r, "skill-not-fired") is not None for r in runs)
+        fired = []
+        for r in valid:
+            f = _grade(r, "skill-fired")
+            if f is None:
+                f = _grade(r, "reached")
+            if f is None and _grade(r, "skill-not-fired") is not None:
+                f = not _grade(r, "skill-not-fired")
+            if f is not None:
+                fired.append(f)
+        answer = [a for a in (_grade(r, "answer") for r in valid) if a is not None]
+        rate = (lambda v: "—" if not v else f"{sum(v)}/{len(v)}")           # noqa: E731
+        lines.append(f"| {base}{' (must not fire)' if negative else ''} | {len(runs)} | {captured} | {len(valid)} | "
+                     f"{rate(fired)} | {rate(answer)} |")
+        if fired:
+            (neg if negative else pos).append(sum(fired) / len(fired))
+    if not lines:
+        return ""
+    head = ["Name-only arm (econometrics listed without its description)",
+            "",
+            "| Case | Runs | Listing in trace | Name only | Skill fired (name-only runs) | Answer ok (name-only runs) |",
+            "|---|---|---|---|---|---|"]
+    tail = []
+    if pos:
+        tail.append(f"\nRouting rate, nameonly: {sum(pos) / len(pos):.0%} over {len(pos)} cases")
+    if neg:
+        tail.append(f"False triggers, nameonly: {sum(neg) / len(neg):.0%} over {len(neg)} unrelated requests")
+    if not pos and not neg:
+        tail.append("\nNo run showed econometrics listed by name only: this arm did not reproduce the failure, and "
+                    "its routing rate is not reported.")
+    return "\n".join(head + lines + tail)
 
 
 def main(argv=None) -> int:
@@ -211,8 +358,9 @@ def main(argv=None) -> int:
     ap.add_argument("--max-cost-usd", type=float)
     ap.add_argument("-j", "--concurrency", type=int, default=1)
     ap.add_argument("--out", type=Path, default=Path("routing-results") / datetime.now().strftime("%Y%m%d-%H%M%S"))
-    ap.add_argument("--arm", choices=("both", "clean", "crowded"), default="both",
-                    help="run only the clean or the crowded listing (default: both)")
+    ap.add_argument("--arm", choices=tuple(ARM_CHOICES), default="both",
+                    help="both = clean and crowded (default); nameonly = the ~850-skill listing in which econometrics "
+                         "keeps only its name; all = the three")
     ap.add_argument("--build-only", type=Path, metavar="DIR", help="write the harness to DIR and stop")
     a = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):      # Windows consoles: never crash on "≈" or "—"
@@ -221,9 +369,10 @@ def main(argv=None) -> int:
         except (AttributeError, ValueError):
             pass
     if a.build_only:
-        info = build(a.build_only, a.case, ("clean", "crowded") if a.arm == "both" else (a.arm,))
+        info = build(a.build_only, a.case, ARM_CHOICES[a.arm])
         print(f"Harness written to {a.build_only}: {len(info['cases'])} cases; decoy descriptions "
-              f"{info['crowd_chars']} characters")
+              f"{info['crowd_chars']} characters" + (f"; name-only arm: {info['nameonly_skills']} decoy skills, "
+                                                    f"{info['nameonly_chars']} characters" if info["nameonly_skills"] else ""))
         return 0
     exe = shutil.which("claude")
     if exe is None:
@@ -231,8 +380,9 @@ def main(argv=None) -> int:
     a.out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="econ-routing-") as tmp:
         harness = Path(tmp) / "harness"
-        info = build(harness, a.case, ("clean", "crowded") if a.arm == "both" else (a.arm,))
-        print(f"{len(info['cases'])} cases ({a.arm}); decoy descriptions {info['crowd_chars']} characters")
+        info = build(harness, a.case, ARM_CHOICES[a.arm])
+        print(f"{len(info['cases'])} cases ({a.arm}); decoy descriptions {info['crowd_chars']} characters"
+              + (f"; name-only arm: {info['nameonly_skills']} decoy skills" if info["nameonly_skills"] else ""))
         out_json = (a.out / "routing.json").resolve()
         cmd = [exe, "plugin", "eval", str(harness), "--trust-plugin", "--ablation", "none", "--runs", str(a.runs),
                "--no-publish", "-j", str(a.concurrency), "--output-dir", str(a.out.resolve()), "--json", str(out_json)]
