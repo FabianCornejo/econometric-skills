@@ -103,9 +103,16 @@ for line in (ROOT / "requirements-dev.txt").read_text(encoding="utf-8").splitlin
     m = re.match(r"^([A-Za-z0-9_.-]+)>=([0-9.]+)", line.strip())
     if m:
         dev[m.group(1).lower()] = m.group(2)
-opt = {dist.lower(): v for pkgs in getattr(se, "OPTIONAL", {}).values() for dist, v in pkgs.values()}
+# v2.5.0.1: every extra CI tests has the same minimum as requirements-dev.txt; the extras CI does not
+# install (setup_env.UNTESTED_MINIMUM, torch-based) must not be there, so "not tested" stays true.
+untested = set(getattr(se, "UNTESTED_MINIMUM", ()))
+opt = {dist.lower(): v for name, pkgs in getattr(se, "OPTIONAL", {}).items() if name not in untested
+       for dist, v in pkgs.values()}
+opt_untested = {dist.lower() for name in untested for dist, _v in se.OPTIONAL[name].values()}
 check("extra 'excel' is openpyxl, with the same minimum as requirements-dev.txt",
       "openpyxl" in opt and all(dev.get(k) == v for k, v in opt.items()), f"{opt} vs dev")
+check("extras outside CI (UNTESTED_MINIMUM) are not in requirements-dev.txt",
+      bool(opt_untested) and not (opt_untested & set(dev)), sorted(opt_untested & set(dev)))
 
 
 class blocked:

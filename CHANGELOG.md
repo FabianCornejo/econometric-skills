@@ -2,6 +2,29 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.5.0.1 — Installation and updates, plug-and-play
+
+The skill now checks the whole setup before the first analysis on a machine and asks the user once for everything that is missing or out of date. Origin: setting up a second computer found the plugin and the Claude-app copy nine versions behind with nothing saying so, plugin auto-update off, two Pythons with the packages split between them, about 300 skills in Claude Code's listing, and optional packages with no permitted way to install them.
+
+- **`setup_env.py --doctor`** (new): one report, which installs and changes nothing, ending with a numbered "To do" list for a single question to the user. It reports:
+  - the Python to use, and other interpreters on the machine that already have the packages (so it does not reinstall them in the wrong one);
+  - missing core packages and every optional extra;
+  - this skill's version against the latest GitHub release (one public request with a short timeout; offline it says "not checked"; `--offline` skips it), with the exact update commands and the restart;
+  - every copy of the skill (plugin, marketplace checkout, the copy synced from the Claude app, manual copies; removed copies in `.trash` ignored) and a warning when their versions differ. Copies are compared by `SKILL_VERSION`, not by file hash: the Claude app repackages an uploaded `.skill` file;
+  - plugin auto-update for the `econometric-skills` marketplace, read in the order Claude Code documents (settings `extraKnownMarketplaces`, then `known_marketplaces.json`, then the default, off for third-party marketplaces), including the environment variables that turn it off;
+  - a crowded skill listing (50 skills or more, the size that overflowed the listing in the routing evals), offering a clean analysis folder (`workspace.py`).
+  - `--json` prints the report for the agent.
+- **`setup_env.py --enable-autoupdate`** (new): with the user's permission only, writes `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in `~/.claude/settings.json`, keeping every other key and backing the file up first; a file that is not valid JSON is refused. The other documented way is `/plugin` → Marketplaces → econometric-skills → Enable auto-update. There is no shell command for it.
+- **Optional extras for every optional package** (`--extra NAME`): `rd` (rdrobust), `regimes` (hmmlearn, ruptures), `panel` (pydynpd), `ml` (econml), `pdf` (PyMuPDF), `ocr` (easyocr), `web` (requests), `text` (sentence-transformers), `llm` (transformers, torch), `data-br` (python-bcb, sidrapy, ipeadatapy), `data-intl` (wbgapi, fredapi, yfinance, pandas-datareader), plus `excel` and `plots`.
+  - Large extras (`ml` ~50 MB, `pdf` ~81 MB, `llm` and `text` ~160 MB, `ocr` ~205 MB, measured on Windows on top of the core packages) are asked in a question of their own, with the size, only when a function needs them.
+  - Minimums are tested in CI, except `ocr`, `text` and `llm` (torch-based), which CI does not install; their minimums are documented, not tested. `econml` is tested at 0.16 in the minimum job (0.17 needs scikit-learn 1.6).
+  - Packages that pip cannot install on the running Python are skipped by `--install` with the reason (ruptures has no Python 3.14 release); hmmlearn on Windows with Python 3.14 is flagged as needing a compiler.
+  - `require_extra(..., only=...)`: a function that needs part of an extra checks only that part (`hmm_regimes` needs hmmlearn, not ruptures).
+- **No more bare pip commands**: `regimes.hmm_regimes`, `data_prep.pdf_text` (and OCR), `data_prep.polite_get`, `text_data.embed` and `text_data.hf_backend` stop with the `setup_env.py --install --extra …` line; the references point to the extras.
+- **`causal.select_bandwidth` no longer switches silently**: without rdrobust it still uses Imbens-Kalyanaraman, but says why (not installed, or rdrobust failed), and `rdd` carries it as a warning to relay.
+- **SKILL.md section 7**: `--doctor` once per machine (Consultant and Reviewer before estimating, Teacher before the first runnable example); one question covering every item that applies; nothing installed, updated or changed before the answer; auto-update only on a yes; with no Python at all, the system installer goes in the question. Section 4 is unchanged. The `econometrician` agent runs `--doctor` and reports its list instead of acting on it.
+- **CI**: a job on Python 3.14 (latest dependencies). The latest job already runs pandas 3.1. The extras above are installed in every job.
+
 ## v2.5.0 — DiD: design, imputation (BJS) and pre-trend tests
 
 Difference-in-differences that starts from the design: what kind of treatment it is, which estimators fit it, a second route with a different method for staggered adoption, and pre-trend tests whose reference distribution is corrected for an estimated covariance (their remaining over-rejection with few clusters is measured and warned). Source: the guide of de Chaisemartin & D'Haultfœuille, "Which DiD estimator should I use?" (Credible Answers). The new estimators are replicated against R.

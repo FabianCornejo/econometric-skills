@@ -136,10 +136,13 @@ def lda_topics(texts, k: int = 8, n_top: int = 12, lang: str = "pt", max_feature
 
 def embed(texts, model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
           batch_size: int = 32) -> np.ndarray:
-    """Dense sentence embeddings (pip install sentence-transformers). Portuguese legal text:
+    """Dense sentence embeddings (sentence-transformers, optional extra 'text'). Portuguese legal text:
     consider domain models such as 'stjiris/bert-large-portuguese-cased-legal-...' or
     'rufimelo/bert-large-portuguese-cased-sts'. Long documents are truncated by the model
-    (often 256-512 tokens): chunk them and average, or embed the relevant section only."""
+    (often 256-512 tokens): chunk them and average, or embed the relevant section only.
+    Needs the optional extra 'text' (a large download, torch included): setup_env.py, with the user's permission."""
+    from setup_env import require_extra   # v2.5.0.1
+    require_extra("text", "Sentence embeddings")
     from sentence_transformers import SentenceTransformer
     m = SentenceTransformer(model)
     return np.asarray(m.encode([t if isinstance(t, str) else "" for t in texts], batch_size=batch_size,
@@ -410,7 +413,10 @@ def hf_backend(model_name: str, chat: bool = False, device: str | None = None, r
     Runs locally, so documents with personal data never leave the machine. Record model_name and
     revision in the report: codes are only reproducible with the same weights. With chat=True the
     prompt is wrapped in the model's chat template and the logits are those of the first answer token.
+    Needs the optional extra 'llm' (a large download): setup_env.py, with the user's permission.
     """
+    from setup_env import require_extra   # v2.5.0.1
+    require_extra("llm", "Local LLM coding (hf_backend)")
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(model_name, revision=revision)

@@ -395,15 +395,21 @@ def ik_bandwidth(y, x, cutoff: float = 0.0) -> float:
 def select_bandwidth(y, x, cutoff: float = 0.0) -> tuple[float, str]:
     """MSE-optimal bandwidth: rdrobust's 'mserd' (Calonico-Cattaneo-Titiunik) if the package
     is installed, otherwise Imbens-Kalyanaraman. IK tends to be wider when the two sides
-    have similar curvature (its bias term uses the difference of second derivatives)."""
+    have similar curvature (its bias term uses the difference of second derivatives).
+    The method string says why IK was used (v2.5.0.1: the fallback is no longer silent); rdd() relays it
+    as a warning."""
     try:
         from rdrobust import rdbwselect
+    except ImportError:
+        return ik_bandwidth(y, x, cutoff), ("Imbens-Kalyanaraman (rdrobust is not installed: optional extra "
+                                            "'rd', setup_env.py --install --extra rd, with the user's permission)")
+    try:
         yy, xx = np.asarray(y, float), np.asarray(x, float)
         ok = np.isfinite(yy) & np.isfinite(xx)
         bw = rdbwselect(yy[ok], xx[ok], c=cutoff, bwselect="mserd")
         return float(np.asarray(bw.bws)[0, 0]), "rdrobust mserd"
-    except Exception:
-        return ik_bandwidth(y, x, cutoff), "Imbens-Kalyanaraman"
+    except Exception as e:
+        return ik_bandwidth(y, x, cutoff), f"Imbens-Kalyanaraman (rdrobust failed: {type(e).__name__}: {e})"
 
 
 def rdd(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: float | None = None,
@@ -442,8 +448,11 @@ def rdd(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: float | None =
         est, se = iv.params[fuzzy], iv.std_errors[fuzzy]
         fs = sm.WLS(d[fuzzy], X, weights=d["_w"]).fit(**kw)
         first = {"jump_in_treatment": fs.params["_above"], "F": (fs.params["_above"] / fs.bse["_above"]) ** 2}
+    rd_warns = []
+    if bw_method.startswith("Imbens-Kalyanaraman ("):
+        rd_warns.append(f"bandwidth by {bw_method}, not the rdrobust MSE-optimal one: report it as IK")
     out = _out("RD effect" + (" (fuzzy, LATE)" if fuzzy else " (sharp)"), est, se, len(d), bandwidth=h,
-               bandwidth_method=bw_method,
+               bandwidth_method=bw_method, warnings=rd_warns,
                n_left=int((d["_above"] == 0).sum()), n_right=int((d["_above"] == 1).sum()), kernel=kernel, p=p)
     if first:
         out.update(first)
@@ -452,6 +461,8 @@ def rdd(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: float | None =
               f"{out['ci_high']:.4f}), h = {h:.4g} ({bw_method}), N = {out['n_left']} + {out['n_right']}"
               + (f", first-stage jump {first['jump_in_treatment']:.3f} (F = {first['F']:.1f})" if first else ""))
         print("  Conventional CI; for robust bias-corrected inference use rdrobust (Calonico, Cattaneo & Titiunik, 2014).")
+        for w_ in rd_warns:
+            print(f"  Warning: {w_}")
     return out
 
 

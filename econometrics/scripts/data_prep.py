@@ -220,8 +220,13 @@ def safe_merge(left: pd.DataFrame, right: pd.DataFrame, on, how: str = "left", v
 
 
 def pdf_text(path, ocr: bool = False, ocr_lang: str = "pt", min_chars: int = 30, zoom: float = 3.0) -> list[str]:
-    """Text per page with PyMuPDF (pip install pymupdf). Pages with almost no text layer are
-    scanned images: with ocr=True they are rasterized and read with easyocr (pip install easyocr)."""
+    """Text per page with PyMuPDF (optional extra 'pdf'). Pages with almost no text layer are
+    scanned images: with ocr=True they are rasterized and read with easyocr. Both are optional extras of
+    setup_env.py ('pdf', 'ocr'), installed only with the user's permission; 'ocr' is a large download."""
+    from setup_env import require_extra   # v2.5.0.1
+    require_extra("pdf", "pdf_text")
+    if ocr:
+        require_extra("ocr", "pdf_text(ocr=True)")
     import pymupdf as fitz
     doc = fitz.open(path)
     pages = []
@@ -258,6 +263,9 @@ def polite_get(url: str, session=None, min_interval: float = 1.0, retries: int =
                user_agent: str = "research-crawler (contact: your-email)", **kw):
     """GET with a minimum interval between calls, exponential backoff on errors/429 and
     TLS verification ON (verify=False hides man-in-the-middle problems; fix certificates instead)."""
+    if session is None:
+        from setup_env import require_extra   # optional extra 'web' (v2.5.0.1)
+        require_extra("web", "polite_get")
     import requests
     s = session or requests.Session()
     s.headers.setdefault("User-Agent", user_agent)

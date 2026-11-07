@@ -105,7 +105,7 @@ print(pt["rules"]); print(pt["value_test"])
 
 ## 8. Using EconML or grf
 
-EconML (`pip install econml`) offers causal forests with valid pointwise CIs (`CausalForestDML`, bootstrap of little bags), IV versions (`OrthoIV`, `DRIV`, `CausalIVForest`), dynamic treatments over time (`DynamicDML`), sparse high-dimensional final stages (`SparseLinearDML`), SHAP explanations of tau(x) and its own `DRTester` (BLP, calibration, uplift). R's grf adds `rank_average_treatment_effect` and `policy_tree`. To validate their predictions with this module, feed **out-of-fold** predictions:
+EconML (optional extra `ml` of `setup_env.py`, about 50 MB: ask on its own, SKILL.md §7) offers causal forests with valid pointwise CIs (`CausalForestDML`, bootstrap of little bags), IV versions (`OrthoIV`, `DRIV`, `CausalIVForest`), dynamic treatments over time (`DynamicDML`), sparse high-dimensional final stages (`SparseLinearDML`), SHAP explanations of tau(x) and its own `DRTester` (BLP, calibration, uplift). R's grf adds `rank_average_treatment_effect` and `policy_tree`. To validate their predictions with this module, feed **out-of-fold** predictions:
 
 ```python
 from sklearn.model_selection import KFold

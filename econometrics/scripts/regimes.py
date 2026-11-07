@@ -191,11 +191,9 @@ def hmm_regimes(X: pd.DataFrame, n_states: int = 3, train_end=None, covariance_t
     """Gaussian HMM (hmmlearn) fitted on the training window. Returns FILTERED state
     probabilities for every row (real-time usable) and the Viterbi path on the training
     window (in-sample description only)."""
-    try:
-        from hmmlearn.hmm import GaussianHMM
-    except ImportError as e:
-        raise ImportError("pip install --break-system-packages hmmlearn  "
-                          "(or use markov_switching, which only needs statsmodels)") from e
+    from setup_env import require_extra   # optional extra 'regimes' (v2.5.0.1: no separate pip command)
+    require_extra("regimes", "hmm_regimes (or markov_switching, which only needs statsmodels)", only=("hmmlearn",))
+    from hmmlearn.hmm import GaussianHMM
     from scipy.stats import multivariate_normal
     from sklearn.preprocessing import StandardScaler
     X = X.dropna()
