@@ -176,16 +176,17 @@ c3.mkdir()
 before = {"enabledPlugins": {"x@y": True}, "theme": "dark", "extraKnownMarketplaces": {
     "econometric-skills": {"source": {"source": "github", "repo": se.REPO}}, "other": {"source": {}}}}
 (c3 / "settings.json").write_text(json.dumps(before, indent=2), encoding="utf-8")
+original_bytes = (c3 / "settings.json").read_bytes()      # as written on this OS (CRLF on Windows)
 path, backup = se.enable_autoupdate(c3, now=0)
 after = json.loads(path.read_text(encoding="utf-8"))
 exp = json.loads(json.dumps(before))
 exp["extraKnownMarketplaces"]["econometric-skills"]["autoUpdate"] = True
 check("--enable-autoupdate: only autoUpdate true is added; every other key and marketplace is kept", after == exp)
 check("--enable-autoupdate: the previous file is backed up byte for byte",
-      backup is not None and backup.read_bytes() == json.dumps(before, indent=2).encode())
+      backup is not None and backup.read_bytes() == original_bytes)
 _p2, backup2 = se.enable_autoupdate(c3, now=0)
 check("--enable-autoupdate: a second run in the same second keeps the first backup (new name)",
-      backup2 is not None and backup2 != backup and backup.read_bytes() == json.dumps(before, indent=2).encode())
+      backup2 is not None and backup2 != backup and backup.read_bytes() == original_bytes)
 check("--enable-autoupdate: the result is read back as on", se.marketplace_autoupdate(c3, env={})["on"])
 c4 = tmp / "c4"
 c4.mkdir()
