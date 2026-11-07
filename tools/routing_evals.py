@@ -18,9 +18,12 @@ user's notebook on 2026-11-07 (865 skills, 14 with a description, econometrics l
     nameonly-<case>  the econometrics plugin plus about 850 decoy skills spread over 12 decoy plugins, so that
                      Claude Code keeps only a few descriptions (it drops the least-invoked skills' first)
 
-Whether econometrics really lost its description is not assumed: two diagnostic graders read the session trace,
-`listing-captured` (the skill listing is in the trace at all, a positive control) and `description-dropped`
-(econometrics appears there by name only). The summary reports routing among the runs where both held.
+Whether econometrics really lost its description is not assumed. The skill listing is not in the trace that
+`claude plugin eval` hands to graders, but it is in the child session's own transcript, so this arm runs with
+`--keep-temp`, reads `config/projects/**/*.jsonl` of each kept run (the part the eval tool itself writes), records
+two diagnostics per run, `listing-captured` (a skill listing was found, a positive control) and
+`description-dropped` (econometrics is listed by name only), and removes the kept directory. The summary reports
+routing among the runs where both held; the diagnostics are saved in nameonly-diagnostics.json.
 The plugin is copied into each case (the eval harness loads only plugins inside the case directory), with a
 `plugin.json` built from the marketplace entry, so the copy declares the same skills, commands and agent.
 
@@ -162,14 +165,61 @@ def write_nameonly_crowd(dst: Path) -> tuple[list[str], int, int]:
     return dirs, n, chars
 
 
-# Diagnostic graders of the name-only arm. The trace is JSON per line, so a newline inside the listing appears as
-# the two characters backslash and n. The listing writes "- <name>" for a skill without a description and
-# "- <name>: <description>" for one with it.
-LISTING_CAPTURED = ("---\n# Positive control: the skill listing (with the decoy plugins) is in the session trace.\n"
-                    "# If it fails, description-dropped says nothing.\n"
-                    "type: regex\npattern: '\\\\n- data-suite:'\ntarget: trace\narm: both\n---\n")
-DESCRIPTION_DROPPED = ("---\n# econometrics is listed by name only, without its description (the notebook-2 failure).\n"
-                       "type: regex\npattern: '\\\\n- econometrics:econometrics(?!:)'\ntarget: trace\narm: both\n---\n")
+def listing_diagnostics(sandbox: Path) -> dict:
+    """Read the skill listing of one kept eval run from its session transcript (config/projects/**/*.jsonl).
+    An entry is "- <name>" without a description or "- <name>: <description>" with it (format of the attachment
+    "skill_listing", read from a real transcript on 2026-11-07). Returns listing-captured, description-dropped,
+    the number of skills and of descriptions in the listing."""
+    out = {"listing-captured": False, "description-dropped": False, "skills": None, "with_description": None}
+    for f in sorted((sandbox / "config" / "projects").rglob("*.jsonl")):
+        for raw in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                msg = json.loads(raw)
+            except ValueError:
+                continue
+            att = msg.get("attachment") if isinstance(msg, dict) else None
+            if not isinstance(att, dict) or att.get("type") != "skill_listing" or not isinstance(att.get("content"), str):
+                continue
+            entries = [e for e in att["content"].splitlines() if e.startswith("- ")]
+            econ = [e for e in entries if e == "- econometrics:econometrics" or e.startswith("- econometrics:econometrics:")]
+            out.update({"listing-captured": True, "skills": att.get("skillCount", len(entries)),
+                        "with_description": sum(1 for e in entries if ": " in e[2:]),
+                        "description-dropped": econ == ["- econometrics:econometrics"]})
+            return out                            # the first listing is the one the request was answered with
+    return out
+
+
+def _is_eval_sandbox(path: Path) -> bool:
+    """Only directories the eval tool creates under the system temp folder may be read and removed."""
+    try:
+        path.resolve().relative_to(Path(tempfile.gettempdir()).resolve())
+    except ValueError:
+        return False
+    return path.name.startswith("claude-eval-") and (path / "out").is_dir()
+
+
+def annotate_nameonly(result: dict, remove: bool = True) -> list[dict]:
+    """Add the transcript diagnostics to every run of the name-only cases, as two graders the summary reads,
+    and remove each kept run directory. Returns one record per run (saved next to the results)."""
+    records = []
+    for c in result.get("cases", []):
+        if not c.get("name", "").startswith("nameonly-"):
+            continue
+        for i, r in enumerate(c.get("arms", {}).get("with", [])):
+            tp = r.get("tracePath")
+            sandbox = Path(tp).parent.parent if tp else None
+            diag = (listing_diagnostics(sandbox) if sandbox is not None and _is_eval_sandbox(sandbox)
+                    else {"listing-captured": False, "description-dropped": False, "skills": None,
+                          "with_description": None})
+            r.setdefault("graders", [])
+            r["graders"] = [g for g in r["graders"] if g.get("name") not in ("listing-captured", "description-dropped")]
+            r["graders"] += [{"name": "listing-captured", "passed": diag["listing-captured"], "source": "transcript"},
+                             {"name": "description-dropped", "passed": diag["description-dropped"],
+                              "source": "transcript"}]
+            records.append({"case": c["name"], "run": i, **diag})
+            if remove and sandbox is not None and _is_eval_sandbox(sandbox):
+                shutil.rmtree(sandbox, ignore_errors=True)
+    return records
 
 
 def write_crowd(dst: Path) -> int:
@@ -244,8 +294,6 @@ def build(harness: Path, cases: list[str] | None = None, arms=("clean", "crowded
             elif arm == "nameonly":
                 dirs, nameonly["skills"], nameonly["chars"] = write_nameonly_crowd(d)
                 plugins += dirs
-                (d / "graders" / "listing-captured.md").write_text(LISTING_CAPTURED, encoding="utf-8")
-                (d / "graders" / "description-dropped.md").write_text(DESCRIPTION_DROPPED, encoding="utf-8")
             src = (CASES / n / "prompt.md").read_text(encoding="utf-8")
             (d / "prompt.md").write_text(set_frontmatter(src, f"{arm}-{n}", plugins, arm), encoding="utf-8")
             built.append(f"{arm}-{n}")
@@ -386,6 +434,8 @@ def main(argv=None) -> int:
         out_json = (a.out / "routing.json").resolve()
         cmd = [exe, "plugin", "eval", str(harness), "--trust-plugin", "--ablation", "none", "--runs", str(a.runs),
                "--no-publish", "-j", str(a.concurrency), "--output-dir", str(a.out.resolve()), "--json", str(out_json)]
+        if "nameonly" in ARM_CHOICES[a.arm]:
+            cmd.append("--keep-temp")             # the listing is read from each run's transcript, then removed
         if a.model:
             cmd += ["--model", a.model]
         if a.max_cost_usd:
@@ -395,6 +445,9 @@ def main(argv=None) -> int:
         print("claude plugin eval wrote no result; exit code", proc.returncode)
         return proc.returncode or 1
     result = json.loads(out_json.read_text(encoding="utf-8"))
+    if "nameonly" in ARM_CHOICES[a.arm]:
+        records = annotate_nameonly(result)
+        (a.out / "nameonly-diagnostics.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
     table, _ = summarize(result)
     head = (f"Routing evals, {datetime.now():%Y-%m-%d %H:%M}, Claude Code {result.get('claudeVersion')}, "
             f"{a.runs} run(s) per case and arm, cost ≈ ${result.get('costUsd', 0):.2f}"

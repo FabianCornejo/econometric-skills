@@ -6,15 +6,18 @@ Claude Code drops descriptions starting with the least-invoked skills, so a new 
 lose its description. The existing "crowded" arm (48 decoys) never checked whether the description was dropped, so
 it could not reproduce that failure nor validate a remedy.
 
-`tools/routing_evals.py` gains a "nameonly" arm (about 850 decoy skills over 12 decoy plugins), two diagnostic
-graders read from the session trace (the listing was captured; econometrics is listed by name only) and a summary
-that counts routing only over the runs where both hold. The request of the notebook test is a new routing case.
+`tools/routing_evals.py` gains a "nameonly" arm (about 850 decoy skills over 12 decoy plugins), two diagnostics per
+run read from the child session's transcript (the listing was captured; econometrics is listed by name only) and a
+summary that counts routing only over the runs where both hold. The request of the notebook test is a new routing
+case. The first run on the notebook showed that the listing is not in the trace the eval hands to graders but is in
+the kept run's transcript (855 skills, 11 descriptions, econometrics by name only), hence the transcript reader.
 
 Run from the repository root:  python3 tests/test_v2502.py
 """
 import importlib.util
 import json
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -76,15 +79,8 @@ with tempfile.TemporaryDirectory() as tmp:
     heads = [front(p)[0] for p in list(d.glob("*/skills/*/SKILL.md"))[:50]]
     check("decoy headers parse and name their folder", all(isinstance(m, dict) and m.get("description") for m in heads))
     graders = sorted(p.stem for p in (d / "graders").glob("*.md"))
-    check("a name-only case carries the case's graders plus listing-captured and description-dropped",
-          graders == ["answer", "description-dropped", "listing-captured", "skill-fired"], str(graders))
-    cap = front(d / "graders" / "listing-captured.md")[0]
-    drop = front(d / "graders" / "description-dropped.md")[0]
-    check("the diagnostic graders are regex graders over the trace, scored in both arms",
-          all(g["type"] == "regex" and g["target"] == "trace" and g["arm"] == "both" for g in (cap, drop)))
-    check("the diagnostic graders have no body (a body is only for llm graders)",
-          front(d / "graders" / "listing-captured.md")[1].strip() == ""
-          and front(d / "graders" / "description-dropped.md")[1].strip() == "")
+    check("a name-only case carries the case's own graders (the diagnostics come from the transcript, not graders)",
+          graders == ["answer", "skill-fired"], str(graders))
     # the default build stays as it was: clean and crowded only
     h2 = Path(tmp) / "h2"
     rt.build(h2, ["two-groups"])
@@ -102,37 +98,95 @@ except ValueError:
     raised = True
 check("an unknown arm is refused instead of building a case without decoys", raised)
 
-# ---------------------------------------------------------------- 3. the diagnostic patterns on trace lines
-# The trace is JSON per line; a listing entry is "- <name>" (no description) or "- <name>: <description>"
-# (format read from the notebook transcript of 2026-11-07, attachment type "skill_listing").
+# ---------------------------------------------------------------- 3. the listing read from a kept run's transcript
+# Format read from the notebook transcripts of 2026-11-07: attachment type "skill_listing", entries "- <name>" without a
+# description and "- <name>: <description>" with it.
 
 
-def line(content):
-    return json.dumps({"type": "attachment", "attachment": {"type": "skill_listing", "content": content}})
+def listing_line(content, count=None):
+    att = {"type": "skill_listing", "content": content, "skillCount": count or content.count("\n- ") + 1}
+    return json.dumps({"type": "attachment", "attachment": att})
 
 
-name_only = line("- dataviz: Use this skill whenever...\n- data-suite:sql\n- econometrics:econometrics\n"
-                 "- econometrics:statistics\n- legal-ops:contract")
-with_desc = line("- data-suite:sql\n- econometrics:econometrics: Statistics, econometrics and quantitative risk\n"
-                 "- econometrics:statistics: Statistics and hypothesis tests")
-last_entry = line("- data-suite:sql\n- econometrics:econometrics")
+def sandbox(root, name, lines):
+    sb = root / name
+    (sb / "out").mkdir(parents=True)
+    (sb / "out" / "trace.jsonl").write_text("{}\n", encoding="utf-8")
+    proj = sb / "config" / "projects" / "C--tmp-cwd"
+    proj.mkdir(parents=True)
+    (proj / "s.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return sb
+
+
+name_only = listing_line("- dataviz: Use this skill whenever...\n- data-suite:sql\n- econometrics:econometrics\n"
+                         "- econometrics:statistics\n- legal-ops:contract", 855)
+with_desc = listing_line("- data-suite:sql\n- econometrics:econometrics: Statistics, econometrics and quantitative risk\n"
+                         "- econometrics:statistics: Statistics and hypothesis tests")
+other = listing_line("- data-suite:sql\n- econometrics:econometrics-extra")
 tool_call = json.dumps({"type": "assistant", "message": {"content": [
     {"type": "tool_use", "name": "Skill", "input": {"skill": "econometrics:econometrics"}}]}})
-decoy_call = json.dumps({"type": "assistant", "message": {"content": [
-    {"type": "tool_use", "name": "Skill", "input": {"skill": "data-suite:statistical-analysis"}}]}})
-agent_file = json.dumps({"content": "---\nskills:\n  - econometrics:econometrics\n---"})
-pc, pd_ = cap["pattern"], drop["pattern"]
-check("listing-captured: found in a listing with the decoy plugins, not in a Skill call (to econometrics or to "
-      "a decoy skill)", re.search(pc, name_only) and not re.search(pc, tool_call) and not re.search(pc, decoy_call))
-check("description-dropped: found when econometrics is listed by name only, also as the last entry",
-      re.search(pd_, name_only) and re.search(pd_, last_entry))
-check("description-dropped: NOT found when econometrics kept its description",
-      not re.search(pd_, with_desc))
-check("description-dropped: NOT found in a Skill call or in the agent file that names the skill",
-      not re.search(pd_, tool_call) and not re.search(pd_, agent_file))
-skill_text = "\n".join(p.read_text(encoding="utf-8") for p in SKILL.rglob("*.md") if "evals" not in p.parts)
-check("no file of the skill contains a line that the diagnostic patterns would take for the listing",
-      not re.search(pd_, json.dumps(skill_text)) and not re.search(pc, json.dumps(skill_text)))
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    d1 = rt.listing_diagnostics(sandbox(root, "claude-eval-a", ["not json", tool_call, name_only]))
+    check("transcript: name-only listing found; econometrics by name only; counts of skills and descriptions",
+          d1 == {"listing-captured": True, "description-dropped": True, "skills": 855, "with_description": 1}, str(d1))
+    d2 = rt.listing_diagnostics(sandbox(root, "claude-eval-b", [with_desc]))
+    check("transcript: econometrics kept its description -> description-dropped False",
+          d2["listing-captured"] and not d2["description-dropped"] and d2["with_description"] == 2, str(d2))
+    d3 = rt.listing_diagnostics(sandbox(root, "claude-eval-c", [tool_call]))
+    check("transcript: no listing -> nothing captured, nothing dropped (a Skill call is not a listing)",
+          not d3["listing-captured"] and not d3["description-dropped"], str(d3))
+    d4 = rt.listing_diagnostics(sandbox(root, "claude-eval-d", [other]))
+    check("transcript: a different skill whose name starts with econometrics:econometrics does not count",
+          d4["listing-captured"] and not d4["description-dropped"], str(d4))
+    both = listing_line("- econometrics:econometrics\n- econometrics:econometrics-extra: another skill")
+    d4b = rt.listing_diagnostics(sandbox(root, "claude-eval-d2", [both]))
+    check("transcript: econometrics by name only is found next to a skill whose name only starts like it",
+          d4b["description-dropped"], str(d4b))
+    d5 = rt.listing_diagnostics(sandbox(root, "claude-eval-e", [name_only, with_desc]))
+    check("transcript: the first listing is the one used (the request was answered with it)",
+          d5["description-dropped"], str(d5))
+    # the agent file names the skill with two spaces of indentation: never read as a listing entry
+    agent = json.dumps({"type": "attachment", "attachment": {"type": "file", "content": "skills:\n  - econometrics:econometrics"}})
+    d6 = rt.listing_diagnostics(sandbox(root, "claude-eval-f", [agent]))
+    check("transcript: an attachment of another type (the agent file) is not a listing", not d6["listing-captured"])
+
+# a kept run lives under the system temp folder in a claude-eval-* directory with out/; nothing else is touched
+tmpd = Path(tempfile.mkdtemp(prefix="claude-eval-"))
+(tmpd / "out").mkdir()
+outside = Path(tempfile.mkdtemp(prefix="v2502-"))       # under temp, with out/, but not an eval directory
+(outside / "out").mkdir()
+check("only eval run directories under the temp folder are read and removed",
+      rt._is_eval_sandbox(tmpd) and not rt._is_eval_sandbox(outside) and not rt._is_eval_sandbox(ROOT)
+      and not rt._is_eval_sandbox(Path("/claude-eval-x")))
+shutil.rmtree(tmpd)
+shutil.rmtree(outside)
+
+base = Path(tempfile.mkdtemp(prefix="claude-eval-"))     # a fake kept run, as the eval tool leaves it
+(base / "out").mkdir()
+(base / "out" / "trace.jsonl").write_text("{}\n", encoding="utf-8")
+(base / "config" / "projects" / "p").mkdir(parents=True)
+(base / "config" / "projects" / "p" / "s.jsonl").write_text(name_only + "\n", encoding="utf-8")
+fake_res = {"cases": [
+    {"name": "nameonly-two-groups", "arms": {"with": [{"tracePath": str(base / "out" / "trace.jsonl"),
+                                                       "graders": [{"name": "skill-fired", "passed": False}]}]}},
+    {"name": "clean-two-groups", "arms": {"with": [{"tracePath": str(base / "out" / "trace.jsonl"),
+                                                    "graders": [{"name": "skill-fired", "passed": True}]}]}}]}
+recs = rt.annotate_nameonly(fake_res)
+g = {x["name"]: x["passed"] for x in fake_res["cases"][0]["arms"]["with"][0]["graders"]}
+check("annotate: the name-only run gets listing-captured and description-dropped from its transcript",
+      g == {"skill-fired": False, "listing-captured": True, "description-dropped": True}, str(g))
+check("annotate: other arms are untouched and one record per name-only run is returned",
+      len(fake_res["cases"][1]["arms"]["with"][0]["graders"]) == 1 and len(recs) == 1 and recs[0]["skills"] == 855)
+check("annotate: the kept run directory is removed afterwards", not base.exists())
+miss = {"cases": [{"name": "nameonly-a", "arms": {"with": [{"tracePath": None, "graders": []}]}}]}
+rt.annotate_nameonly(miss)
+check("annotate: a run without a kept directory counts as not captured (never as name only)",
+      {x["name"]: x["passed"] for x in miss["cases"][0]["arms"]["with"][0]["graders"]}
+      == {"listing-captured": False, "description-dropped": False})
+src = (ROOT / "tools" / "routing_evals.py").read_text(encoding="utf-8")
+check("the name-only arm runs with --keep-temp and writes nameonly-diagnostics.json",
+      '"--keep-temp"' in src and "nameonly-diagnostics.json" in src)
 
 # ---------------------------------------------------------------- 4. the summary
 
