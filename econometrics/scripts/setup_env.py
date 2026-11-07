@@ -35,10 +35,20 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from importlib import metadata
 from pathlib import Path
+
+try:                     # Windows-safe console output (user paths with characters outside the code page)
+    import _console  # noqa: F401
+except ImportError:      # setup_env.py copied alone: make stdout tolerant here
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
 
 MIN_PYTHON = (3, 10)
 # import name -> (distribution name, minimum version); kept in sync with requirements.txt (tested)
@@ -54,23 +64,25 @@ CORE = {
 }
 # Optional packages by feature (--extra NAME), same layout as CORE. They are never installed on their own:
 # the agent names them in the permission question when the task needs them (heavy ones in a question of
-# their own, with the download size). Minimums of the extras in requirements-dev.txt are tested in CI;
-# UNTESTED_MINIMUM lists the extras CI does not install, whose minimums are documented, not tested.
+# their own, with the download size). The minimums of the extras in requirements-dev.txt are the lowest
+# wheels that install with the core minimums (resolved 2026-11-06); CI's minimum job pins them
+# (ci/constraints-min.txt) and tests/test_v2501.py imports each one there. UNTESTED_MINIMUM lists the extras
+# CI does not install (torch-based), whose minimums are documented, not tested.
 OPTIONAL = {
     "excel": {"openpyxl": ("openpyxl", "3.1")},
-    "plots": {"matplotlib": ("matplotlib", "3.8")},
+    "plots": {"matplotlib": ("matplotlib", "3.9.2")},      # 3.8 needs numpy < 2
     "rd": {"rdrobust": ("rdrobust", "1.3")},
-    "regimes": {"hmmlearn": ("hmmlearn", "0.3"), "ruptures": ("ruptures", "1.1")},
+    "regimes": {"hmmlearn": ("hmmlearn", "0.3.2"), "ruptures": ("ruptures", "1.1.9")},
     "panel": {"pydynpd": ("pydynpd", "0.2")},
-    "ml": {"econml": ("econml", "0.16")},
-    "pdf": {"pymupdf": ("pymupdf", "2.1")},
+    "ml": {"econml": ("econml", "0.16")},                  # 0.17 needs scikit-learn 1.6
+    "pdf": {"pymupdf": ("pymupdf", "1.24.3")},             # first release importable as 'pymupdf'
     "ocr": {"easyocr": ("easyocr", "1.7")},
-    "web": {"requests": ("requests", "2.34")},
+    "web": {"requests": ("requests", "2.31")},
     "text": {"sentence_transformers": ("sentence-transformers", "3.0")},
     "llm": {"transformers": ("transformers", "4.40"), "torch": ("torch", "2.2")},
-    "data-br": {"bcb": ("python-bcb", "0.4"), "sidrapy": ("sidrapy", "0.1"), "ipeadatapy": ("ipeadatapy", "0.1")},
-    "data-intl": {"wbgapi": ("wbgapi", "1.0"), "fredapi": ("fredapi", "0.5"), "yfinance": ("yfinance", "1.8"),
-                  "pandas_datareader": ("pandas-datareader", "0.11")},
+    "data-br": {"bcb": ("python-bcb", "0.3"), "sidrapy": ("sidrapy", "0.1.4"), "ipeadatapy": ("ipeadatapy", "0.1.9")},
+    "data-intl": {"wbgapi": ("wbgapi", "1.0.12"), "fredapi": ("fredapi", "0.5.1"), "yfinance": ("yfinance", "0.2.40"),
+                  "pandas_datareader": ("pandas-datareader", "0.10")},
 }
 OPTIONAL_USE = {
     "excel": "read or write .xlsx/.xlsm files",
@@ -96,8 +108,8 @@ UNTESTED_MINIMUM = ("ocr", "text", "llm")      # torch-based: not installed in C
 # dist -> (from Python version, platform or None for all, pip cannot install it at all, note)
 PY_CAVEATS = {
     "ruptures": ((3, 14), None, True, "has no release for Python 3.14 yet (it declares requires-python <3.14)"),
-    "hmmlearn": ((3, 14), "nt", False, "has no Windows wheel for Python 3.14: pip builds it from source, which "
-                                       "needs Microsoft C++ Build Tools"),
+    "hmmlearn": ((3, 14), None, False, "has no wheel for Python 3.14: pip builds it from source, which needs a "
+                                       "C++ compiler (Microsoft C++ Build Tools on Windows, Xcode tools on macOS)"),
 }
 SKILL_DIR = Path(__file__).resolve().parents[1]
 STABLE_PLUGIN_DIR = Path.home() / ".claude" / "plugins" / "marketplaces" / "econometric-skills" / "econometrics"
@@ -199,8 +211,8 @@ def _py_launcher_exe(tag: str):
     """The interpreter that the Windows 'py -X.Y' launcher starts, or None."""
     try:
         r = subprocess.run(["py", f"-{tag}", "-c", "import sys; print(sys.executable)"],
-                           capture_output=True, text=True, timeout=20)
-    except (OSError, subprocess.SubprocessError):
+                           capture_output=True, text=True, errors="replace", timeout=20)
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
     return r.stdout.strip() if r.returncode == 0 else None
 
@@ -316,11 +328,20 @@ def claude_dir(env=None, home=None) -> Path:
     return Path(d) if d else Path(home or Path.home()) / ".claude"
 
 
-def _load_json(path: Path):
+def _load_json(path: Path, strict: bool = False):
+    """A JSON object (dict) read from `path` (a UTF-8 BOM is accepted); {} when the file is missing, unreadable
+    or not an object. strict=True returns None instead of {} for a file that exists but is not an object."""
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
-        return None
+        return None if strict and Path(path).exists() else {}
+    if isinstance(data, dict):
+        return data
+    return None if strict else {}
+
+
+def _dict(x) -> dict:
+    return x if isinstance(x, dict) else {}
 
 
 def read_skill_version(folder) -> str | None:
@@ -341,11 +362,11 @@ def skill_copies(cdir: Path) -> list[dict]:
     source of the next update), copies synced from the Claude app and manual copies under skills/.
     Copies in skills/.trash (removed from the app) are ignored, as Claude Code ignores them."""
     out = []
-    inst = _load_json(cdir / "plugins" / "installed_plugins.json") or {}
-    entry = (inst.get("plugins") or {}).get(PLUGIN_ID)
+    inst = _load_json(cdir / "plugins" / "installed_plugins.json")
+    entry = _dict(inst.get("plugins")).get(PLUGIN_ID)
     if isinstance(entry, list):                      # one record per scope
-        entry = entry[0] if entry else None
-    if isinstance(entry, dict) and entry.get("installPath"):
+        entry = next((e for e in entry if isinstance(e, dict)), None)
+    if isinstance(entry, dict) and isinstance(entry.get("installPath"), str) and entry["installPath"]:
         p = Path(entry["installPath"])
         out.append({"kind": "plugin", "path": str(p), "version": read_skill_version(p) or entry.get("version")})
     mk = cdir / "plugins" / "marketplaces" / MARKETPLACE / "econometrics"
@@ -390,9 +411,9 @@ def marketplace_autoupdate(cdir: Path, env=None) -> dict:
         return str(env.get(k, "")).strip().lower() not in ("", "0", "false", "no")
 
     blocked = [] if truthy("FORCE_AUTOUPDATE_PLUGINS") else [k for k in UPDATE_ENV_OFF if truthy(k)]
-    settings = _load_json(cdir / "settings.json") or {}
-    ekm = (settings.get("extraKnownMarketplaces") or {}).get(MARKETPLACE)
-    known = (_load_json(cdir / "plugins" / "known_marketplaces.json") or {}).get(MARKETPLACE)
+    settings = _load_json(cdir / "settings.json")
+    ekm = _dict(settings.get("extraKnownMarketplaces")).get(MARKETPLACE)
+    known = _load_json(cdir / "plugins" / "known_marketplaces.json").get(MARKETPLACE)
     if isinstance(ekm, dict) and "autoUpdate" in ekm:
         on, source = bool(ekm["autoUpdate"]), "settings.json"
     elif isinstance(known, dict) and "autoUpdate" in known:
@@ -406,42 +427,94 @@ def marketplace_autoupdate(cdir: Path, env=None) -> dict:
 def enable_autoupdate(cdir: Path, now=None) -> tuple[Path, Path | None]:
     """Write "autoUpdate": true on the econometric-skills entry of extraKnownMarketplaces in
     <claude dir>/settings.json, keeping every other key; back the file up first. Returns (file, backup).
-    Raise ValueError when the file is not valid JSON (it is then left untouched)."""
+
+    The entry keeps the marketplace's own source: the one already in settings, else the one Claude Code
+    recorded in plugins/known_marketplaces.json (a fork or a local folder stays what it is). Raise ValueError,
+    leaving everything untouched, when the marketplace is not registered or settings.json is not a JSON
+    object with an object under extraKnownMarketplaces."""
     path = cdir / "settings.json"
-    backup = None
+    known = _load_json(cdir / "plugins" / "known_marketplaces.json").get(MARKETPLACE)
     settings = {}
     if path.exists():
-        settings = _load_json(path)
-        if not isinstance(settings, dict):
-            raise ValueError(f"{path} is not valid JSON; fix it or use /plugin -> Marketplaces instead.")
+        settings = _load_json(path, strict=True)
+        if settings is None:
+            raise ValueError(f"{path} is not a valid JSON object; fix it, or use /plugin -> Marketplaces -> "
+                             f"{MARKETPLACE} -> Enable auto-update instead.")
+    ekm = settings.get("extraKnownMarketplaces", {})
+    if not isinstance(ekm, dict):
+        raise ValueError(f"extraKnownMarketplaces in {path} is not an object; use /plugin -> Marketplaces instead.")
+    entry = ekm.get(MARKETPLACE)
+    if entry is not None and not isinstance(entry, dict):
+        raise ValueError(f"the {MARKETPLACE} entry in {path} is not an object; use /plugin -> Marketplaces instead.")
+    source = (entry or {}).get("source") or _dict(known).get("source")
+    if not source:
+        raise ValueError(f"the {MARKETPLACE} marketplace is not registered in Claude Code; add it first "
+                         f"(claude plugin marketplace add {REPO}).")
+    backup = None
+    if path.exists():
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
         backup = path.with_name(f"settings.json.bak-{stamp}")
+        k = 1
+        while backup.exists():                       # never overwrite an earlier backup
+            backup = path.with_name(f"settings.json.bak-{stamp}-{k}")
+            k += 1
         shutil.copy2(path, backup)
-    ekm = settings.setdefault("extraKnownMarketplaces", {})
-    entry = ekm.get(MARKETPLACE) if isinstance(ekm.get(MARKETPLACE), dict) else {}
-    entry.setdefault("source", {"source": "github", "repo": REPO})
-    entry["autoUpdate"] = True
-    ekm[MARKETPLACE] = entry
+    new_entry = dict(entry or {})
+    new_entry["source"] = source
+    new_entry["autoUpdate"] = True
+    ekm = dict(ekm)
+    ekm[MARKETPLACE] = new_entry
+    settings = dict(settings)
+    settings["extraKnownMarketplaces"] = ekm
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp = path.with_name(f".settings.json.tmp-{os.getpid()}")
+    tmp.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, path)                            # atomic on the same folder
     return path, backup
 
 
+def _run(cmd, timeout: float, cwd=None) -> tuple[int, str]:
+    """(exit code, stdout) of a command, never hanging past `timeout`.
+
+    Output goes to a temporary file, not a pipe: on Windows a wrapper such as claude.cmd leaves a grandchild
+    holding the pipe, and subprocess.run would wait for it after the timeout. On timeout the whole process
+    tree is killed (taskkill /T on Windows). Decoding is UTF-8 with replacement, so no output can crash."""
+    with tempfile.TemporaryFile() as out:
+        try:
+            p = subprocess.Popen(cmd, stdout=out, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, cwd=cwd)
+        except OSError:
+            return -1, ""
+        try:
+            code = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+            p.kill()
+            p.wait()
+            return -1, ""
+        out.seek(0)
+        return code, out.read().decode("utf-8", errors="replace")
+
+
 _PROBE = ("import json,sys,importlib.util as u\n"
-          "def f(n):\n"
-          "    try:\n        return u.find_spec(n) is not None\n"
-          "    except Exception:\n        return False\n"
+          "from importlib import metadata as m\n"
+          "def f(n, d):\n"
+          "    try:\n        return m.version(d) if u.find_spec(n) is not None else None\n"
+          "    except Exception:\n        return None\n"
           "print(json.dumps({'exe': sys.executable, 'v': list(sys.version_info[:3]),"
-          " 'missing': [n for n in %r if not f(n)]}))")
+          " 'ver': {n: f(n, d) for n, d in %r}}))")
 
 
-def python_candidates(os_name=os.name, run=subprocess.run, which=shutil.which) -> list[str]:
-    """Other Python executables on the machine: 'py -0p' on Windows, python3.X on the PATH elsewhere."""
+def python_candidates(os_name=os.name, run=None, which=shutil.which) -> list[str]:
+    """Other Python executables on the machine: 'py -0p' on Windows, python3.X on the PATH elsewhere.
+    run(cmd, timeout) -> (code, stdout), _run by default (tests pass a fake)."""
+    run = run or _run
     found = []
     if os_name == "nt" and which("py"):
         try:
-            out = run(["py", "-0p"], capture_output=True, text=True, timeout=20).stdout
-        except (OSError, subprocess.SubprocessError):
+            out = run(["py", "-0p"], 20)[1] or ""
+        except Exception:                            # never let a probe crash the doctor
             out = ""
         for line in out.splitlines():
             m = re.search(r"([A-Za-z]:\\.*?python(?:w)?\.exe)\s*$", line.strip(), re.I)
@@ -459,38 +532,47 @@ def python_candidates(os_name=os.name, run=subprocess.run, which=shutil.which) -
     return uniq
 
 
-def probe_interpreter(exe: str, run=subprocess.run) -> dict | None:
-    """Version and missing core packages of another interpreter (by import name), or None if it fails."""
+def probe_interpreter(exe: str, run=None) -> dict | None:
+    """Version of another interpreter and its core packages that are missing or below the minimums
+    ('numpy>=2.1' strings), or None if it does not start. It runs from the temporary folder, so a module in
+    the user's analysis folder (a json.py, say) cannot shadow the standard library there."""
+    run = run or (lambda cmd, timeout: _run(cmd, timeout, cwd=tempfile.gettempdir()))
     try:
-        r = run([exe, "-c", _PROBE % (list(CORE),)], capture_output=True, text=True, timeout=60)
-        d = json.loads(r.stdout.strip().splitlines()[-1])
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        code, out = run([exe, "-c", _PROBE % ([(k, d) for k, (d, _m) in CORE.items()],)], 60)
+        d = json.loads(out.strip().splitlines()[-1])
+        vers = d["ver"]
+        v = [int(x) for x in d["v"]]
+    except Exception:
         return None
-    return {"exe": exe, "version": ".".join(map(str, d["v"])), "missing_core": d["missing"],
-            "supported": tuple(d["v"][:2]) >= MIN_PYTHON}
+    need = [f"{dist}>={m}" for imp, (dist, m) in CORE.items()
+            if not vers.get(imp) or _vtuple(str(vers[imp])) < _vtuple(m)]
+    return {"exe": exe, "version": ".".join(map(str, v)), "missing_core": need,
+            "supported": tuple(v[:2]) >= MIN_PYTHON}
 
 
-def skill_listing(cdir: Path, run=subprocess.run, which=shutil.which, cwd=None) -> dict:
+def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:
     """How crowded Claude Code's skill listing is: enabled plugins and their skills (from
     `claude plugin list --json`, run in `cwd` so a folder's own settings count) plus skills under skills/."""
-    settings = _load_json(cdir / "settings.json") or {}
+    run = run or (lambda cmd, timeout: _run(cmd, timeout, cwd=cwd))
+    settings = _load_json(cdir / "settings.json")
     res = {"checked": False, "budget_fraction": settings.get("skillListingBudgetFraction")}
     exe = which("claude")
     if exe is None:
         res["reason"] = "Claude Code CLI not on the PATH"
         return res
     try:
-        out = run([exe, "plugin", "list", "--json"], capture_output=True, text=True, encoding="utf-8",
-                  timeout=120, cwd=cwd).stdout
+        code, out = run([exe, "plugin", "list", "--json"], 60)
         plugins = json.loads(out)
-    except (OSError, subprocess.SubprocessError, ValueError):
-        res["reason"] = "claude plugin list --json failed"
+        if not isinstance(plugins, list):
+            raise ValueError("not a list")
+    except Exception:
+        res["reason"] = "claude plugin list --json failed or timed out"
         return res
     enabled = [p for p in plugins if isinstance(p, dict) and p.get("enabled")]
     n_skills = 0
     for p in enabled:
-        ip = Path(p.get("installPath") or "")
-        if ip.is_dir():
+        ip = Path(p["installPath"]) if isinstance(p.get("installPath"), str) and p["installPath"] else None
+        if ip is not None and ip.is_dir():
             n_skills += sum(1 for _ in ip.glob("**/SKILL.md"))
     sk = cdir / "skills"
     if sk.is_dir():
@@ -501,28 +583,43 @@ def skill_listing(cdir: Path, run=subprocess.run, which=shutil.which, cwd=None) 
     return res
 
 
-def doctor(offline: bool = False, *, cdir=None, env=None, opener=None, run=subprocess.run, which=shutil.which,
+def _safe(fn, default):
+    """Run one probe; any error becomes the default plus a 'not checked' note: the doctor never crashes."""
+    try:
+        return fn()
+    except Exception as e:                           # a malformed file, a strange PATH, an OS error
+        d = default() if callable(default) else default
+        if isinstance(d, dict):
+            d["error"] = f"not checked ({type(e).__name__}: {e})"
+        return d
+
+
+def doctor(offline: bool = False, *, cdir=None, env=None, opener=None, run=None, which=shutil.which,
            os_name=os.name, cwd=None) -> dict:
-    """The full report (a dict). Installs and changes nothing."""
+    """The full report (a dict). Installs, writes and changes nothing; the only network access is one
+    request to the public GitHub releases endpoint (none with offline=True)."""
     cdir = Path(cdir) if cdir else claude_dir(env)
     here = sys.version_info[:2] >= MIN_PYTHON
     rep = {
+        "claude_dir": str(cdir),
         "python": {"exe": sys.executable, "version": sys.version.split()[0], "supported": here,
-                   "run_with": run_command(which=which, os_name=os_name)},
-        "core_missing": missing_packages() if here else list(f"{d}>={m}" for d, m in CORE.values()),
+                   "run_with": _safe(lambda: run_command(which=which, os_name=os_name), sys.executable)},
+        "core_missing": missing_packages() if here else [f"{d}>={m}" for d, m in CORE.values()],
         "extras": {n: {"use": OPTIONAL_USE[n], "missing": missing_packages([n], core=False),
                        "heavy_mb": HEAVY_MB.get(n), "minimum_tested": n not in UNTESTED_MINIMUM,
                        "caveats": extra_caveats(n, os_name=os_name)} for n in OPTIONAL},
         "skill": {"dir": str(SKILL_DIR), "version": read_skill_version(SKILL_DIR)},
-        "copies": skill_copies(cdir),
-        "autoupdate": marketplace_autoupdate(cdir, env),
-        "listing": skill_listing(cdir, run=run, which=which, cwd=cwd),
+        "copies": _safe(lambda: skill_copies(cdir), list),
+        "autoupdate": _safe(lambda: marketplace_autoupdate(cdir, env),
+                            lambda: {"registered": False, "on": False, "configured": False, "source": "unknown",
+                                     "blocked_by": []}),
+        "listing": _safe(lambda: skill_listing(cdir, run=run, which=which, cwd=cwd), lambda: {"checked": False}),
     }
     others = []
-    for exe in python_candidates(os_name=os_name, run=run, which=which):
+    for exe in _safe(lambda: python_candidates(os_name=os_name, run=run, which=which), list):
         if _same_file(exe, sys.executable):
             continue
-        info = probe_interpreter(exe, run=run)
+        info = _safe(lambda: probe_interpreter(exe, run=run), None)
         if info:
             others.append(info)
     rep["interpreters"] = others
@@ -545,24 +642,41 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
     acts = []
     py = rep["python"]
     complete = [i for i in rep.get("interpreters", []) if i["supported"] and not i["missing_core"]]
+    best = max(complete, key=lambda i: _vtuple(i["version"])) if complete else None
     if not py["supported"]:
         acts.append(f"Python {py['version']} is too old (the skill needs {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+): "
-                    + (f"use {complete[0]['exe']} (Python {complete[0]['version']}, packages present)" if complete
+                    + (f"use {best['exe']} (Python {best['version']}, packages present)" if best
                        else "install a current Python: " + python_install_hint(os_name)))
     elif rep["core_missing"]:
-        if complete:
-            best = max(complete, key=lambda i: _vtuple(i["version"]))
+        if best:
             acts.append(f"this Python ({py['version']}) lacks {', '.join(rep['core_missing'])}, but "
                         f"{best['exe']} (Python {best['version']}) has every core package: run the scripts with "
                         "that one instead of installing again")
         else:
             acts.append("install the core packages: " + ", ".join(rep["core_missing"])
                         + f"  ({install_command()})")
-    mine, latest = rep["skill"]["version"], rep["latest"]["version"]
-    if mine and latest and _vtuple(latest) > _vtuple(mine):
-        acts.append(f"update the skill from {mine} to {latest}: {_update_steps()}")
+    latest = rep["latest"]["version"]
+    n_before_updates = len(acts)
+    if latest:
+        # every copy Claude can load, plus the one running if it is none of them (a clone, say); the
+        # marketplace checkout is only the source of the next plugin update, so it is not one of them
+        loaded = [c for c in rep["copies"] if c["kind"] != "marketplace checkout"]
+        here = rep["skill"]
+        if here["version"] and not any(_same_file(c["path"], here["dir"]) for c in rep["copies"]):
+            loaded.append({"kind": "this copy", "version": here["version"], "path": here["dir"]})
+        for c in loaded:
+            if not c["version"] or _vtuple(latest) <= _vtuple(c["version"]):
+                continue
+            if c["kind"] == "plugin":
+                acts.append(f"update the plugin from {c['version']} to {latest}: {_update_steps()}")
+            elif c["kind"] == "Claude app (synced)":
+                acts.append(f"the Claude app copy is {c['version']}, the latest is {latest}: in the Claude app, "
+                            f"Customize -> Skills, upload {RELEASE_ASSET} (it reaches Claude Code at its next start)")
+            else:
+                acts.append(f"the {c['kind']} at {c['path']} is {c['version']}, the latest is {latest}: replace it "
+                            f"with the release ({RELEASE_ASSET}) or update the clone (git pull)")
     vers = {c["version"] for c in rep["copies"] if c["kind"] != "marketplace checkout" and c["version"]}
-    if len(vers) > 1:
+    if len(vers) > 1 and len(acts) == n_before_updates:     # not already covered by an update item above
         desc = "; ".join(f"{c['kind']} {c['version']}" for c in rep["copies"] if c["kind"] != "marketplace checkout")
         app = any(c["kind"] == "Claude app (synced)" for c in rep["copies"])
         acts.append(f"copies of the skill at different versions ({desc}): keep them equal"
@@ -572,12 +686,14 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
     if au["registered"] and not au["on"]:
         if au["blocked_by"]:
             acts.append("plugin auto-update is off for every marketplace because "
-                        + ", ".join(au["blocked_by"]) + " is set; updates need the commands above")
+                        + ", ".join(au["blocked_by"]) + " is set; update by hand at each release: "
+                        + _update_steps())
         else:
             acts.append("plugin auto-update is off for econometric-skills (default for third-party "
                         "marketplaces). With the user's permission: /plugin -> Marketplaces -> econometric-skills "
                         "-> Enable auto-update, or " + f'{py["run_with"]} "{Path(__file__).resolve()}" '
-                        "--enable-autoupdate (writes it to ~/.claude/settings.json, with a backup)")
+                        "--enable-autoupdate (writes it to " + str(Path(rep.get("claude_dir", "~/.claude")) / "settings.json")
+                        + ", with a backup)")
     lst = rep["listing"]
     if lst.get("checked") and lst.get("crowded"):
         acts.append(f"crowded skill listing ({lst['skills']} skills in {lst['enabled_plugins']} enabled plugins): "
@@ -653,23 +769,30 @@ def main(argv=None) -> int:
     ap.add_argument("--offline", action="store_true", help="--doctor: skip the latest-release check")
     ap.add_argument("--json", action="store_true", help="--doctor: print the report as JSON")
     a = ap.parse_args(argv)
+    if (a.json or a.offline) and not a.doctor:
+        ap.error("--json and --offline go with --doctor")
     if a.skill_dir:
         print(recommended_skill_dir())
         return 0
     if a.enable_autoupdate:
+        cdir = claude_dir()
         try:
-            path, backup = enable_autoupdate(claude_dir())
-        except ValueError as e:
-            print(e)
+            path, backup = enable_autoupdate(cdir)
+        except (ValueError, OSError) as e:
+            print(f"Auto-update not changed: {e}")
             return 1
         print(f"Auto-update turned on for {MARKETPLACE} in {path}" + (f" (backup: {backup})" if backup else ""))
-        print("It runs in the background after the first message of a session; restart Claude Code to load "
-              "an update. /plugin -> Marketplaces shows the setting.")
+        blocked = marketplace_autoupdate(cdir)["blocked_by"]
+        if blocked:
+            print(f"  note: {', '.join(blocked)} is set, which keeps every plugin auto-update off until it is unset "
+                  "(or FORCE_AUTOUPDATE_PLUGINS=1).")
+        print("Claude Code checks for updates in the background after the first message of a session and "
+              "loads them at the next start. /plugin -> Marketplaces shows the setting.")
         return 0
     if a.doctor:
         rep = doctor(offline=a.offline)
         if a.json:
-            print(json.dumps(rep, indent=2, ensure_ascii=False))
+            print(json.dumps(rep, indent=2, ensure_ascii=True))
         else:
             print_doctor(rep)
         return 0 if rep["python"]["supported"] and not rep["core_missing"] else 1

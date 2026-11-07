@@ -21,8 +21,10 @@ Each boundary also asserts what must NOT happen (lesson of v2.4.7.2).
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
 import io
+import os
 import json
 import re
 import subprocess
@@ -180,7 +182,10 @@ exp = json.loads(json.dumps(before))
 exp["extraKnownMarketplaces"]["econometric-skills"]["autoUpdate"] = True
 check("--enable-autoupdate: only autoUpdate true is added; every other key and marketplace is kept", after == exp)
 check("--enable-autoupdate: the previous file is backed up byte for byte",
-      backup is not None and json.loads(backup.read_text(encoding="utf-8")) == before)
+      backup is not None and backup.read_bytes() == json.dumps(before, indent=2).encode())
+_p2, backup2 = se.enable_autoupdate(c3, now=0)
+check("--enable-autoupdate: a second run in the same second keeps the first backup (new name)",
+      backup2 is not None and backup2 != backup and backup.read_bytes() == json.dumps(before, indent=2).encode())
 check("--enable-autoupdate: the result is read back as on", se.marketplace_autoupdate(c3, env={})["on"])
 c4 = tmp / "c4"
 c4.mkdir()
@@ -194,23 +199,50 @@ check("--enable-autoupdate: a settings.json that is not valid JSON is refused an
       refused and (c4 / "settings.json").read_text(encoding="utf-8") == "{ broken"
       and not list(c4.glob("settings.json.bak-*")))
 c5 = tmp / "c5"
+try:
+    se.enable_autoupdate(c5)
+    refused = False
+except ValueError as e:
+    refused = "not registered" in str(e)
+check("--enable-autoupdate: a marketplace Claude Code does not know is refused, nothing written",
+      refused and not (c5 / "settings.json").exists())
+(c5 / "plugins").mkdir(parents=True)
+fork = {"source": "directory", "path": "/home/dev/econometric-skills"}
+(c5 / "plugins" / "known_marketplaces.json").write_text(json.dumps({"econometric-skills": {"source": fork}}),
+                                                       encoding="utf-8")
 path, backup = se.enable_autoupdate(c5)
-check("--enable-autoupdate: with no settings.json, one is created with the marketplace source",
+check("--enable-autoupdate: no settings.json yet -> created with the marketplace's own source (a local folder "
+      "stays a local folder, never switched to GitHub)",
       backup is None and json.loads(path.read_text(encoding="utf-8"))["extraKnownMarketplaces"][
-          "econometric-skills"] == {"source": {"source": "github", "repo": se.REPO}, "autoUpdate": True})
+          "econometric-skills"] == {"source": fork, "autoUpdate": True})
+for bad, what in (("[1, 2]", "a list"), ('{"extraKnownMarketplaces": null}', "null marketplaces"),
+                  ('{"extraKnownMarketplaces": {"econometric-skills": 5}}', "a number as the entry"),
+                  ("\ufeff" + json.dumps({"extraKnownMarketplaces": {"econometric-skills": {"source": fork}}}), None)):
+    c6 = tmp / f"c6-{abs(hash(bad))}"
+    (c6 / "plugins").mkdir(parents=True)
+    (c6 / "plugins" / "known_marketplaces.json").write_text(json.dumps({"econometric-skills": {"source": fork}}),
+                                                           encoding="utf-8")
+    (c6 / "settings.json").write_text(bad, encoding="utf-8")
+    try:
+        se.enable_autoupdate(c6)
+        res = "written"
+    except ValueError:
+        res = "refused"
+    if what:
+        check(f"--enable-autoupdate: settings.json with {what} is refused, untouched, no backup",
+              res == "refused" and (c6 / "settings.json").read_text(encoding="utf-8") == bad
+              and not list(c6.glob("settings.json.bak-*")))
+    else:
+        check("--enable-autoupdate: a settings.json saved with a UTF-8 BOM is read, not refused",
+              res == "written" and se.marketplace_autoupdate(c6, env={})["on"])
 
 # ----------------------------------------------------------------------------------- 4. interpreters
 PY0P = (" -V:3.14 *        C:\\Users\\fabia\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe\n"
         " -V:3.12          C:\\Users\\fabia\\AppData\\Local\\Programs\\Python\\Python312\\python.exe\n")
 
 
-class Done:
-    def __init__(self, out):
-        self.stdout, self.returncode = out, 0
-
-
-def fake_run_py(cmd, **kw):
-    return Done(PY0P)
+def fake_run_py(cmd, timeout):
+    return 0, PY0P
 
 
 cands = se.python_candidates(os_name="nt", run=fake_run_py, which=lambda n: "C:\\py.exe" if n == "py" else None)
@@ -226,6 +258,27 @@ check("interpreters: probing a real interpreter returns its version and missing 
       and isinstance(real["missing_core"], list), real)
 check("interpreters: an interpreter that does not start is skipped, not an error",
       se.probe_interpreter(str(tmp / "no-python.exe")) is None)
+old_env = json.dumps({"exe": "x", "v": [3, 11, 2], "ver": {"numpy": "1.26.4", "pandas": "2.0.3", "scipy": "1.14.1",
+                      "statsmodels": "0.14.4", "linearmodels": "6.1", "arch": "7.2.0", "sklearn": "1.5.2",
+                      "tabulate": "0.9.0"}})
+info = se.probe_interpreter("other", run=lambda cmd, timeout: (0, old_env))
+check("interpreters: packages present but below the minimums count as missing (numpy 1.26, pandas 2.0)",
+      info["missing_core"] == ["numpy>=2.1", "pandas>=2.2"], info)
+check("interpreters: a probe whose output cannot be decoded or parsed is skipped",
+      se.probe_interpreter("other", run=lambda cmd, timeout: (0, "\ufffd garbage")) is None
+      and se.python_candidates(os_name="nt", run=lambda c, t: (_ for _ in ()).throw(UnicodeDecodeError(
+          "cp1252", b"\x81", 0, 1, "x")), which=lambda n: "py") == [])
+work = tmp / "analysis"
+work.mkdir()
+(work / "json.py").write_text("raise SystemExit('shadowed json')\n", encoding="utf-8")
+cwd0 = os.getcwd()
+os.chdir(work)
+try:
+    shadow = se.probe_interpreter(sys.executable)
+finally:
+    os.chdir(cwd0)
+check("interpreters: a json.py in the user's folder does not shadow the probe (it runs from the temp folder)",
+      shadow is not None, shadow)
 
 
 # ----------------------------------------------------------------------------------- 5. the To do list
@@ -233,7 +286,7 @@ def base_report(**over):
     rep = {"python": {"exe": "C:\\Python312\\python.exe", "version": "3.12.10", "supported": True,
                       "run_with": "py -3.12"},
            "core_missing": [], "interpreters": [],
-           "skill": {"dir": "x", "version": "2.5.0.1"}, "latest": {"version": "2.5.0.1", "status": "ok"},
+           "skill": {"dir": "p", "version": "2.5.0.1"}, "latest": {"version": "2.5.0.1", "status": "ok"},
            "copies": [{"kind": "plugin", "version": "2.5.0.1", "path": "p"}],
            "autoupdate": {"registered": True, "on": True, "configured": True, "source": "settings.json",
                           "blocked_by": []},
@@ -244,16 +297,35 @@ def base_report(**over):
 
 check("To do: an up-to-date, complete setup gives an empty list", se.doctor_actions(base_report()) == [])
 acts = se.doctor_actions(base_report(latest={"version": "2.5.1", "status": "ok"}))
-check("To do: a newer release -> the update commands and the restart",
+check("To do: a newer release -> the plugin update commands and the restart",
       len(acts) == 1 and "2.5.0.1 to 2.5.1" in acts[0] and "claude plugin update econometrics@econometric-skills"
       in acts[0] and "restart" in acts[0], acts)
+acts = se.doctor_actions(base_report(latest={"version": "2.5.1", "status": "ok"}, skill={"dir": "s", "version": "2.5.0.1"},
+                                     copies=[{"kind": "Claude app (synced)", "version": "2.5.0.1", "path": "s"}]))
+check("To do: only the Claude app copy (no plugin) is behind -> upload in Customize -> Skills, no plugin commands",
+      len(acts) == 1 and "Customize -> Skills" in acts[0] and "claude plugin" not in acts[0], acts)
+acts = se.doctor_actions(base_report(latest={"version": "2.5.1", "status": "ok"},
+                                     skill={"dir": "m", "version": "2.5.1"},
+                                     copies=[{"kind": "plugin", "version": "2.5.0.1", "path": "p"},
+                                             {"kind": "marketplace checkout", "version": "2.5.1", "path": "m"}]))
+check("To do: run from an updated marketplace checkout, the installed plugin behind -> plugin update item",
+      any("update the plugin from 2.5.0.1 to 2.5.1" in a for a in acts), acts)
+acts = se.doctor_actions(base_report(latest={"version": "2.5.1", "status": "ok"}, skill={"dir": "clone", "version": "2.5.0"},
+                                     copies=[{"kind": "plugin", "version": "2.5.1", "path": "p"}]))
+check("To do: a running clone behind the release -> git pull item; the up-to-date plugin -> none",
+      len(acts) == 1 and "git pull" in acts[0] and "this copy" in acts[0], acts)
 check("To do: an older or equal 'latest' never asks for an update",
       se.doctor_actions(base_report(latest={"version": "2.5.0", "status": "ok"})) == []
       and se.doctor_actions(base_report(latest={"version": None, "status": "not checked"})) == [])
 acts = se.doctor_actions(base_report(copies=[{"kind": "plugin", "version": "2.5.0.1", "path": "p"},
                                              {"kind": "Claude app (synced)", "version": "2.3.8", "path": "s"}]))
-check("To do: plugin and Claude app copy at different versions -> one item naming both and Customize -> Skills",
-      len(acts) == 1 and "2.3.8" in acts[0] and "Customize -> Skills" in acts[0], acts)
+check("To do: the Claude app copy behind the release -> one item (Customize -> Skills), not a second "
+      "'different versions' item", len(acts) == 1 and "2.3.8" in acts[0] and "Customize -> Skills" in acts[0], acts)
+acts = se.doctor_actions(base_report(latest={"version": None, "status": "not checked (--offline)"},
+                                     copies=[{"kind": "plugin", "version": "2.5.0.1", "path": "p"},
+                                             {"kind": "Claude app (synced)", "version": "2.3.8", "path": "s"}]))
+check("To do: offline, copies at different versions -> one item naming both versions",
+      len(acts) == 1 and "plugin 2.5.0.1" in acts[0] and "2.3.8" in acts[0] and "Customize -> Skills" in acts[0], acts)
 acts = se.doctor_actions(base_report(copies=[{"kind": "plugin", "version": "2.5.0.1", "path": "p"},
                                              {"kind": "marketplace checkout", "version": "2.5.1", "path": "m"}]))
 check("To do: the marketplace checkout (source of the next update) is not a conflicting copy", acts == [], acts)
@@ -267,8 +339,9 @@ acts = se.doctor_actions(base_report(autoupdate={"registered": False, "on": Fals
 check("To do: no marketplace registered (app or manual copy only) -> no auto-update item", acts == [], acts)
 acts = se.doctor_actions(base_report(autoupdate={"registered": True, "on": False, "configured": True,
                                                  "source": "settings.json", "blocked_by": ["DISABLE_UPDATES"]}))
-check("To do: auto-update blocked by an environment variable -> says why, offers no toggle that cannot work",
-      len(acts) == 1 and "DISABLE_UPDATES" in acts[0] and "--enable-autoupdate" not in acts[0], acts)
+check("To do: auto-update blocked by an environment variable -> says why and how to update by hand, "
+      "offers no toggle that cannot work", len(acts) == 1 and "DISABLE_UPDATES" in acts[0]
+      and "--enable-autoupdate" not in acts[0] and "claude plugin update" in acts[0], acts)
 for n, exp_ in ((se.CROWDED_SKILLS - 1, 0), (se.CROWDED_SKILLS, 1)):
     acts = se.doctor_actions(base_report(listing={"checked": True, "skills": n, "enabled_plugins": 9,
                                                   "crowded": n >= se.CROWDED_SKILLS}))
@@ -320,13 +393,13 @@ def fake_run_listing(n_skills):
         (pdir / f"s{k}").mkdir(parents=True, exist_ok=True)
         (pdir / f"s{k}" / "SKILL.md").write_text("x", encoding="utf-8")
 
-    def run(cmd, **kw):
+    def run(cmd, timeout):
         if cmd[1:4] == ["plugin", "list", "--json"]:
-            return Done(json.dumps([{"id": "econometrics@econometric-skills", "enabled": True,
-                                     "installPath": str(tmp / "none")},
-                                    {"id": "big@m", "enabled": True, "installPath": str(pdir)},
-                                    {"id": "off@m", "enabled": False, "installPath": str(pdir)}]))
-        return Done("")
+            return 0, json.dumps([{"id": "econometrics@econometric-skills", "enabled": True,
+                                   "installPath": str(tmp / "none")},
+                                  {"id": "big@m", "enabled": True, "installPath": str(pdir)},
+                                  {"id": "off@m", "enabled": False, "installPath": str(pdir)}])
+        return 0, ""
     return run
 
 
@@ -363,6 +436,47 @@ except ValueError:
     ok = False
 check("command line: --doctor --offline --json prints valid JSON", ok, r.stdout[:200] + r.stderr[-200:])
 
+bad = tmp / "bad"
+(bad / "plugins").mkdir(parents=True)
+(bad / "plugins" / "installed_plugins.json").write_text('{"plugins": {"econometrics@econometric-skills": '
+                                                       '{"installPath": 5}}}', encoding="utf-8")
+(bad / "plugins" / "known_marketplaces.json").write_text("[1]", encoding="utf-8")
+(bad / "settings.json").write_text('{"extraKnownMarketplaces": [1]}', encoding="utf-8")
+try:
+    rb = se.doctor(offline=True, cdir=bad, env={}, run=lambda c, t: (0, "[1]"), which=lambda n: "/bin/claude",
+                   os_name="posix")
+    ok = isinstance(rb["actions"], list) and rb["copies"] == [] and not rb["autoupdate"]["registered"]
+except Exception as e:
+    ok, rb = False, repr(e)
+check("doctor: malformed installed_plugins/known_marketplaces/settings and a strange CLI reply never crash it",
+      ok, rb if not ok else "")
+snap = {p: p.stat().st_mtime_ns for p in cdir.rglob("*")}
+cmds = []
+
+
+def rec_run(cmd, timeout):
+    cmds.append(" ".join(map(str, cmd)))
+    return 0, "[]"
+
+
+se.doctor(offline=True, cdir=cdir, env={}, run=rec_run, which=lambda n: "/bin/" + n, os_name="posix")
+check("doctor writes nothing in the Claude folder and never calls pip",
+      {p: p.stat().st_mtime_ns for p in cdir.rglob("*")} == snap and not any("pip" in c for c in cmds), cmds)
+uni = tmp / "\u0141\u00f3d\u017a" / ".claude"
+write_copy(uni / "skills" / "econometrics", "2.3.8")
+envc = dict(os.environ, PYTHONIOENCODING="cp1252", CLAUDE_CONFIG_DIR=str(uni))
+outs = []
+for extra in ([], ["--json"]):
+    r = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), "--doctor", "--offline", *extra],
+                       capture_output=True, env=envc, timeout=300)
+    outs.append((r.returncode, r.stdout, r.stderr))
+check("doctor on a cp1252 console with a user path outside the code page (\u0141): no traceback, the copy is listed",
+      all(b"Traceback" not in e and rc in (0, 1) for rc, _o, e in outs) and b"manual copy 2.3.8" in outs[0][1]
+      and json.loads(outs[1][1].decode("ascii"))["copies"][0]["version"] == "2.3.8",
+      [(rc, e[-200:]) for rc, _o, e in outs])
+r = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), "--json"], capture_output=True, text=True)
+check("--json without --doctor is an argument error, not silently ignored", r.returncode == 2 and "--doctor" in r.stderr)
+
 # ----------------------------------------------------------------------------------- 7. extras
 check("every extra has a use text, heavy and untested extras exist",
       set(se.OPTIONAL_USE) == set(se.OPTIONAL) and set(se.HEAVY_MB) <= set(se.OPTIONAL)
@@ -398,14 +512,14 @@ with blocked("ruptures"):
         if se._installed_version("hmmlearn", "hmmlearn") else None
     whole = err(lambda: se.require_extra("regimes", "hmm_regimes"))
 check("require_extra(only=hmmlearn): a missing ruptures does not stop hmm_regimes (without only, it would)",
-      only_ok in (True, None) and "ruptures" in whole, (only_ok, whole[:80]))
+      only_ok is True and "ruptures" in whole, (only_ok, whole[:80]))
 check("caveats: ruptures cannot be installed on Python 3.14 (skipped by --install), it can on 3.13",
       se.not_installable(["ruptures>=1.1"], version=(3, 14)) == ["ruptures>=1.1"]
       and se.not_installable(["ruptures>=1.1"], version=(3, 13)) == [])
-check("caveats: hmmlearn on Windows 3.14 is a warning (needs a compiler), not skipped; nothing on Linux",
-      se.not_installable(["hmmlearn>=0.3"], version=(3, 14), os_name="nt") == []
-      and "Build Tools" in " ".join(se.extra_caveats("regimes", version=(3, 14), os_name="nt"))
-      and not any("hmmlearn" in c for c in se.extra_caveats("regimes", version=(3, 14), os_name="posix")))
+check("caveats: hmmlearn on 3.14 is a warning on every platform (no wheel: needs a compiler), not skipped; "
+      "nothing on 3.13", se.not_installable(["hmmlearn>=0.3.2"], version=(3, 14), os_name="nt") == []
+      and all("compiler" in " ".join(se.extra_caveats("regimes", version=(3, 14), os_name=o)) for o in ("nt", "posix"))
+      and not any("hmmlearn" in c for c in se.extra_caveats("regimes", version=(3, 13), os_name="nt")))
 installed = []
 orig_install, orig_missing = se.install, se.missing_packages
 se.install = lambda reqs: installed.append(list(reqs)) or True
@@ -421,6 +535,22 @@ if sys.version_info[:2] >= (3, 14):
           installed == [] and "Skipping ruptures" in buf.getvalue() and code == 0, (installed, buf.getvalue()[:200]))
 else:
     check("--install below 3.14: ruptures goes to pip as usual", installed == [["ruptures>=1.1"]], installed)
+
+tested = [(n, imp, dist, m) for n, pk in se.OPTIONAL.items() if n not in se.UNTESTED_MINIMUM
+          for imp, (dist, m) in pk.items()]
+bad_x = []
+for n, imp, dist, m in tested:
+    if se.not_installable([f"{dist}>={m}"]):
+        continue
+    try:
+        importlib.import_module(imp)
+        v = se._installed_version(imp, dist)
+        if v is None or se._vtuple(v) < se._vtuple(m):
+            bad_x.append(f"{dist} {v} < {m}")
+    except Exception as e:
+        bad_x.append(f"{dist}: {type(e).__name__}: {str(e)[:60]}")
+check("every extra CI installs imports at or above its minimum here (in the minimum job: exactly the minimum)",
+      not bad_x, bad_x)
 
 # ----------------------------------------------------------------------------------- 8. the modules
 scripts = sorted((SKILL / "scripts").glob("*.py"))
@@ -473,10 +603,27 @@ with blocked("pymupdf", "fitz"):
     msg = err(lambda: data_prep.pdf_text(tmp / "x.pdf"))
 check("pdf_text without PyMuPDF: the 'pdf' extra with its size", "--extra pdf" in msg and "81 MB" in msg, msg)
 if se._installed_version("pymupdf", "pymupdf"):
+    import pymupdf
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "Selic 10,75% ao ano")
+    doc.new_page()                                   # no text layer: a 'scanned' page for the OCR path
+    doc.save(str(tmp / "two.pdf"))
+    doc.close()
+    pages = data_prep.pdf_text(tmp / "two.pdf")
+    check("pdf_text at the 'pdf' minimum or later: the text layer is read back", "Selic 10,75%" in pages[0]
+          and len(pages) == 2, pages)
+    one = pymupdf.open()
+    one.new_page().insert_text((72, 72), "texto com camada de texto suficiente para nao precisar de OCR")
+    one.save(str(tmp / "one.pdf"))
+    one.close()
     with blocked("easyocr"):
-        msg = err(lambda: data_prep.pdf_text(tmp / "x.pdf", ocr=True))
-    check("pdf_text(ocr=True) without easyocr: the 'ocr' extra, asked on its own", "--extra ocr" in msg
-          and "on its own" in msg, msg)
+        no_need = err(lambda: data_prep.pdf_text(tmp / "one.pdf", ocr=True))
+        msg = err(lambda: data_prep.pdf_text(tmp / "two.pdf", ocr=True))
+    check("pdf_text(ocr=True): easyocr is not required when every page has text", no_need == "", no_need)
+    check("pdf_text(ocr=True) on a page without text and no easyocr: the 'ocr' extra, asked on its own",
+          "--extra ocr" in msg and "on its own" in msg, msg)
+else:
+    check("pymupdf is installed in the test environment (requirements-dev.txt)", False)
 with blocked("requests"):
     msg = err(lambda: data_prep.polite_get("https://example.org"))
 check("polite_get without requests: the 'web' extra", "--extra web" in msg, msg)
@@ -502,21 +649,15 @@ check("SKILL.md section 7: no Python at all -> offer the system installer in the
       "winget install --id Python.Python.3.13 -e" in sec7 and "brew install" in sec7)
 check("SKILL.md section 7: when to run it in each mode (Consultant, Reviewer, Teacher)",
       all(m in sec7 for m in ("Consultant", "Reviewer", "Teacher")))
-try:
-    main_md = subprocess.run(["git", "-C", str(ROOT), "show", "2605a5b:econometrics/SKILL.md"], capture_output=True,
-                             text=True, encoding="utf-8", timeout=60)
-    old = main_md.stdout
-except (OSError, subprocess.SubprocessError):
-    old = ""
-if old:
-    def sec4(t):
-        return t[t.index("## 4. Non-negotiable rules"):t.index("## 5.")]
-    check("SKILL.md section 4 (non-negotiable rules) is unchanged from v2.5.0", sec4(old) == sec4(skill_md))
-else:
-    print("SKIP SKILL.md section 4 against v2.5.0 (commit 2605a5b not in this clone)")
+sec4 = skill_md[skill_md.index("## 4. Non-negotiable rules"):skill_md.index("## 5.")]
+check("SKILL.md section 4 (non-negotiable rules) is byte-identical to v2.5.0 (SHA-256 pinned, works in a shallow "
+      "CI checkout)", hashlib.sha256(sec4.encode("utf-8")).hexdigest()
+      == "a820ccbfddb871b324a556bb963a15e75ed594799a292d50c82ec217c83538f1")
 agent = (SKILL / "agents" / "econometrician.md").read_text(encoding="utf-8")
 check("econometrician agent: --doctor first, changes nothing itself, reports the To do list",
       "setup_env.py --doctor" in agent and "change nothing yourself" in agent and '"To do"' in agent)
+check("SKILL.md section 7 names the one network request and how to skip it", "api.github.com" in sec7
+      and "--offline" in sec7)
 
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")

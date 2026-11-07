@@ -225,8 +225,6 @@ def pdf_text(path, ocr: bool = False, ocr_lang: str = "pt", min_chars: int = 30,
     setup_env.py ('pdf', 'ocr'), installed only with the user's permission; 'ocr' is a large download."""
     from setup_env import require_extra   # v2.5.0.1
     require_extra("pdf", "pdf_text")
-    if ocr:
-        require_extra("ocr", "pdf_text(ocr=True)")
     import pymupdf as fitz
     doc = fitz.open(path)
     pages = []
@@ -234,7 +232,8 @@ def pdf_text(path, ocr: bool = False, ocr_lang: str = "pt", min_chars: int = 30,
     for page in doc:
         t = page.get_text()
         if ocr and len(t.strip()) < min_chars:
-            if reader is None:
+            if reader is None:                       # only when a page has no text layer
+                require_extra("ocr", "pdf_text(ocr=True) on a scanned page")
                 import easyocr
                 reader = easyocr.Reader([ocr_lang], gpu=False)
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))

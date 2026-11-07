@@ -58,6 +58,8 @@ from __future__ import annotations
 
 import warnings
 
+import importlib.util
+
 import numpy as np
 import pandas as pd
 from scipy import optimize, stats
@@ -400,9 +402,17 @@ def select_bandwidth(y, x, cutoff: float = 0.0) -> tuple[float, str]:
     as a warning."""
     try:
         from rdrobust import rdbwselect
-    except ImportError:
-        return ik_bandwidth(y, x, cutoff), ("Imbens-Kalyanaraman (rdrobust is not installed: optional extra "
-                                            "'rd', setup_env.py --install --extra rd, with the user's permission)")
+    except Exception as e:                           # absent, or broken by a dependency at import
+        if isinstance(e, ImportError) and importlib.util.find_spec("rdrobust") is None:
+            try:
+                from setup_env import install_command
+                how = install_command("rd")
+            except Exception:
+                how = "setup_env.py --install --extra rd"
+            why = f"rdrobust is not installed: optional extra 'rd', {how}, with the user's permission"
+        else:
+            why = f"rdrobust failed to import: {type(e).__name__}: {e}"
+        return ik_bandwidth(y, x, cutoff), f"Imbens-Kalyanaraman ({why})"
     try:
         yy, xx = np.asarray(y, float), np.asarray(x, float)
         ok = np.isfinite(yy) & np.isfinite(xx)
