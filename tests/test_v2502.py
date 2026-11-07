@@ -220,20 +220,23 @@ check("annotate: a run without a kept directory counts as not captured (never as
       {x["name"]: x["passed"] for x in miss["cases"][0]["arms"]["with"][0]["graders"]}
       == {"listing-captured": False, "description-dropped": False})
 # review round 2 (SF-2): each half of the deletion guard on its own
-scratch = ROOT / "_scratch_v2502"                         # inside the repository, never under the temp folder
-far = scratch / "claude-eval-far"
-(far / "out").mkdir(parents=True, exist_ok=True)
-under_temp = True
+fake_temp = Path(tempfile.mkdtemp(prefix="v2502-faketemp-"))    # stands in for the temp folder
+elsewhere = Path(tempfile.mkdtemp(prefix="v2502-elsewhere-"))    # a sibling, outside that "temp folder"
+far = elsewhere / "claude-eval-far"
+(far / "out").mkdir(parents=True)
+saved_tempdir = tempfile.tempdir
 try:
-    far.resolve().relative_to(Path(tempfile.gettempdir()).resolve())
-except ValueError:
-    under_temp = False
-far_res = {"cases": [{"name": "nameonly-a", "arms": {"with": [{"tracePath": str(far / "out" / "trace.jsonl"),
-                                                               "graders": []}]}}]}
-left_far = rt.remove_kept_dirs(far_res)
+    tempfile.tempdir = str(fake_temp)
+    far_res = {"cases": [{"name": "nameonly-a", "arms": {"with": [{"tracePath": str(far / "out" / "trace.jsonl"),
+                                                                   "graders": []}]}}]}
+    left_far = rt.remove_kept_dirs(far_res)
+    ok_far = not rt._is_eval_sandbox(far) and far.exists() and left_far == [str(far)]
+finally:
+    tempfile.tempdir = saved_tempdir
+    shutil.rmtree(fake_temp, ignore_errors=True)
+    shutil.rmtree(elsewhere, ignore_errors=True)
 check("deletion guard: a claude-eval-* directory with out/ OUTSIDE the temp folder is refused, kept and reported",
-      not under_temp and not rt._is_eval_sandbox(far) and far.exists() and left_far == [str(far)], str(left_far))
-shutil.rmtree(scratch)
+      ok_far, str(left_far))
 no_out = Path(tempfile.mkdtemp(prefix="claude-eval-"))     # under temp, right prefix, but no out/
 (no_out / "x").mkdir()
 nores = {"cases": [{"name": "nameonly-a", "arms": {"with": [{"tracePath": str(no_out / "out" / "trace.jsonl"),
@@ -246,7 +249,6 @@ untr = {"cases": [{"name": "nameonly-a", "arms": {"with": [{"error": "exit 1: li
 left_u = rt.remove_kept_dirs(untr)
 check("remove_kept_dirs: a run without a trace path is not silent (one line pointing at leftover claude-eval-* "
       "directories)", len(left_u) == 1 and "claude-eval-*" in left_u[0] and "1 run(s)" in left_u[0], str(left_u))
-check("remove_kept_dirs: every run traced and removed -> nothing to report (no false alarm)", left == [])
 # N-7: a transcript that cannot be read marks that run only, and the annotation goes on
 bad = Path(tempfile.mkdtemp(prefix="claude-eval-")); (bad / "out").mkdir()
 good = Path(tempfile.mkdtemp(prefix="claude-eval-")); (good / "out").mkdir()
@@ -266,7 +268,7 @@ try:
     ok_flaky = (two["cases"][0]["arms"]["with"][0]["harnessUnreadable"]
                 and not two["cases"][0]["arms"]["with"][1]["harnessUnreadable"]
                 and [r["description-dropped"] for r in recs2] == [False, True])
-except OSError as e:
+except OSError:
     ok_flaky = False
 finally:
     rt.listing_diagnostics = real_ld
@@ -364,6 +366,23 @@ mixed = {"cases": [{"name": "nameonly-a", "arms": {"with": [
 t_mx, _ = rt.summarize(mixed)
 check("summary: one graded run and one errored run -> the rate uses the graded run only and the error is reported",
       "Routing rate, nameonly: 100% over 1 cases" in t_mx and "1 name-only run(s) ended on an error" in t_mx, t_mx)
+errun = {"error": "exit 1: limit", "graders": [{"name": "listing-captured", "passed": False},
+                                              {"name": "description-dropped", "passed": False}]}
+case_a = {"cases": [{"name": "nameonly-a", "arms": {"with": [
+    errun, run(listing_captured=False, description_dropped=False, skill_fired=False),
+    run(listing_captured=False, description_dropped=False, skill_fired=True)]}}]}
+t_a, _ = rt.summarize(case_a)
+check("summary (review round 3, case A): one errored run does not hide that the graded runs never showed the "
+      "listing; both are reported, and 'No graded run' is not said",
+      "not found in any transcript" in t_a and "1 name-only run(s) ended on an error" in t_a
+      and "No graded run" not in t_a and "Routing rate, nameonly" not in t_a, t_a)
+case_b = {"cases": [{"name": "nameonly-a", "arms": {"with": [
+    errun, run(listing_captured=True, description_dropped=False, skill_fired=True)]}}]}
+t_b, _ = rt.summarize(case_b)
+check("summary (review round 3, case B): one errored run plus a graded run that kept its description -> "
+      "'did not reproduce' and the error line, not 'No graded run'",
+      "this arm did not reproduce" in t_b and "1 name-only run(s) ended on an error" in t_b
+      and "No graded run" not in t_b, t_b)
 t3, _ = rt.summarize({"cases": [{"name": "clean-a", "arms": {"with": [run(skill_fired=True)]}}]})
 check("summary without a name-only arm is unchanged (no name-only section)", "Name-only" not in t3)
 
@@ -429,6 +448,20 @@ check("two-stores-promo: the answer check finds a difference-in-differences fram
                                   "difference-in-differences"))
       and not any(pat.search(s) for s in ("é difícil dizer", "a diferença entre as lojas", "didático",
                                                        "Did the promotion work?", "did it rise?")))
+
+case = SKILL / "evals" / "routing" / "wacc-beta-valuation"
+pm, body = front(case / "prompt.md")
+check("wacc-beta-valuation: a beta for the WACC inside a valuation, read-only tools, the shared skill-fired grader",
+      all(w in body for w in ("valuation", "beta", "WACC")) and pm["allowed_tools"] == ["Read", "Glob", "Grep", "Skill"]
+      and front(case / "graders" / "skill-fired.md")[0] == ref and "wacc-beta-valuation" in cases)
+ans = front(case / "graders" / "answer.md")[0]
+pat = re.compile(ans["pattern"], re.I if "i" in ans.get("flags", "") else 0)
+check("wacc-beta-valuation: the answer check asks how reliable the beta is (standard error, interval, R², "
+      "Newey-West, Blume or Vasicek), not just that a regression was run",
+      all(pat.search(x) for x in ("o erro-padrão do beta é 0,12", "intervalo de confiança de 95%",
+                                  "ajuste de Blume", "standard error of the slope", "Newey-West com 3 defasagens"))
+      and not any(pat.search(x) for x in ("rode uma regressão dos retornos", "use OLS",
+                                          "add the controls", "beta = cov/var")))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

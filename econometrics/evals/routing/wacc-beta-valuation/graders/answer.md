@@ -1,6 +1,6 @@
 ---
 type: regex
-pattern: '(regress|MQO|OLS|erro[- ]padr|standard error|intervalo de confian|confidence interval)'
+pattern: '(erro[- ]padr|standard error|intervalo de confian|confidence interval|R²|Newey|Blume|Vasicek|estat[ií]stica t|t-stat)'
 flags: i
 target: last_message
 ---

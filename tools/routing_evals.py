@@ -393,11 +393,17 @@ def _grade(run: dict, name: str):
     return all(vals) if vals else None
 
 
+def _errored_before_grading(run: dict) -> bool:
+    """A run that ended on an error (for example a usage limit) before any routing or answer grader ran."""
+    return bool(run.get("error")) and not any(
+        _grade(run, g) is not None for g in ("skill-fired", "reached", "skill-not-fired", "answer"))
+
+
 def nameonly_summary(result: dict) -> str:
     """Name-only arm: routing counted only over the runs whose transcript shows econometrics listed by name only.
     A run where the listing was not captured, or where econometrics kept its description, does not test the
     failure of 2026-11-07, so it is reported but left out of the rate."""
-    lines, pos, neg, unreadable, ungraded, captured_total = [], [], [], 0, 0, 0
+    lines, pos, neg, unreadable, ungraded, graded, graded_captured = [], [], [], 0, 0, 0, 0
     for c in result.get("cases", []):
         arm, base = c["name"].split("-", 1)
         if arm != "nameonly":
@@ -406,9 +412,9 @@ def nameonly_summary(result: dict) -> str:
         captured = sum(1 for r in runs if _grade(r, "listing-captured"))
         unreadable += sum(1 for r in runs if r.get("harnessUnreadable"))
         valid = [r for r in runs if _grade(r, "listing-captured") and _grade(r, "description-dropped")]
-        captured_total += captured
-        ungraded += sum(1 for r in runs if r.get("error") and not any(
-            _grade(r, g) is not None for g in ("skill-fired", "reached", "skill-not-fired", "answer")))
+        ungraded += sum(1 for r in runs if _errored_before_grading(r))
+        graded += sum(1 for r in runs if not _errored_before_grading(r))
+        graded_captured += sum(1 for r in runs if not _errored_before_grading(r) and _grade(r, "listing-captured"))
         negative = any(_grade(r, "skill-not-fired") is not None for r in runs)
         fired = []
         for r in valid:
@@ -442,15 +448,16 @@ def nameonly_summary(result: dict) -> str:
     if ungraded:
         tail.append(f"\n{ungraded} name-only run(s) ended on an error before grading (for example a usage limit): "
                     "they are not counted. Re-run them.")
-    if not pos and not neg and ungraded:
-        tail.append("No graded run: no routing rate is reported, and nothing is concluded about the failure.")
-    elif not pos and not neg and not captured_total:
-        tail.append("\nThe skill listing was not found in any transcript: a harness or transcript-format problem "
-                    "(for example a new Claude Code version), not a result. Nothing is concluded about the failure.")
-    elif not pos and not neg:
-        tail.append("\nNo readable run showed econometrics listed by name only" + (
-            "" if not unreadable else " (see the unreadable runs above)") + ": this arm did not reproduce the failure, "
-                    "and its routing rate is not reported.")
+    if not pos and not neg:
+        if not graded:
+            tail.append("\nNo graded run: no routing rate is reported, and nothing is concluded about the failure.")
+        elif not graded_captured:
+            tail.append("\nThe skill listing was not found in any transcript: a harness or transcript-format problem "
+                        "(for example a new Claude Code version), not a result. Nothing is concluded about the failure.")
+        else:
+            tail.append("\nNo readable run showed econometrics listed by name only" + (
+                "" if not unreadable else " (see the unreadable runs above)") + ": this arm did not reproduce the "
+                        "failure, and its routing rate is not reported.")
     tail.append("Rates are per case (mean over cases); routing.json and the eval report count every run, "
                 "including those that did not reproduce the failure.")
     return "\n".join(head + lines + tail)
@@ -515,8 +522,12 @@ def main(argv=None) -> int:
     finally:
         if keep:
             left = remove_kept_dirs(result)
-            if left:
-                print("Kept run directories not removed (remove them by hand):\n  " + "\n  ".join(left))
+            paths = [x for x in left if "run(s) gave no trace path" not in x]
+            if paths:
+                print("Kept run directories not removed (remove them by hand):\n  " + "\n  ".join(paths))
+            for x in left:
+                if x not in paths:
+                    print(x)
     table, _ = summarize(result)
     head = (f"Routing evals, {datetime.now():%Y-%m-%d %H:%M}, Claude Code {result.get('claudeVersion')}, "
             f"{a.runs} run(s) per case and arm, plugin hooks {'off' if a.no_hooks else 'on'}, "
