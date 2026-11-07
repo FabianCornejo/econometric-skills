@@ -42,7 +42,7 @@ def sgs(code, start="01/01/2010", end=None):
     return df.set_index("data")["valor"].rename(code)
 ```
 
-Alternative: `pip install --break-system-packages python-bcb` → `from bcb import sgs; sgs.get({"selic": 432}, start="2015-01-01")` (handles window splitting itself).
+Alternative: the `bcb` client (optional extra `data-br` of `setup_env.py`, with the user's permission) → `from bcb import sgs; sgs.get({"selic": 432}, start="2015-01-01")` (handles window splitting itself).
 
 Useful codes (confirm the name on the SGS portal before publishing):
 

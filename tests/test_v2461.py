@@ -167,7 +167,8 @@ c3 = rp.cross_check({"a": 0.123456789, "b": 0.123456789 + 1e-12}, show=False)
 check("cross_check: implementation checks are never flagged as weak", c3["kind"] == "implementation" and not c3["weak"])
 
 # ---------------------------------------------------------------- 5. matplotlib as an optional extra
-check("setup_env: optional extra 'plots' is matplotlib", se.OPTIONAL.get("plots") == {"matplotlib": ("matplotlib", "3.8")}
+check("setup_env: optional extra 'plots' is matplotlib (minimum 3.9.2 since v2.5.0.1: 3.8 needs numpy < 2)",
+      se.OPTIONAL.get("plots") == {"matplotlib": ("matplotlib", "3.9.2")}
       and "plots" in se.OPTIONAL_USE)
 skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
 check("SKILL.md: charts go through --extra plots in the same install question, or the script says the chart is optional",

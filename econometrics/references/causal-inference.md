@@ -111,7 +111,7 @@ rob = rdd_robustness(df, "y", "score", 50, covs_to_test=["age", "female"])
 r_f = rdd(df, "y", "score", 50, fuzzy="treated")      # fuzzy RD: local IV, LATE for compliers
 ```
 
-- **Bandwidth**: `select_bandwidth` uses rdrobust's MSE-optimal `mserd` when installed, Imbens-Kalyanaraman otherwise. Conventional CIs from a MSE-optimal bandwidth under-cover; for the headline estimate use `rdrobust` (robust bias-corrected CIs, Calonico-Cattaneo-Titiunik 2014): `pip install rdrobust`.
+- **Bandwidth**: `select_bandwidth` uses rdrobust's MSE-optimal `mserd` when installed, Imbens-Kalyanaraman otherwise, and says so: `rdd` then carries a warning to relay (v2.5.0.1). Conventional CIs from a MSE-optimal bandwidth under-cover; for the headline estimate use `rdrobust` (robust bias-corrected CIs, Calonico-Cattaneo-Titiunik 2014), the optional extra `rd` of `setup_env.py`, installed with the user's permission (SKILL.md §7).
 - **Local linear, not high-order global polynomials** (Gelman & Imbens, 2019): global cubic/quartic fits produce noisy, misleading estimates.
 - **Validity checks** (all in `rdd_robustness`): estimate across 0.5h–2h; local quadratic; placebo cutoffs where nothing should happen; no jumps in predetermined covariates; density test for manipulation (`density_test`, McCrary 2008; `rddensity` is the modern version). Bunching just above a threshold (e.g. claim values just below a small-claims court limit) invalidates the design.
 - **Discrete running variable** (age in years, few distinct scores): cluster by value of the running variable is not a fix (Kolesár & Rothe, 2018); use their honest CIs or widen the interpretation.

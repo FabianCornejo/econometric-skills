@@ -18,6 +18,10 @@ jobs:
             python: "3.12"
           - deps: latest
             python: "3.13"
+          # v2.5.0.1: Python 3.14 (seen on a user's machine as the default 'py'); ruptures has no 3.14 release
+          # and is skipped by its marker in requirements-dev.txt
+          - deps: latest
+            python: "3.14"
     env:
       # One BLAS thread: floating-point sums happen in a fixed order, so results are reproducible.
       OMP_NUM_THREADS: "1"
