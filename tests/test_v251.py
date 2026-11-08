@@ -1,4 +1,6 @@
-"""Tests for v2.5.1, part A: causal.did_single_treated (DiD with one treated unit and a short series).
+"""Tests for v2.5.1: DiD with one treated unit (did_single_treated), the few-treated warnings and ASK lines of
+did_design, randomization_inference(cluster=), did_timing_sensitivity cohorts, did_falsification, and three
+"find the error" routing cases.
 
 Bands were fixed before this file was first run (claude/estudo-inferencia-uma-tratada-v251-2026-11-07.md in the
 development repository holds the exploratory study that chose the route). Monte Carlo error with R = 2000 at 5% is
@@ -13,16 +15,17 @@ about ±1 point, so a size band of [0.03, 0.075] separates a correct test from o
 4. Pieces checked by another path: the lag weights against a Toeplitz quadratic form; the AR(1) variance of the
    contrast against a brute-force Monte Carlo variance; the bias correction of ρ; the point estimate against the
    2×2 DiD of means from groupby; the second route against scipy's Welch t test on block means.
+5. Pre-period checks (trend test size and power; the step placebo is weak against a trend, so the trend test is
+   the one tested for power), warnings only where they belong (persistent gap, failed pre-trend test), errors on unusable input, list of treated units.
+6. did_design: the few-treated warning and the ASK THE USER lines appear in canonical and staggered designs
+   and NOT with many treated units or without a gvar (dose, reversals); att_gt warns with one treated unit.
 7. randomization_inference(cluster=): permuting counties over-rejects with state-level assignment, permuting
    states does not; counts of assignments; cluster = unit reproduces the unit-level result; error when gvar varies.
 8. did_timing_sensitivity: dropped cohorts by their original dates; the estimand note.
 9. did_falsification: findings by kind (a falsification row rejects; an inference row contradicts the headline),
    planted pre-trend and moved placebo outcome found, uninformative placebo flagged, gap-series rows with one
    treated unit.
-6. did_design: the few-treated warning and the ASK THE USER lines appear in canonical and staggered designs
-   and NOT with many treated units or without a gvar (dose, reversals); att_gt warns with one treated unit.
-5. Pre-period checks (trend test size and power; the step placebo is weak against a trend, so the trend test is
-   the one tested for power), warnings only where they belong (persistent gap, failed pre-trend test), errors on unusable input, list of treated units.
+10. The three new "find the error" cases: valid YAML graders that match a correct review and not the request.
 
 Run from the repository root:  python3 tests/test_v251.py
 """
@@ -370,6 +373,29 @@ check("falsification with one treated unit: gap-series rows; unit-level rows lef
       and not fo["table"].loc["pre-trends (Callaway-Sant'Anna)", "ran"])
 check("falsification with one treated unit: the trend row's MDE is the slope MDE × (T0 + T1)/2",
       abs(fo["table"].loc["pre-period trend (gap series)", "mde"] - ds["pre_trend"]["mde"] * 12) < 1e-9)
+
+# ---------------------------------------------------------------- 10. "find the error" cases (evals/routing)
+import re  # noqa: E402
+import yaml  # noqa: E402
+cases = {
+    "review-single-store-hac": "Com uma única loja tratada e 24 meses, o HAC com 2 defasagens rejeita demais: use "
+                               "causal.did_single_treated, que calibra a inferência na série da diferença.",
+    "review-no-placebo": "Não rejeitar o teste de pré-tendência não prova tendências paralelas; rode placebos "
+                         "(causal.did_falsification) e informe o MDE.",
+    "review-cluster-wrong-level": "A lei é atribuída por estado: os erros-padrão devem ser clusterizados por estado, "
+                                  "com só seis estados use wild bootstrap e randomization_inference(cluster='estado').",
+}
+for name, good in cases.items():
+    folder = ROOT / "econometrics" / "evals" / "routing" / name
+    g = yaml.safe_load((folder / "graders" / "answer.md").read_text(encoding="utf-8").split("---")[1])
+    text = (folder / "prompt.md").read_text(encoding="utf-8")
+    meta_p = yaml.safe_load(text.split("---")[1])
+    body = text.split("---", 2)[2]
+    rx = re.compile(g["pattern"], re.I)
+    check(f"case {name}: the answer grader is valid YAML, matches a correct review and not the request itself",
+          g["type"] == "regex" and bool(rx.search(good)) and not rx.search(body)
+          and meta_p["allowed_tools"] == ["Read", "Glob", "Grep", "Skill"]
+          and (folder / "graders" / "skill-fired.md").exists())
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
