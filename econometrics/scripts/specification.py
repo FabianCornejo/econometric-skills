@@ -194,22 +194,128 @@ def ovb_decomposition(data: pd.DataFrame, y: str, focal: str, omitted: str,
     return out
 
 
-def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = None, delta: float = 1.0,
-          show: bool = False) -> dict:
-    """Coefficient stability (Oster, 2019, approximate estimator).
+def _oster_inputs(res_uncontrolled, res_controlled, focal: str):
+    """σ²_y, σ²_x and τ_x for the exact Oster estimator, from the controlled fit, or (None, reason).
 
-    res_uncontrolled: y on the focal variable (and controls that are not about selection, if any);
-    res_controlled: adds the observed controls. Same sample.
+    As in robomit 1.0.7 and psacalc: variances with denominator n − 1; τ_x is the variance of the residual of the
+    focal variable regressed on the other regressors of the controlled model (with an intercept). The exact formulas
+    assume the uncontrolled model is y on the focal variable alone (plus an intercept) and unweighted OLS."""
+    m1, m0 = getattr(res_controlled, "model", None), getattr(res_uncontrolled, "model", None)
+    if m1 is None or m0 is None or not hasattr(m1, "exog_names") or not hasattr(m0, "exog_names"):
+        return None, "the fits do not expose their data (statsmodels OLS fits are needed)"
+    if type(m1).__name__ != "OLS" or type(m0).__name__ != "OLS":
+        return None, (f"the exact solution is for unweighted OLS ({type(m1).__name__} given); weighted and panel "
+                      "versions are not implemented")
+    extra = [c for c in m0.exog_names if c not in _INTERCEPT and c != focal]
+    if extra:
+        return None, (f"the uncontrolled model has regressors besides {focal} ({', '.join(extra)}); the exact "
+                      "solution here assumes y on the focal variable alone (Stata's psacalc handles this with "
+                      "mcontrol, not implemented)")
+    names = list(m1.exog_names)
+    X = np.asarray(m1.exog, float)
+    y = np.asarray(m1.endog, float)
+    j = names.index(focal)
+    x = X[:, j]
+    W = np.delete(X, j, axis=1)
+    if not any(np.allclose(W[:, k], W[0, k]) for k in range(W.shape[1])):
+        W = np.column_stack([np.ones(len(x)), W])
+    resid = x - W @ np.linalg.lstsq(W, x, rcond=None)[0]
+    return {"sigma_yy": float(np.var(y, ddof=1)), "sigma_xx": float(np.var(x, ddof=1)),
+            "tau_x": float(np.var(resid, ddof=1))}, None
+
+
+def _oster_exact_beta(b0, b1, r0, r1, rmax, delta, syy, sxx, tx):
+    """β* by the exact solution (Oster 2019, Proposition 2), as robomit 1.0.7 (based on psacalc) computes it.
+
+    Unknown ν = β̃ − β*. δ = 1: a quadratic, two roots. δ ≠ 1: a cubic (coefficients A, B, C as in robomit),
+    three real roots by the trigonometric formula when the discriminant is negative, else one by Cardano.
+    Choice of root, exactly as robomit: the β* closest to β̃, unless it moves against the direction β° → β̃
+    (Oster's Assumption 3); with two roots the other one is then taken, with three the violating roots go last.
+    Cardano (one real root) applies no check. δ ≠ 1 with τ_x ≈ σ²_x (controls unrelated to x) makes the cubic
+    degenerate; robomit divides by zero there, and this function solves the remaining quadratic instead.
+    Returns (β*, other real roots)."""
+    rt_ro = (r1 - r0) * syy
+    rm_rt = (rmax - r1) * syy
+    d = b0 - b1
+
+    viol = lambda v: np.sign(v - b1) != np.sign(b1 - b0)   # moves against the direction β° → β̃
+
+    def pick2(s1, s2):                       # robomit, δ = 1: the closer root, swapped if it violates the sign
+        best, other = (s1, s2) if (s1 - b1) ** 2 < (s2 - b1) ** 2 else (s2, s1)
+        return (other, [best]) if viol(best) else (best, [other])
+
+    def pick3(sols):                         # robomit, three real roots: violators pushed to the end, in order
+        dist = [(v - b1) ** 2 for v in sols]
+        for i in range(3):
+            if viol(sols[i]):
+                dist[i] = max(dist) + 1
+        order = sorted(range(3), key=lambda i: (dist[i], i))
+        return sols[order[0]], [sols[order[1]], sols[order[2]]]
+
+    a3 = (delta - 1) * (tx * sxx - tx ** 2)
+    if delta == 1 or abs(a3) <= 1e-12 * max(1.0, abs(tx * sxx)):
+        theta = delta * rm_rt * (sxx - tx) - rt_ro * tx - sxx * tx * d ** 2
+        a2 = tx * d * sxx * (delta - 2)
+        a0 = rm_rt * delta * d * sxx
+        if a2 == 0:
+            return (b1 - (-a0 / theta) if theta != 0 else np.nan), []
+        disc = theta ** 2 - 4 * a2 * a0
+        if disc < 0:
+            return np.nan, []
+        r = np.sqrt(disc)
+        return pick2(b1 - (-theta - r) / (2 * a2), b1 - (-theta + r) / (2 * a2))
+    A = tx * d * sxx * (delta - 2) / a3
+    B = (delta * rm_rt * (sxx - tx) - rt_ro * tx - sxx * tx * d ** 2) / a3
+    C = rm_rt * delta * d * sxx / a3
+    Q = (A ** 2 - 3 * B) / 9
+    R = (2 * A ** 3 - 9 * A * B + 27 * C) / 54
+    D = R ** 2 - Q ** 3
+    if D < 0:
+        th = np.arccos(R / np.sqrt(Q ** 3))
+        roots = [-2 * np.sqrt(Q) * np.cos((th + k) / 3) - A / 3 for k in (0.0, 2 * np.pi, -2 * np.pi)]
+        return pick3([b1 - v for v in roots])
+    t1, t2 = -R + np.sqrt(D), -R - np.sqrt(D)
+    nu = np.sign(t1) * abs(t1) ** (1 / 3) + np.sign(t2) * abs(t2) ** (1 / 3) - A / 3
+    return b1 - nu, []
+
+
+def _oster_exact_delta(b0, b1, r0, r1, rmax, beta, syy, sxx, tx):
+    """δ that makes the bias-adjusted effect equal `beta` (exact; Oster 2019, as in robomit/psacalc)."""
+    bb = b1 - beta
+    rt_ro = (r1 - r0) * syy
+    rm_rt = (rmax - r1) * syy
+    d = b0 - b1
+    num = (bb * rt_ro * tx + bb * sxx * tx * d ** 2 + 2 * bb ** 2 * (tx * d * sxx)
+           + bb ** 3 * (tx * sxx - tx ** 2))
+    den = (rm_rt * d * sxx + bb * rm_rt * (sxx - tx) + bb ** 2 * (tx * d * sxx)
+           + bb ** 3 * (tx * sxx - tx ** 2))
+    return num / den if den != 0 else np.inf
+
+
+def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = None, delta: float = 1.0,
+          exact: bool = True, show: bool = False) -> dict:
+    """Coefficient stability (Oster, 2019): the approximate estimator and, with exact=True, the exact one.
+
+    res_uncontrolled: y on the focal variable alone (plus an intercept); res_controlled: adds the observed
+    controls. Same sample, unweighted OLS (statsmodels).
+    Approximation (keys beta_star, delta_for_zero, identified_set):
       β* = β̃ − δ(β° − β̃)(R_max − R̃)/(R̃ − R°)      bias-adjusted effect for a given δ
       δ(β=0) = β̃(R̃ − R°) / [(β° − β̃)(R_max − R̃)]  how strong selection on unobservables must be,
                                                        relative to observables, to drive β to zero
-    Default R_max = min(1.3·R̃, 1) (Oster's calibration). |δ(β=0)| > 1 is the usual robustness bar.
-    This is the closed-form approximation; Stata's `psacalc` solves the exact cubic.
+    Exact (keys beta_star_exact, beta_star_alternatives, delta_for_zero_exact, identified_set_exact,
+    exact_inputs): Oster's Proposition 2, computed as Stata's psacalc and R's robomit do; it also uses var(y),
+    var(x) and τ_x (the variance of x net of the controls). When δ ≠ 1 the bias-adjusted β solves a cubic; with
+    several real roots the one closest to β̃ in the direction of β° → β̃ is reported and the others are listed.
+    The exact solution is skipped, with a warning, for weighted or panel fits and when the uncontrolled model has
+    other regressors (psacalc's mcontrol); the approximation is still returned.
+    Default R_max = min(1.3·R̃, 1) (Oster's calibration, not a fact about the data). δ depends on the R_max chosen
+    and is not a probability; |δ(β=0)| > 1 is the usual robustness bar.
     """
     b0, r0 = float(res_uncontrolled.params[focal]), float(res_uncontrolled.rsquared)
     bt, rt = float(res_controlled.params[focal]), float(res_controlled.rsquared)
+    w = []
     if int(res_uncontrolled.nobs) != int(res_controlled.nobs):
-        warnings.warn("The two regressions use different samples; Oster's bounds assume the same sample.")
+        w.append("The two regressions use different samples; Oster's bounds assume the same sample.")
     if rt <= r0:
         raise ValueError("Adding controls did not raise R²; coefficient-stability bounds are undefined.")
     rmax = min(1.3 * rt, 1.0) if r_max is None else float(r_max)
@@ -221,11 +327,53 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
     out = {"beta_uncontrolled": b0, "beta_controlled": bt, "r2_uncontrolled": r0, "r2_controlled": rt,
            "r_max": rmax, "delta": delta, "beta_star": beta_star, "delta_for_zero": delta_zero,
            "identified_set": tuple(sorted((bt, beta_star)))}
+    if rt - r0 < 0.01:
+        w.append(f"The controls raise R² by only {rt - r0:.4f}: they say little about selection, so δ is "
+                 "driven by R_max and the noise in R² rather than by the data; do not read δ as robustness.")
+    if exact:
+        if int(res_uncontrolled.nobs) != int(res_controlled.nobs):
+            inp, why = None, "the two regressions use different samples"
+        else:
+            inp, why = _oster_inputs(res_uncontrolled, res_controlled, focal)
+        if inp is None:
+            w.append(f"Exact Oster solution not computed: {why}. Only the approximation is reported.")
+        else:
+            args = (b0, bt, r0, rt, rmax)
+            bx, alt = _oster_exact_beta(*args, delta, inp["sigma_yy"], inp["sigma_xx"], inp["tau_x"])
+            dx = _oster_exact_delta(*args, 0.0, inp["sigma_yy"], inp["sigma_xx"], inp["tau_x"])
+            out.update(beta_star_exact=float(bx), beta_star_alternatives=[float(a) for a in alt],
+                       delta_for_zero_exact=float(dx), exact_inputs=inp,
+                       identified_set_exact=tuple(sorted((bt, float(bx)))) if np.isfinite(bx) else None)
+            if not np.isfinite(bx):
+                w.append("The exact equation has no real solution for this δ and R_max; only the approximation "
+                         "is reported.")
+            else:
+                if delta > 0 and np.sign(bx - bt) != np.sign(bt - b0):
+                    w.append(f"The exact β* ({bx:.4g}) moves away from β̃ in the opposite direction to the move from "
+                             f"β° ({b0:.4g}) to β̃ ({bt:.4g}), which Oster's Assumption 3 rules out: no admissible "
+                             "real root for this δ and R_max (psacalc and robomit report it anyway). Do not report "
+                             "it as the bias-adjusted effect; report δ for β = 0 and the approximation, and say so.")
+                if alt:
+                    w.append(f"The exact equation has {1 + len(alt)} real roots: β* = {bx:.4g} is the one closest "
+                             f"to β̃ in the direction of the move from β° (Oster's rule); the others are "
+                             + ", ".join(f"{a:.4g}" for a in alt) + ". Report the choice.")
+                scale = max(abs(bt), abs(b0 - bt), 1e-12)
+                if abs(bx - beta_star) > 0.10 * scale:
+                    w.append(f"The exact β* ({bx:.4g}) and the approximation ({beta_star:.4g}) differ by more than "
+                             "10% of the effect: report the exact one (the approximation assumes the controls "
+                             "and the unobservables relate to the treatment in a simple way).")
+    out["warnings"] = w
+    for m in w:
+        warnings.warn(m)
     if show:
-        print(f"\nOster (R_max = {rmax:.3f}, δ = {delta}): β̃ = {bt:.4f} → β* = {beta_star:.4f}; "
+        print(f"\nOster (R_max = {rmax:.3f}, δ = {delta}): β̃ = {bt:.4f} → β* = {beta_star:.4f} (approximation); "
               f"identified set [{out['identified_set'][0]:.4f}, {out['identified_set'][1]:.4f}]")
-        print(f"δ needed for β = 0: {delta_zero:.2f} "
-              + ("(> 1: robust by Oster's criterion)" if abs(delta_zero) > 1 else "(≤ 1: fragile)"))
+        if "beta_star_exact" in out:
+            print(f"Exact: β* = {out['beta_star_exact']:.4f}; δ needed for β = 0: {out['delta_for_zero_exact']:.2f}")
+        dz = out.get("delta_for_zero_exact", delta_zero)
+        print(f"δ needed for β = 0: {delta_zero:.2f} (approximation)"
+              + (f"; {dz:.2f} (exact)" if "delta_for_zero_exact" in out else "")
+              + (" (> 1: robust by Oster's criterion, for this R_max)" if abs(dz) > 1 else " (≤ 1: fragile)"))
     return out
 
 
