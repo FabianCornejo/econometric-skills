@@ -858,8 +858,8 @@ def main(argv=None) -> int:
     ap.add_argument("--folder", help="--doctor: the analysis folder whose skill listing is measured "
                                      "(default: $CLAUDE_PROJECT_DIR, else the current folder)")
     a = ap.parse_args(argv)
-    if (a.json or a.offline) and not a.doctor:
-        ap.error("--json and --offline go with --doctor")
+    if (a.json or a.offline or a.folder) and not a.doctor:
+        ap.error("--json, --offline and --folder go with --doctor")
     if a.skill_dir:
         print(recommended_skill_dir())
         return 0

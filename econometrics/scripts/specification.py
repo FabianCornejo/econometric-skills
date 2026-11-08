@@ -306,6 +306,12 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
     exact_inputs): Oster's Proposition 2, computed as Stata's psacalc and R's robomit do; it also uses var(y),
     var(x) and τ_x (the variance of x net of the controls). When δ ≠ 1 the bias-adjusted β solves a cubic; with
     several real roots the one closest to β̃ in the direction of β° → β̃ is reported and the others are listed.
+    With a single control the cubic always has one root that does not solve Oster's equation (at the pole of δ*(β),
+    where its numerator and denominator both vanish); it is kept apart (beta_star_spurious) and never reported. psacalc and robomit skip this check, so their
+    choice is kept apart in beta_star_psacalc; it differs only when no real root satisfies the equation, where
+    beta_star_exact is nan.
+    beta_star_exact_unstable is True when another admissible root is nearer to β* than β* is to β̃ (a heuristic for
+    being near a double root, where β* is unstable); then report δ for β = 0, not β*.
     The exact solution is skipped, with a warning, for weighted or panel fits and when the uncontrolled model has
     other regressors (psacalc's mcontrol); the approximation is still returned.
     Default R_max = min(1.3·R̃, 1) (Oster's calibration, not a fact about the data). δ depends on the R_max chosen
@@ -338,27 +344,70 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
         if inp is None:
             w.append(f"Exact Oster solution not computed: {why}. Only the approximation is reported.")
         else:
-            args = (b0, bt, r0, rt, rmax)
-            bx, alt = _oster_exact_beta(*args, delta, inp["sigma_yy"], inp["sigma_xx"], inp["tau_x"])
-            dx = _oster_exact_delta(*args, 0.0, inp["sigma_yy"], inp["sigma_xx"], inp["tau_x"])
-            out.update(beta_star_exact=float(bx), beta_star_alternatives=[float(a) for a in alt],
-                       delta_for_zero_exact=float(dx), exact_inputs=inp,
-                       identified_set_exact=tuple(sorted((bt, float(bx)))) if np.isfinite(bx) else None)
-            if not np.isfinite(bx):
-                w.append("The exact equation has no real solution for this δ and R_max; only the approximation "
-                         "is reported.")
+            args, S = (b0, bt, r0, rt, rmax), (inp["sigma_yy"], inp["sigma_xx"], inp["tau_x"])
+            bp, alt_p = _oster_exact_beta(*args, delta, *S)          # psacalc/robomit's choice and other roots
+            dx = _oster_exact_delta(*args, 0.0, *S)
+            # Spurious roots. The denominator of δ*(β) factors as [(β° − β̃)σ²_x + ν(σ²_x − τ_x)]·[(R_max − R̃)σ²_y
+            # + ν²τ_x], ν = β̃ − β, so δ*(β) has one pole, at β_p = β̃ + (β° − β̃)σ²_x/(σ²_x − τ_x). With a single
+            # control the numerator vanishes there too (Frisch-Waugh: (R̃ − R°)σ²_y = (β° − β̃)²σ²_xτ_x/(σ²_x − τ_x)),
+            # and the cubic psacalc and robomit solve (numerator − δ·denominator) gains a root at β_p for every δ and
+            # R_max that does not solve Oster's equation. They do not check this. (v2.5.2 study, 2026-11-08.)
+            roots = [float(r) for r in [bp, *alt_p] if np.isfinite(r)]
+            sxx, tx = S[1], S[2]
+            pole = bt + (b0 - bt) * sxx / (sxx - tx) if sxx - tx > 1e-12 * sxx else None
+            tol = 1e-7 * max(1.0, abs(b0), abs(bt), abs(pole) if pole is not None else 0.0)
+            spurious = [r for r in roots if pole is not None and abs(r - pole) <= tol]
+            genuine = [r for r in roots if r not in spurious]
+            side = (lambda r: np.sign(r - bt) == np.sign(bt - b0)) if delta > 0 else (lambda r: True)
+            adm = sorted((r for r in genuine if side(r)), key=lambda r: (abs(r - bt), r))
+            if adm:                                   # Oster's rule: the admissible root closest to β̃
+                bx, violates = adm[0], False
+            elif genuine:                             # only roots on the side Assumption 3 forbids
+                bx, violates = min(genuine, key=lambda r: (abs(r - bt), r)), True
             else:
-                if delta > 0 and np.sign(bx - bt) != np.sign(bt - b0):
+                bx, violates = np.nan, False
+            others = [r for r in genuine if r != bx]
+            out.update(beta_star_exact=float(bx), beta_star_alternatives=others, beta_star_spurious=spurious,
+                       beta_star_psacalc=float(bp), delta_for_zero_exact=float(dx), exact_inputs=inp,
+                       identified_set_exact=tuple(sorted((bt, float(bx)))) if np.isfinite(bx) else None,
+                       beta_star_exact_unstable=False)
+            if not np.isfinite(bx):
+                if spurious:
+                    w.append(f"The exact equation has no real solution for this δ and R_max. psacalc and robomit "
+                             f"report β* = {bp:.4g}, but that is a spurious root of the cubic they solve (it does not "
+                             "satisfy Oster's equation; with a single control it appears for every δ). Do not report "
+                             "it; report δ for β = 0 and the approximation, and say why.")
+                else:
+                    w.append("The exact equation has no real solution for this δ and R_max; only the approximation "
+                             "is reported.")
+            else:
+                if violates:
                     w.append(f"The exact β* ({bx:.4g}) moves away from β̃ in the opposite direction to the move from "
                              f"β° ({b0:.4g}) to β̃ ({bt:.4g}), which Oster's Assumption 3 rules out: no admissible "
                              "real root for this δ and R_max (psacalc and robomit report it anyway). Do not report "
                              "it as the bias-adjusted effect; report δ for β = 0 and the approximation, and say so.")
-                if alt:
-                    w.append(f"The exact equation has {1 + len(alt)} real roots: β* = {bx:.4g} is the one closest "
-                             f"to β̃ in the direction of the move from β° (Oster's rule); the others are "
-                             + ", ".join(f"{a:.4g}" for a in alt) + ". Report the choice.")
+                # Another admissible root nearer to β* than β* is to β̃: the closest-root rule picks between two
+                # admissible answers near a double root, where β* moves a lot with small changes in R², var(y),
+                # var(x) or τ_x (v2.5.2 study: δ = 2, n = 400 000, β* off by 2-3%, or no real root at all). A
+                # heuristic. Roots on the forbidden side leave no doubt about the choice: they stay in
+                # beta_star_alternatives without a warning (δ = 1 often has one; the default must stay quiet).
+                near = [a for a in adm[1:] if abs(a - bx) < abs(bx - bt)]
+                unstable = bool(near) and not violates
+                out["beta_star_exact_unstable"] = unstable
+                if len(adm) > 1 and not violates:
+                    msg = (f"The exact equation has {len(adm)} admissible real roots: β* = {bx:.4g} is the one "
+                           f"closest to β̃ in the direction of the move from β° (Oster's rule); the other(s): "
+                           + ", ".join(f"{a:.4g}" for a in adm[1:]) + ".")
+                    if unstable:
+                        msg += (f" Another admissible root ({near[0]:.4g}) is closer to β* than β* is to β̃: the "
+                                "equation is near a double root, where β* is unstable (small changes in the R² or "
+                                "the variances move it a lot, even in very large samples). Do not report β* as the "
+                                "bias-adjusted effect; report δ for β = 0, which is stable, and say why.")
+                    else:
+                        msg += " Report the choice."
+                    w.append(msg)
                 scale = max(abs(bt), abs(b0 - bt), 1e-12)
-                if abs(bx - beta_star) > 0.10 * scale:
+                if not (violates or unstable) and abs(bx - beta_star) > 0.10 * scale:   # one warning per situation
                     w.append(f"The exact β* ({bx:.4g}) and the approximation ({beta_star:.4g}) differ by more than "
                              "10% of the effect: report the exact one (the approximation assumes the controls "
                              "and the unobservables relate to the treatment in a simple way).")
