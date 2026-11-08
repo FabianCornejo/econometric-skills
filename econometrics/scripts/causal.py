@@ -49,6 +49,10 @@ Panel designs
     synth(df, unit, time, y, treated, t0)         synthetic control (Abadie et al., 2010) + placebo-in-space inference
     randomization_inference(df, unit, time, y, gvar)  Fisher randomization p-value and CI for a DiD with few
                                                   treated units (permutes which units adopt), any statistic
+    did_single_treated(df, unit, time, y, treated, t0)  DiD with one (or a handful of) treated unit(s) over a short
+                                                  series (v2.5.1): inference from the treated−control gap, AR(1) t
+                                                  calibrated by simulation (median-unbiased ρ), block-means second
+                                                  route, pre-period trend test and placebo
 
 Notes: for production RD use `rdrobust` (robust bias-corrected CIs) if installed;
 for staggered DiD the `csdid`/`differences` packages offer more options. The
@@ -550,6 +554,11 @@ _DESIGN_LABELS = {
 }
 
 
+def _comb_safe(n: int, k: int) -> int:
+    from math import comb
+    return comb(n, k)
+
+
 def did_design(df: pd.DataFrame, unit: str, time: str, d: str, cluster: str | None = None,
                show: bool = True) -> dict:
     """First step of any difference-in-differences (v2.5.0): what kind of treatment is this, and which estimators
@@ -576,7 +585,10 @@ def did_design(df: pd.DataFrame, unit: str, time: str, d: str, cluster: str | No
     first switch, reversals); cohorts (first-switch date, units, pre-periods in the panel); estimators of the skill
     and outside it; the suggested comparison group (the guide recommends not-yet-treated controls when they exist);
     gvar (first treated period, 0 = never treated, indexed by unit; map it with df[unit].map(res["gvar"])) only for a
-    binary absorbing treatment, else None; warnings. Nothing is imputed: rows with a missing d are counted and left
+    binary absorbing treatment, else None; warnings; ask: the questions about the date (exact? announced in advance?
+    gradual?) and spillovers to put to the user for a binary absorbing design, printed as "ASK THE USER" lines (v2.5.1;
+    the rule existed in SKILL.md §4 but was skipped in a real session). With 1 to 3 treated units it warns that unit
+    bootstrap and permutation are not valid and points to did_single_treated. Nothing is imputed: rows with a missing d are counted and left
     out."""
     cols = [unit, time, d] + ([cluster] if cluster else [])
     x = df[cols].copy()
@@ -737,6 +749,15 @@ def did_design(df: pd.DataFrame, unit: str, time: str, d: str, cluster: str | No
     if cluster and cl["cluster_periods_with_mixed_treatment"]:
         w.append(f"The treatment varies inside {cl['cluster_periods_with_mixed_treatment']} {cluster}-period cells: it"
                  f" is assigned below the {cluster} level. Cluster at the level of assignment.")
+    n_sw = len(switchers)
+    if binary and absorbing and 0 < n_sw <= 3 and design in ("canonical", "staggered"):
+        w.append(f"Only {n_sw} treated unit(s): the unit bootstrap of att_gt and the permutation of "
+                 f"randomization_inference cannot give a valid p-value (smallest attainable p with "
+                 f"{len(units)} units: 1/{_comb_safe(len(units), n_sw)}). Use causal.did_single_treated (inference "
+                 "from the time series of the treated−control gap) or, with many control units, causal.synth. Do "
+                 "not report HAC, Newey-West or Prais-Winsten p-values on the gap: with ~24 periods they reject "
+                 "about three times too often.")
+        skill.insert(0, "causal.did_single_treated (few treated units: inference from the gap series)")
     if cluster and (cl["clusters"] < 30 or cl["treated_clusters"] < 6):
         w.append(f"{cl['clusters']} clusters ({cl['treated_clusters']} treated): clustered and bootstrap SEs are "
                  "unreliable; plan causal.randomization_inference.")
@@ -754,11 +775,17 @@ def did_design(df: pd.DataFrame, unit: str, time: str, d: str, cluster: str | No
         ("balanced panel", balanced, f"{len(units)} units × {len(periods)} periods"),
         ("consecutive integer periods", regular, ""),
     ] + [(k.replace("_", " "), v, "") for k, v in cl.items()], columns=["criterion", "value", "note"])
+    ask = []
+    if binary and absorbing and design in ("canonical", "staggered"):
+        ask = ["Is the adoption date exact, and what is its source?",
+               "Was the treatment announced, or expected, before it started (anticipation)?",
+               "Did it start gradually rather than on one date?",
+               "Could it have affected the control units too (spillovers, displaced customers or activity)?"]
     out = {"design": design, "label": _DESIGN_LABELS[design], "binary": binary, "absorbing": absorbing,
            "checks": checks, "units": units, "cohorts": coh, "never_treated": int(never.sum()),
            "always_treated": int(always.sum()), "share_comparable": share_comp, "balanced": balanced,
            "control": control, "estimators": {"skill": skill, "external": external}, "gvar": gvar,
-           "n_units": len(units), "n_periods": len(periods), "missing_treatment": n_missing, "warnings": w,
+           "n_units": len(units), "n_periods": len(periods), "missing_treatment": n_missing, "warnings": w, "ask": ask,
            **({"clusters": cl} if cluster else {})}
     if show:
         print(f"\nDiD design: {out['label']}")
@@ -772,6 +799,8 @@ def did_design(df: pd.DataFrame, unit: str, time: str, d: str, cluster: str | No
             print(f"Comparison group: control='{control}'")
         for m in w:
             print("  WARNING: " + m)
+        for m in ask:
+            print("  ASK THE USER: " + m)
     return out
 
 
@@ -1187,6 +1216,11 @@ def att_gt(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, control: s
         warns.append(f"{n_empty} of {n_boot} bootstrap draws had no treated {'cluster' if cluster else 'unit'} or no "
                      "control and were left out of the SEs: with this few treated clusters the bootstrap is unreliable;"
                      " use causal.randomization_inference.")
+    n_tr_units = int((G > 0).sum())
+    if not cluster and 0 < n_tr_units <= 3:
+        warns.append(f"Only {n_tr_units} treated unit(s): the unit bootstrap cannot give a valid SE, CI or pre-trend "
+                     "test with so few treated units. Use causal.did_single_treated (inference from the time series of "
+                     "the treated−control gap) or, with many control units, causal.synth.")
     if cluster and n_boot and n_boot > 1 and (n_cl < 30 or n_cl_treated < 6):
         warns.append(f"Cluster bootstrap with {n_cl} clusters ({n_cl_treated} treated): pairs-cluster bootstrap SEs are "
                      "unreliable with few (treated) clusters. Report causal.randomization_inference (and a wild cluster "
@@ -2526,3 +2560,295 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     return {"estimand": "ATT (DiD)", "method": method, "estimate": est, "p": p, "ci_low": lo, "ci_high": hi,
             "n_units": N, "n_treated": N1, "possible_assignments": n_assign, "exact": exact,
             "n_perm": len(sets), "n": len(d), "warnings": warn}
+
+
+# =============================================================================
+# DiD with one (or very few) treated units and a short time series (v2.5.1)
+# =============================================================================
+def _sts_lagweights(w: np.ndarray) -> np.ndarray:
+    """c_k = Σ_{|i−j|=k} w_i w_j for a contrast w, so that the variance of w'd under a stationary AR(1) with
+    innovation variance s² is s²/(1 − ρ²) · Σ_k c_k ρ^k."""
+    return np.array([w @ w] + [2 * (w[j:] @ w[:-j]) for j in range(1, len(w))])
+
+
+def _sts_blocks(d: np.ndarray, T0: int, q: int, alpha: float):
+    """Second route: q block means in each segment and a Welch t test between the pre and post block means."""
+    pre = np.array([c.mean() for c in np.array_split(d[:T0], q)])
+    post = np.array([c.mean() for c in np.array_split(d[T0:], q)])
+    m = post.mean() - pre.mean()
+    v1, v0 = post.var(ddof=1) / q, pre.var(ddof=1) / q
+    se = float(np.sqrt(v1 + v0))
+    if se == 0:
+        return {"estimate": float(m), "se": 0.0, "df": np.nan, "p": np.nan, "ci_low": np.nan, "ci_high": np.nan}
+    df = (v1 + v0) ** 2 / (v1 ** 2 / (q - 1) + v0 ** 2 / (q - 1))
+    tc = stats.t.ppf(1 - alpha / 2, df)
+    return {"estimate": float(m), "se": se, "df": float(df), "p": float(2 * stats.t.sf(abs(m) / se, df)),
+            "ci_low": float(m - tc * se), "ci_high": float(m + tc * se)}
+
+
+def _sts_design(T: int, T0: int | None):
+    """Design of the two contrasts the calibrated route tests. T0 given: the DiD step (a mean for the pre and one for
+    the post segment; contrast = post minus pre; ρ pooled within the two segments). T0 None: a linear trend over the
+    whole series (intercept and slope; contrast = the slope per period; one segment)."""
+    if T0 is not None:
+        X = np.column_stack([np.r_[np.ones(T0), np.zeros(T - T0)], np.r_[np.zeros(T0), np.ones(T - T0)]])
+        w = np.r_[-np.ones(T0) / T0, np.ones(T - T0) / (T - T0)]
+        breaks = [T0]
+    else:
+        tt = np.arange(T, dtype=float) - (T - 1) / 2
+        X = np.column_stack([np.ones(T), tt])
+        w = tt / (tt @ tt)
+        breaks = []
+    return X, w, breaks
+
+
+_STS_MU_CACHE: dict = {}
+
+
+def _sts_raw_rho(u: np.ndarray, keep: np.ndarray) -> np.ndarray:
+    """Lag-1 autocorrelation of residuals u (rows), from the lag products that do not cross a break."""
+    num = (u[:, 1:] * u[:, :-1])[:, keep].sum(1)
+    den = (u[:, :-1] ** 2)[:, keep].sum(1)
+    return np.where(den > 0, num / np.where(den > 0, den, 1.0), 0.0)
+
+
+def _sts_mu_map(X: np.ndarray, breaks: list[int]):
+    """Median-unbiased ρ (Andrews 1993) for this design: the median of the raw ρ̂ is simulated on a grid of true ρ
+    (stationary Gaussian AR(1), 2000 series per point, an internal seed so the map does not depend on the user's
+    seed) and inverted by interpolation. Cached per design. Returns (grid of medians, grid of ρ)."""
+    T = X.shape[0]
+    key = (T, tuple(breaks), X.shape[1])
+    if key not in _STS_MU_CACHE:
+        rng = np.random.default_rng(20261107)
+        M = np.eye(T) - X @ np.linalg.pinv(X)
+        keep = np.ones(T - 1, bool)
+        for bk in breaks:
+            keep[bk - 1] = False
+        grid = np.linspace(-0.9, 0.95, 38)
+        med = np.empty(len(grid))
+        for i, g in enumerate(grid):
+            z = rng.standard_normal((2000, T))
+            x = np.empty_like(z)
+            x[:, 0] = z[:, 0] / np.sqrt(1 - g ** 2)
+            for t in range(1, T):
+                x[:, t] = g * x[:, t - 1] + z[:, t]
+            med[i] = np.median(_sts_raw_rho(x @ M.T, keep))
+        _STS_MU_CACHE[key] = (np.maximum.accumulate(med), grid)
+    return _STS_MU_CACHE[key]
+
+
+def _sts_general(d: np.ndarray, X: np.ndarray, w: np.ndarray, breaks: list[int]):
+    """Contrast w'd, its AR(1) SE and t, vectorized over rows of d. Residuals of the projection on X; ρ from lag-1
+    products that do not cross a break, made median-unbiased for this design (_sts_mu_map; Kendall's first-order
+    correction left a downward bias of 0.1 to 0.25 with 12 periods and a trend), clipped to ±0.95; innovation
+    variance on (lag pairs kept) − k − 1 degrees of freedom; SE from the exact AR(1) variance of the contrast."""
+    d = np.atleast_2d(d)
+    T = d.shape[1]
+    k = X.shape[1]
+    M = np.eye(T) - X @ np.linalg.pinv(X)
+    u = d @ M.T
+    keep = np.ones(T - 1, bool)
+    for bk in breaks:
+        keep[bk - 1] = False
+    med, grid = _sts_mu_map(X, breaks)
+    r = np.interp(_sts_raw_rho(u, keep), med, grid, left=grid[0], right=np.inf)
+    clipped = np.abs(r) > 0.95
+    r = np.clip(r, -0.95, 0.95)
+    e = (u[:, 1:] - r[:, None] * u[:, :-1])[:, keep]
+    s2 = (e ** 2).sum(1) / max(int(keep.sum()) - k - 1, 1)
+    c = _sts_lagweights(w)
+    var = s2 / (1 - r ** 2) * ((r[:, None] ** np.arange(T)[None, :]) @ c)
+    b = d @ w
+    se = np.sqrt(np.maximum(var, 1e-300))
+    return b, se, r, clipped, e
+
+
+def _sts_calibrated(d: np.ndarray, T0: int | None, alpha: float, n_sim: int, rng):
+    """Main route: t with the AR(1) standard error, referred to its own distribution simulated under a stationary
+    AR(1) at the estimated ρ (ρ re-estimated in every simulated series, so the bias of ρ̂ is carried into the
+    reference). p = (1 + #{|t*| ≥ |t|}) / (n_sim + 1); CI = estimate ± q_{1−α}(|t*|)·SE. T0 = None tests a linear
+    trend (the slope) instead of the step."""
+    T = len(d)
+    X, w, breaks = _sts_design(T, T0)
+    b, se, r, clipped, e = _sts_general(d[None, :], X, w, breaks)
+    b, se, rho = float(b[0]), float(se[0]), float(r[0])
+    x = np.empty((n_sim, T))
+    z = rng.standard_normal((n_sim, T))
+    x[:, 0] = z[:, 0] / np.sqrt(1 - rho ** 2)
+    for t in range(1, T):
+        x[:, t] = rho * x[:, t - 1] + z[:, t]
+    bs, ses, _, _, _ = _sts_general(x, X, w, breaks)
+    tabs = np.abs(bs / ses)
+    t_obs = abs(b / se)
+    crit = float(np.quantile(tabs, 1 - alpha))
+    p = float((1 + np.sum(tabs >= t_obs - 1e-12)) / (n_sim + 1))
+    return {"estimate": b, "se": se, "rho": rho, "rho_clipped": bool(clipped[0]), "crit": crit, "t": b / se, "p": p,
+            "ci_low": b - crit * se, "ci_high": b + crit * se, "innovations": e[0]}
+
+
+def _sts_ljung_box(e: np.ndarray, T0: int, lags: int):
+    """Ljung-Box Q on the AR(1) innovations, autocorrelations pooled within the two segments (no cross-segment
+    products); χ² reference with lags − 1 degrees of freedom (one AR coefficient estimated)."""
+    seg = [e[:T0 - 1], e[T0 - 1:]]
+    n = len(e)
+    den = sum((s ** 2).sum() for s in seg)
+    q = 0.0
+    for k in range(1, lags + 1):
+        rk = sum((s[k:] * s[:-k]).sum() for s in seg if len(s) > k) / den
+        q += rk ** 2 / (n - k)
+    q *= n * (n + 2)
+    return float(q), float(stats.chi2.sf(q, lags - 1))
+
+
+def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, t0, controls: list | None = None,
+                       alpha: float = ALPHA, n_sim: int = 1999, blocks: int = 4, seed: int = 0,
+                       show: bool = True) -> dict:
+    """Difference-in-differences when ONE unit (or a handful, averaged) is treated and the comparison comes from one
+    or a few control units observed over a short series (a promotion in one of two stores over 24 months; a law in
+    one state against a neighbour). With one treated unit, the unit bootstrap of att_gt and the permutation of
+    randomization_inference cannot give a valid p-value (two units: two possible assignments, smallest p = 0.5): the
+    information is in the time series of the gap g_t = mean(y of treated) − mean(y of controls), and inference has to
+    account for its serial correlation with few periods.
+
+    Estimand: mean of g over the post periods (t ≥ t0) minus its mean over the pre periods; with one treated and one
+    control unit this is the 2×2 DiD of means. Identifying assumption: without treatment the gap would have stayed at
+    its pre-period level (parallel trends between the treated and the controls), with the same dynamics before and
+    after; nothing here tests it beyond the pre-period placebo below.
+
+    Main route (calibrated AR(1) t, chosen by simulation in v2.5.1): the SE is the exact variance of the contrast
+    under a stationary AR(1) for the gap's deviations, with ρ estimated within the two segments and made
+    median-unbiased for this design (Andrews 1993, by simulation); the t ratio is referred to its own distribution simulated at that
+    ρ, re-estimating ρ in each simulated series (n_sim draws). In the skill's tests (tests/test_v251.py: T = 24 to 60,
+    pre = post or a 6-period pre, AR(1) ρ from 0 to 0.7, 2000 series each), the 5% test rejected 5.1–7.4% under no
+    effect and the 95% CI covered 94%; HAC / Newey-West with 2 lags on the gap of the 2026-11-07 two-store case
+    rejected 17.5% (Prais-Winsten about 14% in that session): do not report those p-values here.
+    Second route: `blocks` block means per segment and a Welch t test between them (no AR(1) assumption; it
+    over-rejects when ρ is high: 14% at ρ = 0.7, T = 24). Both have the same point estimate, so they are compared on
+    the inference (does each reject at alpha?), not on the number.
+    Limits: dynamics beyond AR(1) that are persistent (an AR(2) with coefficients 0.5 and 0.3) make both routes
+    reject about 20% of the time under no effect; the Ljung-Box warning below catches it only sometimes with so few
+    periods. Seasonality left in the gap makes both conservative (wide CIs): deseasonalize the gap first when the
+    two units have different seasonal patterns.
+
+    Pre-period checks, both with the same calibrated AR(1) route and an MDE (≈ (critical value + 0.84)·SE, 80% power)
+    that says how large a departure they could have seen; not rejecting does not show parallel trends:
+      pre_trend (at least 6 pre periods): slope of the gap on time over the pre periods. This is the check against a
+        diverging trend: a step placebo is weak against one, because a trend inside a segment looks like persistence,
+        inflates ρ̂ and widens its own CI (a step placebo rejected a pre-trend of 0.35 SD per period less than half
+        the time, and a steeper one less often). Size 7.5% with 12 pre periods and ρ = 0.4, about 11% with ρ = 0.7;
+      pre_placebo (at least 8 pre periods): a fake date at the midpoint of the pre periods (a level shift before
+        treatment).
+
+    df: long panel; treated: the label of the treated unit (or a list, averaged); t0: first treated period;
+    controls: the control units (default: every other unit, averaged). Time must be a consecutive sequence (the
+    AR(1) model assumes equally spaced periods); every unit used needs every period.
+    Returns the output contract (estimand, estimate, se, ci_low, ci_high, p, n, method, warnings) for the main
+    route, plus rho, critical value, the second route ("blocks"), routes_agree, pre_trend, pre_placebo, mde, the
+    gap series and the Ljung-Box check."""
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    tr = list(treated) if isinstance(treated, (list, tuple, set, np.ndarray, pd.Index)) else [treated]
+    units = pd.unique(df[unit])
+    missing_tr = [u for u in tr if u not in set(units)]
+    if missing_tr:
+        raise ValueError(f"did_single_treated: treated unit(s) not in the data: {missing_tr}")
+    ctl = [u for u in units if u not in set(tr)] if controls is None else list(controls)
+    if not ctl:
+        raise ValueError("did_single_treated: no control unit")
+    x = df[df[unit].isin(tr + ctl)][[unit, time, y]].dropna()
+    if x.duplicated([unit, time]).any():
+        raise ValueError(f"did_single_treated: repeated ({unit}, {time}) rows")
+    wide = x.pivot(index=time, columns=unit, values=y).sort_index()
+    if wide.isna().any().any():
+        bad = list(wide.columns[wide.isna().any()])
+        raise ValueError(f"did_single_treated: unit(s) {bad} miss some periods; the gap needs every unit in every "
+                         "period (drop the unit or the periods first)")
+    periods = wide.index.to_numpy()
+    w = []
+    if pd.api.types.is_numeric_dtype(wide.index):
+        if len(periods) > 1 and not np.allclose(np.diff(periods.astype(float)), np.diff(periods.astype(float))[0]):
+            w.append(f"The {time} values are not equally spaced: the AR(1) model assumes one step between periods; "
+                     "fill or recode the periods first.")
+    gap = wide[tr].mean(1) - wide[ctl].mean(1)
+    post = periods >= t0
+    if post.any() and post.argmax() != (~post).sum():
+        raise ValueError("did_single_treated: t0 must split the periods into a pre block followed by a post block")
+    T0, T1 = int((~post).sum()), int(post.sum())
+    if T0 < 3 or T1 < 3:
+        raise ValueError(f"did_single_treated: {T0} pre and {T1} post periods; at least 3 of each are needed")
+    g = gap.to_numpy(float)
+    rng = np.random.default_rng(seed)
+    main = _sts_calibrated(g, T0, alpha, n_sim, rng)
+    q = int(min(blocks, T0, T1))
+    blk = _sts_blocks(g, T0, q, alpha) if q >= 2 else None
+    lags = int(min(6, max(2, (len(g) - 2) // 5)))
+    lb_q, lb_p = _sts_ljung_box(main["innovations"], T0, lags)
+    z80 = stats.norm.ppf(0.8)
+    mde = (main["crit"] + z80) * main["se"]
+    trend = None
+    if T0 >= 6:
+        tr_res = _sts_calibrated(g[:T0], None, alpha, n_sim, rng)
+        trend = {"slope": tr_res["estimate"], "se": tr_res["se"], "p": tr_res["p"], "ci_low": tr_res["ci_low"],
+                 "ci_high": tr_res["ci_high"], "mde": (tr_res["crit"] + z80) * tr_res["se"], "rho": tr_res["rho"]}
+    placebo = None
+    if T0 >= 8:
+        h = T0 // 2
+        pl = _sts_calibrated(g[:T0], h, alpha, n_sim, rng)
+        placebo = {"fake_t0": periods[h], "estimate": pl["estimate"], "se": pl["se"], "p": pl["p"],
+                   "ci_low": pl["ci_low"], "ci_high": pl["ci_high"], "mde": (pl["crit"] + z80) * pl["se"],
+                   "rho": pl["rho"]}
+    rej_main = main["p"] <= alpha
+    agree = None if blk is None or not np.isfinite(blk["p"]) else bool(rej_main == (blk["p"] <= alpha))
+    if main["rho_clipped"]:
+        w.append("The gap is close to a unit root (estimated ρ above 0.95, clipped): the effect is not distinguishable "
+                 "from a drifting gap with this series; the CI is not reliable.")
+    elif main["rho"] > 0.5:
+        w.append(f"The gap is persistent (ρ ≈ {main['rho']:.2f}): the CI is wide, and the block-means route "
+                 "over-rejects at this persistence (14% for a 5% test at ρ = 0.7 with 24 periods in the skill's "
+                 "simulations); rely on the main route.")
+    if lb_p < alpha:
+        w.append(f"The AR(1) residuals still show serial correlation (Ljung-Box p = {lb_p:.3f}, {lags} lags): with "
+                 "persistent dynamics beyond AR(1) both routes over-reject (about 20% in the skill's simulations); "
+                 "treat the p-value as optimistic and look for seasonality or a break in the gap.")
+    if agree is False:
+        w.append(f"The two routes disagree at alpha = {alpha:g} (main p = {main['p']:.3f}, block means p = "
+                 f"{blk['p']:.3f}): the evidence depends on the model for the serial correlation; report both.")
+    if trend is not None and trend["p"] <= alpha:
+        w.append(f"The gap trends before treatment (slope {trend['slope']:.3g} per period, p = {trend['p']:.3f}): "
+                 "parallel trends fail in the pre-period, and a post-minus-pre contrast picks up the trend.")
+    if placebo is not None and placebo["p"] <= alpha:
+        w.append(f"The pre-period placebo rejects (fake date {placebo['fake_t0']}, p = {placebo['p']:.3f}): the gap "
+                 "already moved before treatment; the parallel-trends assumption is in doubt.")
+    if n_sim + 1 < 20 / alpha:
+        w.append(f"n_sim = {n_sim} is small for alpha = {alpha:g}: p-values move with the seed; use n_sim ≥ "
+                 f"{int(20 / alpha) - 1}.")
+    method = (f"DiD with {len(tr)} treated and {len(ctl)} control unit(s) on the gap series: AR(1) t calibrated by "
+              f"simulation ({n_sim} draws)")
+    out = {"estimand": "ATT (DiD of means: post minus pre of the treated−control gap)", "estimate": main["estimate"],
+           "se": main["se"], "ci_low": main["ci_low"], "ci_high": main["ci_high"], "p": main["p"], "n": len(g),
+           "method": method, "warnings": w, "rho": main["rho"], "critical_value": main["crit"], "t": main["t"],
+           "mde": mde, "pre_periods": T0, "post_periods": T1, "treated": tr, "controls": ctl,
+           "blocks": blk, "blocks_q": q if blk else None, "routes_agree": agree, "pre_trend": trend, "pre_placebo": placebo,
+           "ljung_box": {"q": lb_q, "p": lb_p, "lags": lags}, "gap": gap, "n_sim": n_sim, "alpha": alpha}
+    if show:
+        lvl = f"{100 * (1 - alpha):g}%"
+        print(f"\nDiD with one treated unit ({', '.join(map(str, tr))} vs {len(ctl)} control(s)), {T0} pre and {T1} "
+              f"post periods")
+        print(f"  Estimate {main['estimate']:.4g} (SE {main['se']:.3g}; {lvl} CI {main['ci_low']:.4g} to "
+              f"{main['ci_high']:.4g}; p = {main['p']:.3f}); AR(1) ρ ≈ {main['rho']:.2f}, critical value "
+              f"{main['crit']:.2f} instead of {stats.norm.ppf(1 - alpha / 2):.2f}")
+        if blk:
+            print(f"  Second route, {q} block means per segment + Welch t: {lvl} CI {blk['ci_low']:.4g} to "
+                  f"{blk['ci_high']:.4g}; p = {blk['p']:.3f}" + ("" if agree is None else
+                                                                ("; same verdict" if agree else "; DIFFERENT verdict")))
+        print(f"  MDE (80% power, alpha {alpha:g}): {mde:.3g}")
+        if trend:
+            print(f"  Pre-period trend: slope {trend['slope']:.3g} per period, p = {trend['p']:.3f}, MDE "
+                  f"{trend['mde']:.3g} per period (does not reject ≠ parallel trends hold)")
+        if placebo:
+            print(f"  Pre-period placebo (fake date {placebo['fake_t0']}): {placebo['estimate']:.4g}, p = "
+                  f"{placebo['p']:.3f}, MDE {placebo['mde']:.3g} (does not reject ≠ parallel trends hold)")
+        print("  HAC / Newey-West / Prais-Winsten p-values on this series over-reject with so few periods: not used.")
+        for m in w:
+            print("  WARNING: " + m)
+    return out
