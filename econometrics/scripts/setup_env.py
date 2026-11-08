@@ -10,7 +10,10 @@ Environment check and setup for the econometrics skill, the same on Windows, mac
                                      version against the latest release, other copies of the skill (plugin,
                                      Claude app) and their versions, plugin auto-update, and a crowded skill
                                      listing. Installs nothing. --json for a machine-readable report;
-                                     --offline skips the release check (one request to api.github.com).
+                                     --offline skips the release check (one request to api.github.com);
+                                     --folder PATH measures the listing as Claude Code sees it in that
+                                     folder (default: $CLAUDE_PROJECT_DIR, else the current folder): run it
+                                     for the analysis folder, not from inside the skill's own folder.
     python setup_env.py --install    install what is missing (plain pip first; adds --break-system-packages
                                      only if pip refuses because the system Python is externally managed)
     python setup_env.py --skill-dir  print the folder that scripts should use as SKILL_DIR
@@ -577,12 +580,34 @@ def probe_interpreter(cmd, run=None) -> dict | None:
             "supported": tuple(v[:2]) >= MIN_PYTHON}
 
 
+def _same_dir(a, b) -> bool:
+    try:
+        return os.path.normcase(str(Path(a).resolve())) == os.path.normcase(str(Path(b).resolve()))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def folder_settings(folder) -> dict:
+    """Plugins a folder's own .claude/settings.json (and settings.local.json) turns off, as workspace.py writes."""
+    off = set()
+    for name in ("settings.json", "settings.local.json"):
+        ep = _load_json(Path(folder) / ".claude" / name).get("enabledPlugins")
+        if isinstance(ep, dict):
+            off |= {k for k, v in ep.items() if v is False}
+    return {"prepared": bool(off), "plugins_off": len(off)}
+
+
 def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:
-    """How crowded Claude Code's skill listing is: enabled plugins and their skills (from
-    `claude plugin list --json`, run in `cwd` so a folder's own settings count) plus skills under skills/."""
-    run = run or (lambda cmd, timeout: _run(cmd, timeout, cwd=cwd))
+    """How crowded Claude Code's skill listing is in folder `cwd` (default: the current folder): enabled plugins
+    and their skills, from `claude plugin list --json` run there so the folder's own settings count, plus skills
+    under skills/. The CLI also lists, as enabled, project-scope installs made for OTHER folders (2.1.319): those
+    are left out, and an install folder listed twice is counted once. A project-scope install of this skill for
+    this folder is reported (`project_install`): it pins the folder to that version."""
+    folder = Path(cwd) if cwd else Path.cwd()
+    run = run or (lambda cmd, timeout: _run(cmd, timeout, cwd=str(folder)))
     settings = _load_json(cdir / "settings.json")
-    res = {"checked": False, "budget_fraction": settings.get("skillListingBudgetFraction")}
+    res = {"checked": False, "budget_fraction": settings.get("skillListingBudgetFraction"),
+           "folder": str(folder), **_safe(lambda: folder_settings(folder), lambda: {"prepared": False})}
     exe = which("claude")
     if exe is None:
         res["reason"] = "Claude Code CLI not on the PATH"
@@ -595,18 +620,29 @@ def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:
     except Exception:
         res["reason"] = "claude plugin list --json failed or timed out"
         return res
-    enabled = [p for p in plugins if isinstance(p, dict) and p.get("enabled")]
-    n_skills = 0
-    for p in enabled:
+    enabled, seen, n_skills = [], set(), 0
+    for p in plugins:
+        if not (isinstance(p, dict) and p.get("enabled")):
+            continue
+        pp = p.get("projectPath")
+        if p.get("scope") in ("project", "local") and isinstance(pp, str) and pp and not _same_dir(pp, folder):
+            continue                                  # an install for another folder: not active here
+        if str(p.get("id", "")).startswith("econometrics@") and p.get("scope") in ("project", "local") \
+                and isinstance(pp, str) and _same_dir(pp, folder):
+            res["project_install"] = {"version": p.get("version"), "scope": p.get("scope")}
+        enabled.append(p)
         ip = Path(p["installPath"]) if isinstance(p.get("installPath"), str) and p["installPath"] else None
-        if ip is not None and ip.is_dir():
+        key = os.path.normcase(str(ip)) if ip is not None else None
+        if ip is not None and key not in seen and ip.is_dir():
+            seen.add(key)
             n_skills += sum(1 for _ in ip.glob("**/SKILL.md"))
     sk = cdir / "skills"
     if sk.is_dir():
         n_skills += sum(1 for f in sk.glob("**/SKILL.md") if ".trash" not in f.relative_to(sk).parts)
-    res.update(checked=True, enabled_plugins=len(enabled), skills=n_skills,
+    ids = {p.get("id") for p in enabled}
+    res.update(checked=True, enabled_plugins=len(ids), skills=n_skills,
                crowded=n_skills >= CROWDED_SKILLS,
-               others_enabled=[p.get("id") for p in enabled if not str(p.get("id", "")).startswith("econometrics@")])
+               others_enabled=sorted(i for i in ids if not str(i or "").startswith("econometrics@")))
     return res
 
 
@@ -624,8 +660,11 @@ def _safe(fn, default):
 def doctor(offline: bool = False, *, cdir=None, env=None, opener=None, run=None, which=shutil.which,
            os_name=os.name, cwd=None) -> dict:
     """The full report (a dict). Installs, writes and changes nothing; the only network access is one
-    request to the public GitHub releases endpoint (none with offline=True)."""
+    request to the public GitHub releases endpoint (none with offline=True). `cwd` is the analysis folder whose
+    skill listing is measured (default: $CLAUDE_PROJECT_DIR when set, else the current folder)."""
     cdir = Path(cdir) if cdir else claude_dir(env)
+    if cwd is None:
+        cwd = (os.environ if env is None else env).get("CLAUDE_PROJECT_DIR") or None
     here = sys.version_info[:2] >= MIN_PYTHON
     rep = {
         "claude_dir": str(cdir),
@@ -730,7 +769,19 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
                         "--enable-autoupdate (writes it to " + str(Path(rep.get("claude_dir", "~/.claude")) / "settings.json")
                         + ", with a backup)")
     lst = rep["listing"]
-    if lst.get("checked") and lst.get("crowded"):
+    pin = lst.get("project_install")
+    ref = rep["latest"].get("version") or rep["skill"].get("version")
+    if pin and pin.get("version") and ref and _vtuple(str(pin["version"])) < _vtuple(str(ref)):
+        acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the skill, "
+                    f"pinned at {pin['version']} (current {ref}): sessions here keep loading the old version. "
+                    "With the user's permission, inside the folder: claude plugin uninstall "
+                    f"{PLUGIN_ID} --scope {pin.get('scope')} (the user-scope install then applies), then restart "
+                    "Claude Code")
+    if lst.get("checked") and lst.get("crowded") and lst.get("prepared"):
+        acts.append(f"skill listing still crowded in this folder although it is already prepared "
+                    f"({lst.get('plugins_off')} plugins off in its .claude/settings.json): the {lst['skills']} skills "
+                    "come from the plugins still on and from ~/.claude/skills; do not offer another clean folder")
+    elif lst.get("checked") and lst.get("crowded"):
         acts.append(f"crowded skill listing ({lst['skills']} skills in {lst['enabled_plugins']} enabled plugins): "
                     "offer a clean analysis folder, "
                     + f'{py["run_with"]} "{Path(__file__).resolve().parent / "workspace.py"}" <folder>, '
@@ -777,8 +828,9 @@ def print_doctor(rep: dict) -> None:
               + (f"; blocked by {', '.join(au['blocked_by'])}" if au["blocked_by"] else "") + ")")
     lst = rep["listing"]
     if lst.get("checked"):
-        print(f"Skill listing: {lst['skills']} skills in {lst['enabled_plugins']} enabled plugins"
+        print(f"Skill listing in {lst.get('folder')}: {lst['skills']} skills in {lst['enabled_plugins']} enabled plugins"
               + (" (crowded)" if lst["crowded"] else "")
+              + (f"; folder prepared ({lst.get('plugins_off')} plugins off here)" if lst.get("prepared") else "")
               + (f"; skillListingBudgetFraction {lst['budget_fraction']}" if lst.get("budget_fraction") else ""))
     else:
         print(f"Skill listing: not checked ({lst.get('reason')})")
@@ -803,6 +855,8 @@ def main(argv=None) -> int:
                          "; ".join(f"{k} = {OPTIONAL_USE[k]}" for k in OPTIONAL))
     ap.add_argument("--offline", action="store_true", help="--doctor: skip the latest-release check")
     ap.add_argument("--json", action="store_true", help="--doctor: print the report as JSON")
+    ap.add_argument("--folder", help="--doctor: the analysis folder whose skill listing is measured "
+                                     "(default: $CLAUDE_PROJECT_DIR, else the current folder)")
     a = ap.parse_args(argv)
     if (a.json or a.offline) and not a.doctor:
         ap.error("--json and --offline go with --doctor")
@@ -825,7 +879,7 @@ def main(argv=None) -> int:
               "loads them at the next start. /plugin -> Marketplaces shows the setting.")
         return 0
     if a.doctor:
-        rep = doctor(offline=a.offline)
+        rep = doctor(offline=a.offline, cwd=a.folder)
         if a.json:
             print(json.dumps(rep, indent=2, ensure_ascii=True))
         else:
