@@ -715,8 +715,17 @@ check("SKILL.md section 7: no Python at all -> offer the system installer in the
 check("SKILL.md section 7: when to run it in each mode (Consultant, Reviewer, Teacher)",
       all(m in sec7 for m in ("Consultant", "Reviewer", "Teacher")))
 sec4 = skill_md[skill_md.index("## 4. Non-negotiable rules"):skill_md.index("## 5.")]
-check("SKILL.md section 4 (non-negotiable rules) is byte-identical to v2.5.0 (SHA-256 pinned, works in a shallow "
-      "CI checkout)", hashlib.sha256(sec4.encode("utf-8")).hexdigest()
+# v2.5.1 added two pieces to the DiD rule (CHANGELOG v2.5.1); remove exactly those, so this check still proves that
+# nothing else in section 4 changed since v2.5.0.
+V251_ASK = " (relay `did_design`'s ASK THE USER lines)"
+V251_DID = (" With one to three treated units, use `causal.did_single_treated` and never report HAC, Newey-West or "
+            "Prais-Winsten p-values on the gap series (about three times too many false positives with ~24 periods); "
+            "before a causal DiD claim, run `causal.did_falsification` (with `cluster=` when assignment is by cluster) "
+            "and report its findings and its uninformative checks.")
+sec4_v250 = sec4.replace(V251_ASK, "", 1).replace(V251_DID, "", 1)
+check("SKILL.md section 4 (non-negotiable rules), minus the two documented v2.5.1 additions, is byte-identical to "
+      "v2.5.0 (SHA-256 pinned, works in a shallow CI checkout)", V251_ASK in sec4 and V251_DID in sec4
+      and hashlib.sha256(sec4_v250.encode("utf-8")).hexdigest()
       == "a820ccbfddb871b324a556bb963a15e75ed594799a292d50c82ec217c83538f1")
 agent = (SKILL / "agents" / "econometrician.md").read_text(encoding="utf-8")
 check("econometrician agent: --doctor first, changes nothing itself, reports the To do list",
