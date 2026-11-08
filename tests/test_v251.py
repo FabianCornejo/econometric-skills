@@ -26,6 +26,10 @@ about ±1 point, so a size band of [0.03, 0.075] separates a correct test from o
    planted pre-trend and moved placebo outcome found, uninformative placebo flagged, gap-series rows with one
    treated unit.
 10. The three new "find the error" cases: valid YAML graders that match a correct review and not the request.
+11. After the independent review: controls= validated; degenerate gaps rejected; minimum segment lengths; date
+    spacing; short-series warning; Ljung-Box false-alarm rate; unit-root flag on random walks; two treated units;
+    did_falsification with treated units at two dates, anticipation in the gap-series branch, headline errors;
+    the review-no-placebo grader against a wrong review.
 
 Run from the repository root:  python3 tests/test_v251.py
 """
@@ -196,30 +200,40 @@ check("persistence warning: in most series with ρ = 0.85 (≥ 60%) and rare wit
 trend_gap = lambda: ar1(rng5, 1, 24, 0.0)[0] + 0.35 * np.minimum(np.arange(24), 12)
 tr_rej = np.mean([ca.did_single_treated(panel(trend_gap()), "u", "t", "y", "A", 13, n_sim=499,
                                         show=False)["pre_trend"]["p"] <= 0.05 for _ in range(200)])
-nulls = [ca.did_single_treated(panel(ar1(rng5, 1, 24, 0.4)[0]), "u", "t", "y", "A", 13, n_sim=499, show=False)
-         for _ in range(400)]
+nulls = [ca.did_single_treated(panel(ar1(rng5, 1, 40, 0.4)[0]), "u", "t", "y", "A", 21, n_sim=499, show=False)
+         for _ in range(500)]
 tr_null = np.mean([r["pre_trend"]["p"] <= 0.05 for r in nulls])
 pl_null = np.mean([r["pre_placebo"]["p"] <= 0.05 for r in nulls])
 check("pre-period trend test rejects a planted pre-trend (power ≥ 0.6, the criterion of the main route; 200 series)", tr_rej >= 0.6, f"{tr_rej:.3f}")
-check("pre-period trend test and step placebo: size under AR(1) ρ = 0.4 at most 0.09 (400 series)",
-      tr_null <= 0.09 and pl_null <= 0.09, f"trend {tr_null:.3f}, step {pl_null:.3f}")
+check("pre-period trend test and step placebo with 20 pre periods: size under AR(1) ρ = 0.4 in [0.02, 0.08] "
+      "(500 series)", 0.02 <= tr_null <= 0.08 and 0.02 <= pl_null <= 0.08, f"trend {tr_null:.3f}, step {pl_null:.3f}")
+X12, w12, b12 = ca._sts_design(12, None)
+d12 = ar1(rng5, 1000, 12, 0.4)
+s12 = np.mean([ca._sts_calibrated(d12[i], None, 0.05, 499, rng5)["p"] <= 0.05 for i in range(1000)])
+check("pre-period trend test at its minimum (12 pre periods), ρ = 0.4: size in [0.02, 0.10], the 7-9% documented "
+      "(band set after the independent review measured 9%)", 0.02 <= s12 <= 0.10, f"{s12:.3f}")
 check("a failed pre-trend test produces its warning, and a passed one does not",
       all(has(r, "trends before treatment") == (r["pre_trend"]["p"] <= 0.05) for r in nulls))
 short = ca.did_single_treated(panel(ar1(rng5, 1, 12, 0.0)[0]), "u", "t", "y", "A", 7, show=False)
-check("no pre-period placebo with fewer than 8 pre periods", short["pre_placebo"] is None)
+check("no step placebo with fewer than 16 pre periods and no trend test with fewer than 12",
+      short["pre_placebo"] is None and short["pre_trend"] is None and nulls[0]["pre_placebo"] is not None)
 for bad, kw in (("unbalanced", dict(df=panel(np.zeros(24)).drop(index=3), t0=13)),
                 ("too few post periods", dict(df=panel(np.zeros(24)), t0=23)),
+                ("four pre periods", dict(df=panel(np.arange(24.0) % 3), t0=5)),
+                ("constant gap", dict(df=panel(np.ones(24)), t0=13)),
+                ("pure step gap", dict(df=panel(1.0 * (np.arange(24) >= 12)), t0=13)),
                 ("unknown treated unit", dict(df=panel(np.zeros(24)), t0=13, treated="Z"))):
     try:
         ca.did_single_treated(kw["df"], "u", "t", "y", kw.get("treated", "A"), kw["t0"], show=False)
         check(f"error on {bad} input", False)
     except ValueError:
         check(f"error on {bad} input", True)
-two = pd.concat([panel(np.ones(24) * 0.0), panel(np.ones(24)).query("u == 'A'").assign(u="C")])
+e_ = np.random.default_rng(16).standard_normal(24)
+two = pd.concat([panel(e_), panel(e_).query("u == 'A'").assign(u="C")])
 two.loc[(two.u == "C") & (two.t >= 13), "y"] += 2.0
 rt = ca.did_single_treated(two, "u", "t", "y", ["A", "C"], 13, show=False)
-check("list of treated units: their outcomes are averaged (effect 2 on one of two treated → 1)",
-      abs(rt["estimate"] - 1.0) < 1e-12 and rt["treated"] == ["A", "C"])
+check("list of treated units: their outcomes are averaged (effect 2 on one of two treated → DiD of the noise + 1)",
+      abs(rt["estimate"] - (e_[12:].mean() - e_[:12].mean() + 1.0)) < 1e-12 and rt["treated"] == ["A", "C"])
 check("output contract keys", all(k in rv for k in ("estimand", "estimate", "se", "ci_low", "ci_high", "p", "n",
                                                     "method", "warnings")))
 
@@ -396,6 +410,81 @@ for name, good in cases.items():
           g["type"] == "regex" and bool(rx.search(good)) and not rx.search(body)
           and meta_p["allowed_tools"] == ["Read", "Glob", "Grep", "Skill"]
           and (folder / "graders" / "skill-fired.md").exists())
+
+# ---------------------------------------------------------------- 11. after the independent review
+pc = panel(ar1(np.random.default_rng(12), 1, 24, 0.2)[0])
+pc = pd.concat([pc, pc[pc.u == "B"].assign(u="C", y=lambda x: x.y + 0.1)])
+for bad, ctl in (("absent control", ["Z"]), ("control that is treated", ["A", "B"]), ("control = treated", ["A"])):
+    try:
+        ca.did_single_treated(pc, "u", "t", "y", "A", 13, controls=ctl, show=False)
+        check(f"controls= validated: {bad} → ValueError", False)
+    except ValueError:
+        check(f"controls= validated: {bad} → ValueError", True)
+rc_ = ca.did_single_treated(pc, "u", "t", "y", "A", 13, controls=["C"], show=False)
+check("controls=['C'] uses C only (gap = A − C)", np.allclose(rc_["gap"].to_numpy(),
+      pc[pc.u == "A"].y.to_numpy() - pc[pc.u == "C"].y.to_numpy()) and rc_["controls"] == ["C"])
+dt = panel(ar1(np.random.default_rng(13), 1, 24, 0.2)[0])
+months = pd.date_range("2024-01-01", periods=26, freq="MS").delete([6, 7])
+dt["t"] = np.r_[months, months]
+r_dt = ca.did_single_treated(dt, "u", "t", "y", "A", months[12], show=False)
+dt2 = dt.copy()
+reg = pd.date_range("2024-01-01", periods=24, freq="MS")
+dt2["t"] = np.r_[reg, reg]
+r_dt2 = ca.did_single_treated(dt2, "u", "t", "y", "A", reg[12], show=False)
+check("monthly dates with a two-month hole are warned; regular monthly dates are not",
+      any("regular frequency" in m for m in r_dt["warnings"]) and not any("regular frequency" in m for m in r_dt2["warnings"]))
+r12 = ca.did_single_treated(panel(ar1(np.random.default_rng(14), 1, 12, 0.2)[0]), "u", "t", "y", "A", 7, show=False)
+check("short-series warning with 12 periods, none with 24", any("Only 12 periods" in m for m in r12["warnings"])
+      and not any("periods: the calibrated" in m for m in rv["warnings"]))
+wn = [ca.did_single_treated(panel(ar1(np.random.default_rng(1000 + i), 1, 24, 0.0)[0]), "u", "t", "y", "A", 13,
+                            n_sim=199, show=False)["ljung_box"]["p"] <= 0.05 for i in range(300)]
+check("Ljung-Box false-alarm rate on white-noise gaps in [0.01, 0.10] (300 series)", 0.01 <= np.mean(wn) <= 0.10,
+      f"{np.mean(wn):.3f}")
+rw = [ca.did_single_treated(panel(np.cumsum(np.random.default_rng(2000 + i).standard_normal(24))), "u", "t", "y", "A",
+                            13, n_sim=199, show=False) for i in range(100)]
+check("random-walk gaps: the unit-root warning appears in at least 20% of 100 series (it relies on the clip flag)",
+      np.mean([has(r, "unit root") for r in rw]) >= 0.2, f"{np.mean([has(r, 'unit root') for r in rw]):.2f}")
+two_same = ca.did_design(design_panel(6, [7, 7]), "u", "t", "d", show=False)
+check("did_design: two treated units at one date also get the few-treated warning", few(two_same))
+t2 = design_panel(4, [7, 7], T=24)
+t2["g"] = np.where(t2.groupby("u")["d"].transform("max") > 0, 7, 0)
+t2["y"] = t2["y"] + np.random.default_rng(17).standard_normal(len(t2))
+f2 = ca.did_falsification(t2, "u", "t", "y", "g", show=False)
+check("did_falsification: two treated units at one date use the gap-series branch", f2["few_treated"])
+t3 = design_panel(10, [6, 8], T=12)
+t3["y"] = t3["y"] + np.random.default_rng(15).standard_normal(len(t3))
+t3["g"] = np.where(t3.u == 0, 6, np.where(t3.u == 1, 8, 0))
+f3 = ca.did_falsification(t3, "u", "t", "y", "g", n_boot=49, n_perm=99, show=False)
+check("did_falsification: two treated units at two dates → warning that the unit-level rows are unreliable, and "
+      "att_gt's few-treated warning passed on", any("descriptive only" in m for m in f3["warnings"])
+      and any(m.startswith("att_gt:") and "did_single_treated" in m for m in f3["warnings"]))
+one_a = one.copy()
+fa = ca.did_falsification(one_a, "u", "t", "y", "g", anticipation=2, show=False)
+da = ca.did_single_treated(one_a, "u", "t", "y", ["A"], 11, seed=0, show=False)
+check("did_falsification, one treated unit, anticipation = 2: headline = did_single_treated with t0 moved back 2",
+      abs(fa["headline"]["estimate"] - da["estimate"]) < 1e-12 and "timing (±1)" in fa["table"].index
+      and not fa["table"].loc["timing (±1)", "ran"])
+early = one.copy()
+early["g"] = np.where(early.u == "A", 3, 0)
+try:
+    ca.did_falsification(early, "u", "t", "y", "g", show=False)
+    check("did_falsification: a headline that cannot be computed raises a clear ValueError", False)
+except ValueError as e:
+    check("did_falsification: a headline that cannot be computed raises a clear ValueError",
+          "headline estimate" in str(e))
+gr = ROOT / "econometrics" / "evals" / "routing" / "review-no-placebo" / "graders" / "answer.md"
+rxp = re.compile(yaml.safe_load(gr.read_text(encoding="utf-8").split("---")[1])["pattern"], re.I)
+wrong = ("Concordo com o texto: o p conjunto de 0,41 confirma as tendências paralelas, então o efeito de 4,2 pontos é "
+         "causal e não é preciso fazer mais nada. Podemos seguir para a conclusão.")
+check("review-no-placebo grader: does not match a wrong review that agrees with the authors", not rxp.search(wrong))
+
+from statsmodels.stats.diagnostic import acorr_ljungbox  # noqa: E402
+e1 = ar1(np.random.default_rng(18), 1, 30, 0.3)[0]
+e1 = e1 - e1.mean()
+q_s, p_s = ca._sts_ljung_box(e1, len(e1) + 1, 5)        # one segment holds every innovation
+lb_sm = acorr_ljungbox(e1, lags=[5], model_df=1, return_df=True).iloc[0]
+check("Ljung-Box on one segment = statsmodels acorr_ljungbox(model_df=1): Q and p",
+      abs(q_s - lb_sm["lb_stat"]) < 1e-9 and abs(p_s - lb_sm["lb_pvalue"]) < 1e-12, f"Q {q_s:.4f} vs {lb_sm['lb_stat']:.4f}")
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

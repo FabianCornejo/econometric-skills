@@ -559,11 +559,6 @@ _DESIGN_LABELS = {
 }
 
 
-def _comb_safe(n: int, k: int) -> int:
-    from math import comb
-    return comb(n, k)
-
-
 def did_design(df: pd.DataFrame, unit: str, time: str, d: str, cluster: str | None = None,
                show: bool = True) -> dict:
     """First step of any difference-in-differences (v2.5.0): what kind of treatment is this, and which estimators
@@ -754,11 +749,12 @@ def did_design(df: pd.DataFrame, unit: str, time: str, d: str, cluster: str | No
     if cluster and cl["cluster_periods_with_mixed_treatment"]:
         w.append(f"The treatment varies inside {cl['cluster_periods_with_mixed_treatment']} {cluster}-period cells: it"
                  f" is assigned below the {cluster} level. Cluster at the level of assignment.")
+    from math import comb
     n_sw = len(switchers)
     if binary and absorbing and 0 < n_sw <= 3 and design in ("canonical", "staggered"):
         w.append(f"Only {n_sw} treated unit(s): the unit bootstrap of att_gt and the permutation of "
                  f"randomization_inference cannot give a valid p-value (smallest attainable p with "
-                 f"{len(units)} units: 1/{_comb_safe(len(units), n_sw)}). Use causal.did_single_treated (inference "
+                 f"{len(units)} units: 1/{comb(len(units), n_sw)}). Use causal.did_single_treated (inference "
                  "from the time series of the treated−control gap) or, with many control units, causal.synth. Do "
                  "not report HAC, Newey-West or Prais-Winsten p-values on the gap: with ~24 periods they reject "
                  "about three times too often.")
@@ -2665,7 +2661,8 @@ def _sts_mu_map(X: np.ndarray, breaks: list[int]):
             for t in range(1, T):
                 x[:, t] = g * x[:, t - 1] + z[:, t]
             med[i] = np.median(_sts_raw_rho(x @ M.T, keep))
-        _STS_MU_CACHE[key] = (np.maximum.accumulate(med), grid)
+        med = np.maximum.accumulate(med) + np.arange(len(med)) * 1e-9     # strictly increasing for np.interp
+        _STS_MU_CACHE[key] = (med, grid)
     return _STS_MU_CACHE[key]
 
 
@@ -2753,7 +2750,9 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
     ρ, re-estimating ρ in each simulated series (n_sim draws). In the skill's tests (tests/test_v251.py: T = 24 to 60,
     pre = post or a 6-period pre, AR(1) ρ from 0 to 0.7, 2000 series each), the 5% test rejected 5.1–7.4% under no
     effect and the 95% CI covered 94%; HAC / Newey-West with 2 lags on the gap of the 2026-11-07 two-store case
-    rejected 17.5% (Prais-Winsten about 14% in that session): do not report those p-values here.
+    rejected 17.5% in the same test (17.8% in the 2000-panel recheck of that session): do not report HAC, Newey-West
+    or Prais-Winsten p-values here. At least 5 pre and 5 post periods (10 in all) are required; below 20 periods the
+    test rejects 7-9% at ρ = 0.4 (warned).
     Second route: `blocks` block means per segment and a Welch t test between them (no AR(1) assumption; it
     over-rejects when ρ is high: 14% at ρ = 0.7, T = 24). Both have the same point estimate, so they are compared on
     the inference (does each reject at alpha?), not on the number.
@@ -2764,15 +2763,17 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
 
     Pre-period checks, both with the same calibrated AR(1) route and an MDE (≈ (critical value + 0.84)·SE, 80% power)
     that says how large a departure they could have seen; not rejecting does not show parallel trends:
-      pre_trend (at least 6 pre periods): slope of the gap on time over the pre periods. This is the check against a
+      pre_trend (at least 12 pre periods): slope of the gap on time over the pre periods. This is the check against a
         diverging trend: a step placebo is weak against one, because a trend inside a segment looks like persistence,
         inflates ρ̂ and widens its own CI (a step placebo rejected a pre-trend of 0.35 SD per period less than half
-        the time, and a steeper one less often). Size 7.5% with 12 pre periods and ρ = 0.4, about 11% with ρ = 0.7;
-      pre_placebo (at least 8 pre periods): a fake date at the midpoint of the pre periods (a level shift before
-        treatment).
+        the time, and a steeper one less often). Size 7-9% with 12 pre periods and ρ from 0 to 0.4, about 11% with ρ = 0.7
+        (independent review of v2.5.1);
+      pre_placebo (at least 16 pre periods, segments of 8; shorter ones over-rejected about 10%): a fake date at the
+        midpoint of the pre periods (a level shift before treatment).
 
     df: long panel; treated: the label of the treated unit (or a list, averaged); t0: first treated period;
-    controls: the control units (default: every other unit, averaged). Time must be a consecutive sequence (the
+    controls: the control units (default: every other unit, averaged); they must be in the data and must not include a
+    treated unit. Time must be a consecutive sequence (the
     AR(1) model assumes equally spaced periods); every unit used needs every period.
     Returns the output contract (estimand, estimate, se, ci_low, ci_high, p, n, method, warnings) for the main
     route, plus rho, critical value, the second route ("blocks"), routes_agree, pre_trend, pre_placebo, mde, the
@@ -2787,6 +2788,12 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
     ctl = [u for u in units if u not in set(tr)] if controls is None else list(controls)
     if not ctl:
         raise ValueError("did_single_treated: no control unit")
+    missing_ctl = [u for u in ctl if u not in set(units)]
+    if missing_ctl:
+        raise ValueError(f"did_single_treated: control unit(s) not in the data: {missing_ctl}")
+    both = [u for u in ctl if u in set(tr)]
+    if both:
+        raise ValueError(f"did_single_treated: unit(s) {both} are both treated and control")
     x = df[df[unit].isin(tr + ctl)][[unit, time, y]].dropna()
     if x.duplicated([unit, time]).any():
         raise ValueError(f"did_single_treated: repeated ({unit}, {time}) rows")
@@ -2801,14 +2808,27 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
         if len(periods) > 1 and not np.allclose(np.diff(periods.astype(float)), np.diff(periods.astype(float))[0]):
             w.append(f"The {time} values are not equally spaced: the AR(1) model assumes one step between periods; "
                      "fill or recode the periods first.")
+    elif pd.api.types.is_datetime64_any_dtype(wide.index):
+        if len(periods) > 2 and pd.infer_freq(pd.DatetimeIndex(periods)) is None:
+            w.append(f"The {time} dates do not follow a regular frequency (a gap, or mixed spacing): the AR(1) model "
+                     "assumes one step between periods; fill or recode the periods first.")
+    else:
+        w.append(f"The spacing of {time} was not checked (not numeric or dates): the AR(1) model assumes equally "
+                 "spaced periods.")
     gap = wide[tr].mean(1) - wide[ctl].mean(1)
     post = periods >= t0
     if post.any() and post.argmax() != (~post).sum():
         raise ValueError("did_single_treated: t0 must split the periods into a pre block followed by a post block")
     T0, T1 = int((~post).sum()), int(post.sum())
-    if T0 < 3 or T1 < 3:
-        raise ValueError(f"did_single_treated: {T0} pre and {T1} post periods; at least 3 of each are needed")
+    if min(T0, T1) < 5 or T0 + T1 < 10:
+        raise ValueError(f"did_single_treated: {T0} pre and {T1} post periods; at least 5 of each (10 in all) are "
+                         "needed: with fewer, the calibrated test rejected 7-12% of the time for a 5% test in the "
+                         "skill's checks and white-noise gaps were often read as a unit root")
     g = gap.to_numpy(float)
+    dev = np.r_[g[:T0] - g[:T0].mean(), g[T0:] - g[T0:].mean()]
+    if np.sum(dev ** 2) <= 1e-20 * max(1.0, np.sum(g ** 2)):
+        raise ValueError("did_single_treated: the gap does not vary around its pre and post means (a constant or a "
+                         "pure step): there is no noise to base inference on; report the difference itself")
     rng = np.random.default_rng(seed)
     main = _sts_calibrated(g, T0, alpha, n_sim, rng)
     q = int(min(blocks, T0, T1))
@@ -2818,12 +2838,12 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
     z80 = stats.norm.ppf(0.8)
     mde = (main["crit"] + z80) * main["se"]
     trend = None
-    if T0 >= 6:
+    if T0 >= 12:
         tr_res = _sts_calibrated(g[:T0], None, alpha, n_sim, rng)
         trend = {"slope": tr_res["estimate"], "se": tr_res["se"], "p": tr_res["p"], "ci_low": tr_res["ci_low"],
                  "ci_high": tr_res["ci_high"], "mde": (tr_res["crit"] + z80) * tr_res["se"], "rho": tr_res["rho"]}
     placebo = None
-    if T0 >= 8:
+    if T0 >= 16:
         h = T0 // 2
         pl = _sts_calibrated(g[:T0], h, alpha, n_sim, rng)
         placebo = {"fake_t0": periods[h], "estimate": pl["estimate"], "se": pl["se"], "p": pl["p"],
@@ -2831,9 +2851,15 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
                    "rho": pl["rho"]}
     rej_main = main["p"] <= alpha
     agree = None if blk is None or not np.isfinite(blk["p"]) else bool(rej_main == (blk["p"] <= alpha))
+    if len(g) < 20:
+        w.append(f"Only {len(g)} periods: the calibrated test rejected 7-9% of the time for a 5% test with 12-16 "
+                 "periods and ρ = 0.4 in the skill's checks (5-7% from 24 periods on); read the p-value as a little "
+                 "optimistic.")
     if main["rho_clipped"]:
         w.append("The gap is close to a unit root (estimated ρ above 0.95, clipped): the effect is not distinguishable "
-                 "from a drifting gap with this series; the CI is not reliable.")
+                 "from a drifting gap with this series; the CI is not reliable."
+                 + (" With fewer than 20 periods this also happens to series with no persistence (about 1-4% of "
+                    "white-noise gaps with 12-16 periods): the series is too short to tell." if len(g) < 20 else ""))
     elif main["rho"] > 0.5:
         w.append(f"The gap is persistent (ρ ≈ {main['rho']:.2f}): the CI is wide, and the block-means route "
                  "over-rejects at this persistence (14% for a 5% test at ρ = 0.7 with 24 periods in the skill's "
@@ -2917,7 +2943,10 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
     has a handful of assignments, the unit bootstrap has no variation to draw from); the matrix uses
     did_single_treated instead: its pre-period trend test and step placebo, and placebo outcomes through the same
     route, and says why the other rows are left out.
-    Each sub-check that cannot run on these data (a ValueError) is listed with the reason, not dropped.
+    Each sub-check that cannot run on these data (a ValueError) is listed with the reason, not dropped; if the
+    headline estimate itself cannot be computed, the matrix raises a ValueError saying why. att_gt's warnings are
+    passed on. With 1 to 3 treated units adopting at different dates, the unit-level rows run but are flagged as
+    unreliable (a warning). anticipation moves the start of the post period back in the gap-series branch too.
     Returns: table (one row per check), headline (att_gt overall or did_single_treated), rejected (names),
     uninformative (names), verdict, warnings."""
     if not 0 < alpha < 1:
@@ -2940,8 +2969,17 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
     few = 0 < n_tr <= 3 and len(dates) == 1
     if few:
         tr_units = list(d.loc[d[gvar] > 0, unit].unique())
+        t_all = np.sort(d[time].unique())
         t0 = dates[0]
-        head = did_single_treated(d, unit, time, y, tr_units, t0, alpha=alpha, seed=seed, show=False)
+        if anticipation:
+            # the anticipation periods are treated as post: the first possibly-affected period is g − anticipation
+            t0 = t_all[max(0, int(np.searchsorted(t_all, dates[0])) - anticipation)]
+        try:
+            head = did_single_treated(d, unit, time, y, tr_units, t0, alpha=alpha, seed=seed, show=False)
+        except ValueError as e:
+            raise ValueError(f"did_falsification: the headline estimate (did_single_treated, {n_tr} treated) cannot "
+                             f"be computed on these data: {e}") from e
+        warns.extend(head["warnings"])
         headline = {"estimate": head["estimate"], "se": head["se"], "p": head["p"], "method": head["method"]}
         pt = head["pre_trend"]
         if pt:
@@ -2977,13 +3015,25 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
             row(name, "unit-level estimators", ran=False,
                 note="left out: the unit bootstrap and cluster SEs need more treated units; the gap-series rows "
                      "above replace them")
+        row(f"timing (±{max_shift})", "does the conclusion survive date errors?", ran=False, kind="inference",
+            note=f"left out: the date-robust estimator of did_timing_sensitivity needs more treated units; re-run "
+                 f"did_single_treated with t0 moved by ±{max_shift} periods instead")
         warns.append(f"Only {n_tr} treated {'cluster' if cluster else 'unit'}(s): the matrix uses the gap series "
-                     "(did_single_treated); unit-level rows are left out and say why.")
+                     "(did_single_treated); unit-level rows are left out and say why."
+                     + (f" control='{control}' does not apply there (the controls are every untreated unit)."
+                        if control != "never" else ""))
     else:
         kw = dict(control=control, anticipation=anticipation, n_boot=n_boot, seed=seed, cluster=cluster, alpha=alpha,
                   show=False)
         base = att_gt(d, unit, time, y, gvar, **kw)
         o = base["overall"]
+        warns.extend(f"att_gt: {m}" for m in base["warnings"])
+        if 0 < n_tr <= 3:
+            warns.append(f"Only {n_tr} treated {'cluster' if cluster else 'unit'}(s), adopting at {len(dates)} dates: "
+                         "the unit-level rows below (bootstrap, permutation, placebo date, timing) are not reliable "
+                         "with so few treated units, and the gap-series route needs one date. Analyse each treated "
+                         "unit with did_single_treated against the never-treated units, and read this matrix as "
+                         "descriptive only.")
         headline = {"estimate": o["estimate"], "se": o["se"], "p": o["p"], "method": "att_gt"}
         row("pre-trends (Callaway-Sant'Anna)", f"joint Wald test of the pre-period cells ({base['pretrend'].get('test')})",
             p=base["pretrend_p"] if base["pretrend_p"] is not None else np.nan,

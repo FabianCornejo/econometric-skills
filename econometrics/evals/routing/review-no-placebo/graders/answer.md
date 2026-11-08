@@ -1,6 +1,6 @@
 ---
 type: regex
-pattern: '(did_falsification|placebo|n[aã]o (prova|confirma|valida|é evid)|does not (prove|show)|n[aã]o rejeitar|baixo poder|pouco poder|\bpoder\b|\bMDE\b|efeito m[ií]nimo detect)'
+pattern: '(did_falsification|\bMDE\b|efeito m[ií]nimo detect|poder (estat[ií]stico|do teste)|baixo poder|pouco poder|n[aã]o (prova|confirma|valida|garante)\w*.{0,60}tend[eê]ncias paralelas|does not (prove|show|confirm)|testes? (de )?placebo|placebos? (de|no|em|com) (data|tempo|resultado|per[ií]odo|vari[aá]vel))'
 flags: i
 target: last_message
 ---
