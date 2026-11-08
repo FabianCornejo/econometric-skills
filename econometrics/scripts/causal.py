@@ -2729,6 +2729,28 @@ def _sts_ljung_box(e: np.ndarray, T0: int, lags: int):
     return float(q), float(stats.chi2.sf(q, lags - 1))
 
 
+def _sts_regular(idx) -> bool:
+    """Equally spaced dates or periods: a PeriodIndex by its ordinals; dates by an inferred frequency, or, failing
+    that (mid-month dates, business days with holidays), by equal steps in days, months, quarters or years."""
+    if isinstance(idx, pd.PeriodIndex):
+        o = np.diff(idx.asi8)
+        return bool(len(o) == 0 or (o == o[0]).all())
+    di = pd.DatetimeIndex(idx)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if pd.infer_freq(di) is not None:
+            return True
+    days = np.diff(di.asi8) / 8.64e13
+    if np.allclose(days, days[0]):
+        return True
+    months = np.diff(di.year * 12 + di.month)
+    for step in (1, 3, 12):
+        if (months == step).all():
+            return True
+    b = np.diff(np.asarray(pd.bdate_range(di.min(), di.max()).get_indexer(di)))
+    return bool((b >= 1).all() and (b <= 2).all() and np.mean(b == 1) > 0.9)
+
+
 def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, t0, controls: list | None = None,
                        alpha: float = ALPHA, n_sim: int = 1999, blocks: int = 4, seed: int = 0,
                        show: bool = True) -> dict:
@@ -2751,8 +2773,8 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
     pre = post or a 6-period pre, AR(1) ρ from 0 to 0.7, 2000 series each), the 5% test rejected 5.1–7.4% under no
     effect and the 95% CI covered 94%; HAC / Newey-West with 2 lags on the gap of the 2026-11-07 two-store case
     rejected 17.5% in the same test (17.8% in the 2000-panel recheck of that session): do not report HAC, Newey-West
-    or Prais-Winsten p-values here. At least 5 pre and 5 post periods (10 in all) are required; below 20 periods the
-    test rejects 7-9% at ρ = 0.4 (warned).
+    or Prais-Winsten p-values here. At least 6 pre and 6 post periods are required; below 20 periods the test rejected
+    6-8% at ρ ≤ 0.4 and 8-9% at ρ = 0.7 (12 to 20 periods; warned).
     Second route: `blocks` block means per segment and a Welch t test between them (no AR(1) assumption; it
     over-rejects when ρ is high: 14% at ρ = 0.7, T = 24). Both have the same point estimate, so they are compared on
     the inference (does each reject at alpha?), not on the number.
@@ -2808,25 +2830,25 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
         if len(periods) > 1 and not np.allclose(np.diff(periods.astype(float)), np.diff(periods.astype(float))[0]):
             w.append(f"The {time} values are not equally spaced: the AR(1) model assumes one step between periods; "
                      "fill or recode the periods first.")
-    elif pd.api.types.is_datetime64_any_dtype(wide.index):
-        if len(periods) > 2 and pd.infer_freq(pd.DatetimeIndex(periods)) is None:
+    elif pd.api.types.is_datetime64_any_dtype(wide.index) or isinstance(wide.index, pd.PeriodIndex):
+        if len(periods) > 2 and not _sts_regular(wide.index):
             w.append(f"The {time} dates do not follow a regular frequency (a gap, or mixed spacing): the AR(1) model "
                      "assumes one step between periods; fill or recode the periods first.")
     else:
         w.append(f"The spacing of {time} was not checked (not numeric or dates): the AR(1) model assumes equally "
                  "spaced periods.")
-    gap = wide[tr].mean(1) - wide[ctl].mean(1)
+    gap = wide[tr].mean(axis=1) - wide[ctl].mean(axis=1)
     post = periods >= t0
     if post.any() and post.argmax() != (~post).sum():
         raise ValueError("did_single_treated: t0 must split the periods into a pre block followed by a post block")
     T0, T1 = int((~post).sum()), int(post.sum())
-    if min(T0, T1) < 5 or T0 + T1 < 10:
-        raise ValueError(f"did_single_treated: {T0} pre and {T1} post periods; at least 5 of each (10 in all) are "
-                         "needed: with fewer, the calibrated test rejected 7-12% of the time for a 5% test in the "
-                         "skill's checks and white-noise gaps were often read as a unit root")
+    if min(T0, T1) < 6:
+        raise ValueError(f"did_single_treated: {T0} pre and {T1} post periods; at least 6 of each are needed: with 5 "
+                         "and 5 the calibrated test rejected 10-11% of the time for a 5% test at ρ ≥ 0.4 in the "
+                         "skill's checks, and short gaps were often read as a unit root")
     g = gap.to_numpy(float)
     dev = np.r_[g[:T0] - g[:T0].mean(), g[T0:] - g[T0:].mean()]
-    if np.sum(dev ** 2) <= 1e-20 * max(1.0, np.sum(g ** 2)):
+    if np.max(np.abs(dev)) <= 1e-12 * np.max(np.abs(g)):
         raise ValueError("did_single_treated: the gap does not vary around its pre and post means (a constant or a "
                          "pure step): there is no noise to base inference on; report the difference itself")
     rng = np.random.default_rng(seed)
@@ -2852,14 +2874,15 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
     rej_main = main["p"] <= alpha
     agree = None if blk is None or not np.isfinite(blk["p"]) else bool(rej_main == (blk["p"] <= alpha))
     if len(g) < 20:
-        w.append(f"Only {len(g)} periods: the calibrated test rejected 7-9% of the time for a 5% test with 12-16 "
-                 "periods and ρ = 0.4 in the skill's checks (5-7% from 24 periods on); read the p-value as a little "
-                 "optimistic.")
+        w.append(f"Only {len(g)} periods: below 20 the calibrated test rejected 6-8% of the time for a 5% test at "
+                 "ρ ≤ 0.4 and 8-9% at ρ = 0.7 in the skill's checks (12 to 20 periods; 5-7% from 24 on); read the "
+                 "p-value as a little optimistic.")
     if main["rho_clipped"]:
         w.append("The gap is close to a unit root (estimated ρ above 0.95, clipped): the effect is not distinguishable "
                  "from a drifting gap with this series; the CI is not reliable."
-                 + (" With fewer than 20 periods this also happens to series with no persistence (about 1-4% of "
-                    "white-noise gaps with 12-16 periods): the series is too short to tell." if len(g) < 20 else ""))
+                 + (" With fewer than 20 periods this also happens with moderate persistence: in the skill's checks "
+                    "it hit about 18% of gaps with ρ = 0.4 and 4% of white-noise gaps with 12 periods, and 5% and "
+                    "0.5% with 16; the series is too short to tell." if len(g) < 20 else ""))
     elif main["rho"] > 0.5:
         w.append(f"The gap is persistent (ρ ≈ {main['rho']:.2f}): the CI is wide, and the block-means route "
                  "over-rejects at this persistence (14% for a 5% test at ρ = 0.7 with 24 periods in the skill's "
@@ -2951,6 +2974,8 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
     uninformative (names), verdict, warnings."""
     if not 0 < alpha < 1:
         raise ValueError("alpha must be in (0, 1)")
+    if anticipation < 0 or int(anticipation) != anticipation:
+        raise ValueError("did_falsification: anticipation must be a non-negative integer")
     po = list(placebo_outcomes or [])
     zq = stats.norm.ppf(1 - alpha / 2) + stats.norm.ppf(0.8)
     d = df.copy()
@@ -2980,6 +3005,10 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
             raise ValueError(f"did_falsification: the headline estimate (did_single_treated, {n_tr} treated) cannot "
                              f"be computed on these data: {e}") from e
         warns.extend(head["warnings"])
+        if anticipation:
+            warns.append(f"anticipation = {anticipation}: the gap-series headline puts the {anticipation} period(s) "
+                         "before the recorded date in the post mean (an ATT from g − anticipation), while att_gt and "
+                         "did_imputation report anticipation periods apart; the estimands differ.")
         headline = {"estimate": head["estimate"], "se": head["se"], "p": head["p"], "method": head["method"]}
         pt = head["pre_trend"]
         if pt:
@@ -2990,14 +3019,14 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
                 "the post-minus-pre contrast")
         else:
             row("pre-period trend (gap series)", "slope of the gap before treatment", ran=False,
-                note="fewer than 6 pre periods")
+                note="fewer than 12 pre periods (the trend test needs 12)")
         pp = head["pre_placebo"]
         if pp:
             row("placebo date (gap series)", f"level shift at a fake date ({pp['fake_t0']}) before treatment",
                 pp["estimate"], pp["se"], pp["p"], pp["mde"])
         else:
             row("placebo date (gap series)", "level shift at a fake date before treatment", ran=False,
-                note="fewer than 8 pre periods")
+                note="fewer than 16 pre periods (the step placebo needs 16)")
         for v in po:
             try:
                 r = did_single_treated(d, unit, time, v, tr_units, t0, alpha=alpha, seed=seed, show=False)

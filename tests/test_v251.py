@@ -30,6 +30,8 @@ about ±1 point, so a size band of [0.03, 0.075] separates a correct test from o
     spacing; short-series warning; Ljung-Box false-alarm rate; unit-root flag on random walks; two treated units;
     did_falsification with treated units at two dates, anticipation in the gap-series branch, headline errors;
     the review-no-placebo grader against a wrong review.
+12. After the second review round: the matrix notes give the real minimums; mid-month dates and Periods are regular;
+    the degenerate-gap check is scale-free; negative anticipation is an error; the estimand difference is warned.
 
 Run from the repository root:  python3 tests/test_v251.py
 """
@@ -219,7 +221,7 @@ check("no step placebo with fewer than 16 pre periods and no trend test with few
       short["pre_placebo"] is None and short["pre_trend"] is None and nulls[0]["pre_placebo"] is not None)
 for bad, kw in (("unbalanced", dict(df=panel(np.zeros(24)).drop(index=3), t0=13)),
                 ("too few post periods", dict(df=panel(np.zeros(24)), t0=23)),
-                ("four pre periods", dict(df=panel(np.arange(24.0) % 3), t0=5)),
+                ("five pre periods", dict(df=panel(np.arange(24.0) % 3), t0=6)),
                 ("constant gap", dict(df=panel(np.ones(24)), t0=13)),
                 ("pure step gap", dict(df=panel(1.0 * (np.arange(24) >= 12)), t0=13)),
                 ("unknown treated unit", dict(df=panel(np.zeros(24)), t0=13, treated="Z"))):
@@ -485,6 +487,33 @@ q_s, p_s = ca._sts_ljung_box(e1, len(e1) + 1, 5)        # one segment holds ever
 lb_sm = acorr_ljungbox(e1, lags=[5], model_df=1, return_df=True).iloc[0]
 check("Ljung-Box on one segment = statsmodels acorr_ljungbox(model_df=1): Q and p",
       abs(q_s - lb_sm["lb_stat"]) < 1e-9 and abs(p_s - lb_sm["lb_pvalue"]) < 1e-12, f"Q {q_s:.4f} vs {lb_sm['lb_stat']:.4f}")
+
+# ---------------------------------------------------------------- 12. after the second review round
+r_low = ca.did_falsification(panel(ar1(np.random.default_rng(19), 1, 14, 0.2)[0]).assign(
+    g=lambda x: np.where(x.u == "A", 8, 0)), "u", "t", "y", "g", show=False)["table"]
+check("did_falsification notes give the real minimums (12 for the trend test, 16 for the step placebo)",
+      "fewer than 12" in r_low.loc["pre-period trend (gap series)", "note"]
+      and "fewer than 16" in r_low.loc["placebo date (gap series)", "note"])
+mid = dt2.copy()
+mid15 = pd.date_range("2024-01-15", periods=24, freq="MS") + pd.Timedelta(days=14)
+mid["t"] = np.r_[mid15, mid15]
+r_mid = ca.did_single_treated(mid, "u", "t", "y", "A", mid15[12], show=False)
+per = dt2.copy()
+pidx = pd.period_range("2024-01", periods=24, freq="M")
+per["t"] = np.r_[pidx, pidx]
+r_per = ca.did_single_treated(per, "u", "t", "y", "A", pidx[12], show=False)
+check("mid-month monthly dates and monthly Periods are regular (no spacing warning)",
+      not any("regular frequency" in m or "not checked" in m for m in r_mid["warnings"] + r_per["warnings"]))
+tiny = panel(1e-11 * ar1(np.random.default_rng(20), 1, 24, 0.0)[0] + 1.0)
+check("degenerate-gap check is scale-free: a gap at level 1 with noise 1e-11 is accepted",
+      np.isfinite(ca.did_single_treated(tiny, "u", "t", "y", "A", 13, show=False)["p"]))
+try:
+    ca.did_falsification(one, "u", "t", "y", "g", anticipation=-1, show=False)
+    check("did_falsification: negative anticipation is an error", False)
+except ValueError:
+    check("did_falsification: negative anticipation is an error", True)
+check("did_falsification, gap-series branch with anticipation: the estimand difference is warned",
+      any("estimands differ" in m for m in fa["warnings"]))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
