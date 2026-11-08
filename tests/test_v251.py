@@ -13,6 +13,12 @@ about ±1 point, so a size band of [0.03, 0.075] separates a correct test from o
 4. Pieces checked by another path: the lag weights against a Toeplitz quadratic form; the AR(1) variance of the
    contrast against a brute-force Monte Carlo variance; the bias correction of ρ; the point estimate against the
    2×2 DiD of means from groupby; the second route against scipy's Welch t test on block means.
+7. randomization_inference(cluster=): permuting counties over-rejects with state-level assignment, permuting
+   states does not; counts of assignments; cluster = unit reproduces the unit-level result; error when gvar varies.
+8. did_timing_sensitivity: dropped cohorts by their original dates; the estimand note.
+9. did_falsification: findings by kind (a falsification row rejects; an inference row contradicts the headline),
+   planted pre-trend and moved placebo outcome found, uninformative placebo flagged, gap-series rows with one
+   treated unit.
 6. did_design: the few-treated warning and the ASK THE USER lines appear in canonical and staggered designs
    and NOT with many treated units or without a gvar (dose, reversals); att_gt warns with one treated unit.
 5. Pre-period checks (trend test size and power; the step placebo is weak against a trend, so the trend test is
@@ -257,6 +263,113 @@ p8["g"] = np.where(p8.groupby("u")["d"].transform("max") > 0, 7, 0)
 a8 = ca.att_gt(p8, "u", "t", "y", "g", n_boot=19, show=False)
 check("att_gt: one treated unit → warning pointing to did_single_treated; eight treated → none",
       any("did_single_treated" in m for m in a1["warnings"]) and not any("did_single_treated" in m for m in a8["warnings"]))
+
+# ---------------------------------------------------------------- 7. randomization_inference(cluster=) (front C)
+def state_panel(rng, n_states=12, n_treated=4, counties=5, T=8, g=5, effect=0.0):
+    """Treatment assigned by state; state-by-period shocks (sd 1) shared by its counties, county noise sd 0.5."""
+    rows = []
+    for s_ in range(n_states):
+        shock = rng.standard_normal(T)
+        gs = g if s_ < n_treated else 0
+        for c_ in range(counties):
+            a = rng.standard_normal()
+            for t in range(1, T + 1):
+                rows.append({"county": f"{s_}-{c_}", "state": s_, "t": t, "g": gs,
+                             "y": a + shock[t - 1] + 0.5 * rng.standard_normal() + effect * (gs > 0 and t >= gs)})
+    return pd.DataFrame(rows)
+
+
+rng7 = np.random.default_rng(77)
+rc = rs_ = 0
+for rep in range(200):
+    sp = state_panel(rng7)
+    rc += ca.randomization_inference(sp, "county", "t", "y", "g", n_perm=199, ci=False, seed=rep)["p"] <= 0.05
+    rs_ += ca.randomization_inference(sp, "county", "t", "y", "g", n_perm=199, ci=False, seed=rep,
+                                      cluster="state")["p"] <= 0.05
+check("permutation with state-level assignment and state shocks: permuting counties over-rejects (≥ 0.15), "
+      "permuting states (cluster=) does not (≤ 0.09); 200 panels", rc / 200 >= 0.15 and rs_ / 200 <= 0.09,
+      f"counties {rc / 200:.3f}, states {rs_ / 200:.3f}")
+sp = state_panel(np.random.default_rng(1))
+r_st = ca.randomization_inference(sp, "county", "t", "y", "g", n_perm=999, ci=False, seed=0, cluster="state")
+from math import comb  # noqa: E402
+check("cluster=: assignments counted over clusters (C(12, 4) = 495, exact)", r_st["possible_assignments"] == comb(12, 4)
+      and r_st["n_units"] == 12 and r_st["n_treated"] == 4 and r_st["exact"])
+sp["unit_as_cluster"] = sp["county"]
+r_u = ca.randomization_inference(sp, "county", "t", "y", "g", n_perm=199, ci=False, seed=3)
+r_c = ca.randomization_inference(sp, "county", "t", "y", "g", n_perm=199, ci=False, seed=3, cluster="unit_as_cluster")
+check("cluster equal to the unit gives the unit-level result", r_u["p"] == r_c["p"] and r_u["estimate"] == r_c["estimate"])
+bad = sp.copy()
+bad.loc[bad.county == "0-0", "g"] = 6
+try:
+    ca.randomization_inference(bad, "county", "t", "y", "g", n_perm=99, ci=False, cluster="state")
+    check("cluster=: error when gvar varies within a cluster", False)
+except ValueError:
+    check("cluster=: error when gvar varies within a cluster", True)
+
+# ---------------------------------------------------------------- 8. did_timing_sensitivity: original dates (front C)
+rng8 = np.random.default_rng(8)
+rows = []
+for i in range(30):
+    g = 2 if i < 8 else (7 if i < 16 else 0)
+    for t in range(1, 11):
+        rows.append({"u": i, "t": t, "g": g, "y": 0.1 * t + (g > 0 and t >= g) + rng8.standard_normal()})
+tp = pd.DataFrame(rows)
+ts = ca.did_timing_sensitivity(tp, "u", "t", "y", "g", max_shift=1, n_boot=49, show=False)
+check("timing: the cohort with no date-robust base period (g = 2: base 2 + 1 − 2 − 1 = 0, outside the panel) is "
+      "reported by its original date 2, not 3; the shifted dates are kept apart",
+      list(ts["cohorts_dropped_robust"]) == [2] and list(ts["cohorts_dropped_robust_shifted"]) == [3],
+      f"original {ts['cohorts_dropped_robust']}, shifted {ts['cohorts_dropped_robust_shifted']}")
+check("timing: the estimand note says the date-robust ATT is a later-exposure ATT",
+      "later-exposure" in ts["estimand_note"])
+
+# ---------------------------------------------------------------- 9. did_falsification (front C)
+def stag(rng, effect=1.0, pre_trend=0.0, placebo_effect=0.0, n=40, T=12):
+    rows = []
+    for i in range(n):
+        g = 7 if i < n // 4 else (9 if i < n // 2 else 0)
+        a = rng.standard_normal()
+        for t in range(1, T + 1):
+            on = g > 0 and t >= g
+            rows.append({"u": i, "t": t, "g": g,
+                         "y": a + 0.1 * t + effect * on + pre_trend * (g > 0) * t + rng.standard_normal(),
+                         "z": rng.standard_normal() + placebo_effect * on})
+    return pd.DataFrame(rows)
+
+
+rng9 = np.random.default_rng(9)
+clean = ca.did_falsification(stag(rng9), "u", "t", "y", "g", placebo_outcomes=["z"], n_boot=99, n_perm=199,
+                             show=False)
+tabc = clean["table"]
+check("falsification, clean design with a true effect: the permutation agrees with the headline and is not a "
+      "finding (inference rows are findings only when they contradict it)",
+      bool(tabc.loc["permutation", "rejects"]) and clean["headline"]["p"] <= 0.05
+      and not bool(tabc.loc["permutation", "finding"]))
+check("falsification, clean design: no falsification row is a finding",
+      not any(tabc.loc[tabc["kind"] == "falsification", "finding"].fillna(False)), clean["verdict"][:90])
+check("falsification: the verdict never says 'passed'", "passed" not in clean["verdict"].lower())
+trended = ca.did_falsification(stag(rng9, pre_trend=0.4), "u", "t", "y", "g", n_boot=99, n_perm=199, show=False)
+check("falsification, planted pre-trend in the treated: a pre-trend row is a finding",
+      any(c.startswith("pre-trends") for c in trended["rejected"]), str(trended["rejected"]))
+moved = ca.did_falsification(stag(rng9, placebo_effect=1.5), "u", "t", "y", "g", placebo_outcomes=["z"], n_boot=99,
+                             n_perm=199, show=False)
+check("falsification: a placebo outcome moved by the treatment is a finding", "placebo outcome: z" in moved["rejected"])
+noisy = stag(rng9)
+noisy["w"] = 50 * np.random.default_rng(5).standard_normal(len(noisy))
+nz = ca.did_falsification(noisy, "u", "t", "y", "g", placebo_outcomes=["w"], n_boot=99, n_perm=199, show=False)
+check("falsification: a placebo outcome with MDE ≥ |ATT| is marked uninformative, not as evidence",
+      "placebo outcome: w" in nz["uninformative"] or "placebo outcome: w" in nz["rejected"])
+T = 24
+one = pd.DataFrame({"u": ["A"] * T + ["B"] * T, "t": list(range(1, T + 1)) * 2,
+                    "y": np.random.default_rng(10).standard_normal(2 * T)})
+one["g"] = np.where(one.u == "A", 13, 0)
+fo = ca.did_falsification(one, "u", "t", "y", "g", show=False)
+ds = ca.did_single_treated(one, "u", "t", "y", ["A"], 13, seed=0, show=False)
+check("falsification with one treated unit: gap-series rows; unit-level rows left out with a reason",
+      fo["few_treated"] and not fo["table"].loc["permutation", "ran"]
+      and "assignments" in fo["table"].loc["permutation", "note"]
+      and not fo["table"].loc["pre-trends (Callaway-Sant'Anna)", "ran"])
+check("falsification with one treated unit: the trend row's MDE is the slope MDE × (T0 + T1)/2",
+      abs(fo["table"].loc["pre-period trend (gap series)", "mde"] - ds["pre_trend"]["mde"] * 12) < 1e-9)
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

@@ -48,11 +48,16 @@ Panel designs
     did_uncertain_dates(df, ..., g_low, g_high)   adoption known only within a window per unit (phased rollouts)
     synth(df, unit, time, y, treated, t0)         synthetic control (Abadie et al., 2010) + placebo-in-space inference
     randomization_inference(df, unit, time, y, gvar)  Fisher randomization p-value and CI for a DiD with few
-                                                  treated units (permutes which units adopt), any statistic
+                                                  treated units (permutes which units adopt, or which clusters with
+                                                  cluster=), any statistic
     did_single_treated(df, unit, time, y, treated, t0)  DiD with one (or a handful of) treated unit(s) over a short
                                                   series (v2.5.1): inference from the treated−control gap, AR(1) t
                                                   calibrated by simulation (median-unbiased ρ), block-means second
                                                   route, pre-period trend test and placebo
+    did_falsification(df, unit, time, y, gvar)    the Reviewer's falsification matrix (v2.5.1): pre-trends (CS and
+                                                  imputation), placebo date, placebo outcomes, permutation (cluster=
+                                                  for the assignment level), timing, CS vs imputation; each with its
+                                                  MDE, never "passed"; gap-series rows with 1-3 treated units
 
 Notes: for production RD use `rdrobust` (robust bias-corrected CIs) if installed;
 for staggered DiD the `csdid`/`differences` packages offer more options. The
@@ -1320,7 +1325,9 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
        anticipation = 2·max_shift, so the base period (g-max_shift-1) is untreated under
        every date in the window and the post periods are treated under every date in it.
        It estimates the effect from g+max_shift onward (a later-exposure ATT when effects
-       are dynamic), at the cost of fewer usable cohorts and wider CIs.
+       are dynamic), at the cost of fewer usable cohorts and wider CIs. cohorts_dropped_robust lists the cohorts it
+       leaves out by their ORIGINAL dates (v2.5.1; before, the shifted dates g+max_shift were reported), and
+       estimand_note says that the estimand changes.
     Verdict: 'survives' if the date-robust CI excludes 0 with the same sign as the
     baseline; otherwise the conclusion depends on the exact date.
     covariates / est_method / x_periods / cluster / alpha: passed to att_gt, so the check uses the same specification
@@ -1348,8 +1355,13 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
     same_sign = np.sign(ro["estimate"]) == np.sign(b["att"])
     survives = bool(same_sign and np.isfinite(ro["se"]) and (ro["ci_low"] > 0 or ro["ci_high"] < 0))
     swing = float((tab["att"] - b["att"]).abs().max() / abs(b["att"])) if b["att"] else np.nan
+    dropped_orig = [g - max_shift for g in rob["cohorts_dropped"]]
+    note = (f"The date-robust estimate is a later-exposure ATT: it averages the effect from g+{max_shift} onward "
+            f"(not from g), so with dynamic effects it is not the same estimand as the baseline ATT."
+            + (f" Cohorts left out of it (original dates): {dropped_orig}." if dropped_orig else ""))
     out = {"shifts": tab, "date_robust": ro, "date_robust_dynamic": rob["dynamic"], "survives": survives,
-           "max_relative_swing": swing, "cohorts_dropped_robust": rob["cohorts_dropped"]}
+           "max_relative_swing": swing, "cohorts_dropped_robust": dropped_orig,
+           "cohorts_dropped_robust_shifted": rob["cohorts_dropped"], "estimand_note": note}
     if show:
         print(f"\nTiming sensitivity (Callaway-Sant'Anna, dates shifted by -{max_shift}…+{max_shift} periods)")
         print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
@@ -1358,7 +1370,8 @@ def did_timing_sensitivity(df: pd.DataFrame, unit: str, time: str, y: str, gvar:
               " the date-robust line below is the verdict)")
         print(f"Date-robust ATT (true date anywhere within ±{max_shift}): {ro['estimate']:.4f} "
               f"(SE {ro['se']:.4f}, {100 * (1 - alpha):g}% CI {ro['ci_low']:.4f} to {ro['ci_high']:.4f})"
-              + (f"; cohorts dropped: {rob['cohorts_dropped']}" if rob["cohorts_dropped"] else ""))
+              + (f"; cohorts dropped (original dates): {dropped_orig}" if dropped_orig else ""))
+        print("  Note: " + note)
         print("  → " + (f"the conclusion survives date errors of up to ±{max_shift} periods." if survives else
                         f"the conclusion DEPENDS on the exact date: with an error of up to ±{max_shift} periods the "
                         "effect is not distinguishable from zero (or flips sign). Pin the date down with sources "
@@ -2460,7 +2473,8 @@ def synth(df: pd.DataFrame, unit: str, time: str, y: str, treated, t0, donors: l
 # Randomization inference for DiD with few treated units
 # =============================================================================
 def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str, n_perm: int = 999,
-                            stat=None, ci: bool = True, ci_points: int = 61, seed: int = 0, alpha: float = ALPHA) -> dict:
+                            stat=None, ci: bool = True, ci_points: int = 61, seed: int = 0, alpha: float = ALPHA,
+                            cluster: str | None = None) -> dict:
     """Fisher randomization inference for a difference-in-differences when only a few units are
     treated (a law adopted by 6 of 27 states): clustered SEs and even the wild cluster bootstrap
     become unreliable with very few treated clusters (MacKinnon & Webb 2017, 2018).
@@ -2478,19 +2492,35 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     Validity rests on exchangeability: the treated units must be comparable to the others in
     their error variance and dynamics. If the adopters are systematically more volatile (e.g.
     small states), randomization inference over-rejects too; use Ferman & Pinto (2019) or
-    Conley & Taber (2011). The smallest attainable p-value is 1 / (number of possible assignments)."""
+    Conley & Taber (2011). The smallest attainable p-value is 1 / (number of possible assignments).
+    cluster (v2.5.1): permute at the level of assignment. When a law is adopted by states and the units are counties,
+    the observed adoption dates are reassigned to random sets of STATES (every county of a state gets its state's date);
+    permuting counties would break the within-state dependence and over-reject. The cluster column must be constant
+    within unit, and gvar constant within cluster (an error otherwise). n_units and n_treated then count clusters."""
     from itertools import combinations
     from math import comb
     d = df[[unit, time, y, gvar]].dropna(subset=[unit, time, y]).copy()
     d[gvar] = d[gvar].fillna(0)
-    units = pd.Index(sorted(d[unit].unique(), key=str))
-    g_unit = d.groupby(unit)[gvar].first().reindex(units)
+    if cluster:
+        d[cluster] = df.loc[d.index, cluster]
+        if d[cluster].isna().any():
+            raise ValueError(f"randomization_inference: missing values in cluster column '{cluster}'")
+        if (d.groupby(unit)[cluster].nunique() > 1).any():
+            raise ValueError(f"randomization_inference: cluster '{cluster}' must be constant within each {unit}")
+        if (d.groupby(cluster)[gvar].nunique() > 1).any():
+            raise ValueError(f"randomization_inference: {gvar} varies within {cluster}; the treatment is not assigned "
+                             f"at the {cluster} level, so permuting {cluster}s is not the assignment mechanism")
+        key = cluster
+    else:
+        key = unit
+    units = pd.Index(sorted(d[key].unique(), key=str))
+    g_unit = d.groupby(key)[gvar].first().reindex(units)
     treated = list(g_unit[g_unit > 0].index)
     N, N1 = len(units), len(treated)
     if N1 == 0 or N1 == N:
-        raise ValueError("need both treated and never-treated units")
+        raise ValueError("need both treated and never-treated units" + (f" ({cluster}s)" if cluster else ""))
     dates_obs = g_unit[treated].to_numpy()
-    u_idx = units.get_indexer(d[unit])
+    u_idx = units.get_indexer(d[key])
     tt = d[time].to_numpy()
     n_assign = comb(N, N1)
     rng = np.random.default_rng(seed)
@@ -2557,8 +2587,10 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
         warn.append(f"only {n_assign} possible assignments: the smallest attainable p-value is {1 / n_assign:.3f}")
     for w in warn:
         warnings.warn(w)
+    if cluster:
+        method += f", dates permuted across {cluster}s"
     return {"estimand": "ATT (DiD)", "method": method, "estimate": est, "p": p, "ci_low": lo, "ci_high": hi,
-            "n_units": N, "n_treated": N1, "possible_assignments": n_assign, "exact": exact,
+            "n_units": N, "n_treated": N1, "possible_assignments": n_assign, "exact": exact, "cluster": cluster,
             "n_perm": len(sets), "n": len(d), "warnings": warn}
 
 
@@ -2850,5 +2882,202 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
                   f"{placebo['p']:.3f}, MDE {placebo['mde']:.3g} (does not reject ≠ parallel trends hold)")
         print("  HAC / Newey-West / Prais-Winsten p-values on this series over-reject with so few periods: not used.")
         for m in w:
+            print("  WARNING: " + m)
+    return out
+
+
+# =============================================================================
+# Falsification matrix for a DiD (v2.5.1)
+# =============================================================================
+def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
+                      placebo_outcomes: list[str] | None = None, cluster: str | None = None, control: str = "never",
+                      anticipation: int = 0, max_shift: int = 1, n_boot: int = 199, n_perm: int = 999,
+                      alpha: float = ALPHA, seed: int = 0, show: bool = True) -> dict:
+    """The Reviewer's falsification matrix for a binary, absorbing DiD (check the design with did_design first): every
+    check the skill has, run on the same data, with what each checks, its p-value, the smallest departure it could
+    have detected (MDE ≈ (z_{1−α/2} + z_{0.8})·SE, 80% power, where an SE exists) and what not rejecting does NOT
+    show. The matrix never says "passed": a check that does not reject with an MDE at least as large as the headline
+    ATT is marked uninformative (it could not have seen a problem of the size of the effect).
+    Two kinds of rows: falsification checks (a finding when they reject) and inference checks on the effect itself
+    (permutation, timing: a finding when they contradict the headline significance at alpha, e.g. att_gt
+    significant and the permutation p above alpha).
+
+    Rows (many treated units or clusters):
+      pre-trends (Callaway-Sant'Anna)   joint Wald test of the pre-period cells of att_gt
+      pre-trends (imputation)           did_imputation's test on untreated observations only
+      placebo date                      att_gt on the periods before the first adoption, every treated unit given a
+                                        fake date at their midpoint (at least 4 such periods)
+      placebo outcome: <name>           att_gt on each variable in placebo_outcomes (outcomes the treatment cannot
+                                        move, e.g. measured before it or unrelated to it), same specification
+      permutation                       randomization_inference, dates permuted across units, or across clusters
+                                        with cluster= (the level of assignment)
+      timing (±max_shift)               did_timing_sensitivity: does the conclusion survive date errors?
+      CS vs imputation                  did_compare: a gap at alpha points to the pre-trends
+    With 1 to 3 treated units (or clusters) and one adoption date, the unit-level rows cannot work (the permutation
+    has a handful of assignments, the unit bootstrap has no variation to draw from); the matrix uses
+    did_single_treated instead: its pre-period trend test and step placebo, and placebo outcomes through the same
+    route, and says why the other rows are left out.
+    Each sub-check that cannot run on these data (a ValueError) is listed with the reason, not dropped.
+    Returns: table (one row per check), headline (att_gt overall or did_single_treated), rejected (names),
+    uninformative (names), verdict, warnings."""
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    po = list(placebo_outcomes or [])
+    zq = stats.norm.ppf(1 - alpha / 2) + stats.norm.ppf(0.8)
+    d = df.copy()
+    d[gvar] = d[gvar].fillna(0)
+    key = cluster or unit
+    g_key = d.groupby(key)[gvar].max()
+    n_tr = int((g_key > 0).sum())
+    dates = np.sort(d.loc[d[gvar] > 0, gvar].unique())
+    rows, warns = [], []
+
+    def row(check, what, est=np.nan, se=np.nan, p=np.nan, mde=np.nan, note="", ran=True, kind="falsification"):
+        rows.append({"check": check, "kind": kind, "what it checks": what, "estimate": est, "se": se, "p": p,
+                     "mde": mde, "rejects": (bool(p <= alpha) if ran and np.isfinite(p) else None), "ran": ran,
+                     "note": note})
+
+    few = 0 < n_tr <= 3 and len(dates) == 1
+    if few:
+        tr_units = list(d.loc[d[gvar] > 0, unit].unique())
+        t0 = dates[0]
+        head = did_single_treated(d, unit, time, y, tr_units, t0, alpha=alpha, seed=seed, show=False)
+        headline = {"estimate": head["estimate"], "se": head["se"], "p": head["p"], "method": head["method"]}
+        pt = head["pre_trend"]
+        if pt:
+            span = (head["pre_periods"] + head["post_periods"]) / 2
+            row("pre-period trend (gap series)", "slope of the treated−control gap before treatment", pt["slope"],
+                pt["se"], pt["p"], pt["mde"] * span,
+                f"estimate = slope per period; MDE = smallest detectable slope × {span:g}, the bias it would add to "
+                "the post-minus-pre contrast")
+        else:
+            row("pre-period trend (gap series)", "slope of the gap before treatment", ran=False,
+                note="fewer than 6 pre periods")
+        pp = head["pre_placebo"]
+        if pp:
+            row("placebo date (gap series)", f"level shift at a fake date ({pp['fake_t0']}) before treatment",
+                pp["estimate"], pp["se"], pp["p"], pp["mde"])
+        else:
+            row("placebo date (gap series)", "level shift at a fake date before treatment", ran=False,
+                note="fewer than 8 pre periods")
+        for v in po:
+            try:
+                r = did_single_treated(d, unit, time, v, tr_units, t0, alpha=alpha, seed=seed, show=False)
+                row(f"placebo outcome: {v}", "an effect on an outcome the treatment cannot move", r["estimate"],
+                    r["se"], r["p"], r["mde"])
+            except ValueError as e:
+                row(f"placebo outcome: {v}", "an effect on an outcome the treatment cannot move", ran=False,
+                    note=f"not run: {e}")
+        n_keys = int(d[key].nunique())
+        from math import comb
+        row("permutation", "is the effect large among reassignments of the adoption dates?", ran=False, kind="inference",
+            note=f"left out: with {n_tr} treated of {n_keys} {'clusters' if cluster else 'units'} there are only "
+                 f"{comb(n_keys, n_tr)} assignments (smallest p {1 / comb(n_keys, n_tr):.3g})")
+        for name in ("pre-trends (Callaway-Sant'Anna)", "pre-trends (imputation)", "CS vs imputation"):
+            row(name, "unit-level estimators", ran=False,
+                note="left out: the unit bootstrap and cluster SEs need more treated units; the gap-series rows "
+                     "above replace them")
+        warns.append(f"Only {n_tr} treated {'cluster' if cluster else 'unit'}(s): the matrix uses the gap series "
+                     "(did_single_treated); unit-level rows are left out and say why.")
+    else:
+        kw = dict(control=control, anticipation=anticipation, n_boot=n_boot, seed=seed, cluster=cluster, alpha=alpha,
+                  show=False)
+        base = att_gt(d, unit, time, y, gvar, **kw)
+        o = base["overall"]
+        headline = {"estimate": o["estimate"], "se": o["se"], "p": o["p"], "method": "att_gt"}
+        row("pre-trends (Callaway-Sant'Anna)", f"joint Wald test of the pre-period cells ({base['pretrend'].get('test')})",
+            p=base["pretrend_p"] if base["pretrend_p"] is not None else np.nan,
+            note="joint test: no single MDE; with few clusters it over-rejects (see att_gt warnings)")
+        try:
+            bj = did_imputation(d, unit, time, y, gvar, anticipation=anticipation, cluster=cluster, alpha=alpha,
+                                show=False)
+            row("pre-trends (imputation)", "leads on untreated observations only (Borusyak-Jaravel-Spiess)",
+                p=bj["pretrend_p"] if bj["pretrend_p"] is not None else np.nan, note="joint test: no single MDE")
+        except ValueError as e:
+            row("pre-trends (imputation)", "leads on untreated observations", ran=False, note=f"not run: {e}")
+        pre_t = np.sort(d.loc[d[time] < dates.min(), time].unique())
+        if len(pre_t) >= 4:
+            fake = pre_t[len(pre_t) // 2]
+            dp = d[d[time] < dates.min()].copy()
+            dp["_gfake"] = np.where(dp[gvar] > 0, fake, 0)
+            try:
+                r = att_gt(dp, unit, time, y, "_gfake", **{**kw, "anticipation": 0})["overall"]
+                row("placebo date", f"an 'effect' at a fake date ({fake}) before any unit is treated", r["estimate"],
+                    r["se"], r["p"], zq * r["se"])
+            except ValueError as e:
+                row("placebo date", "an effect at a fake date before treatment", ran=False, note=f"not run: {e}")
+        else:
+            row("placebo date", "an effect at a fake date before treatment", ran=False,
+                note=f"only {len(pre_t)} periods before the first adoption (4 needed)")
+        for v in po:
+            try:
+                r = att_gt(d, unit, time, v, gvar, **kw)["overall"]
+                row(f"placebo outcome: {v}", "an effect on an outcome the treatment cannot move", r["estimate"],
+                    r["se"], r["p"], zq * r["se"])
+            except ValueError as e:
+                row(f"placebo outcome: {v}", "an effect on an outcome the treatment cannot move", ran=False,
+                    note=f"not run: {e}")
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                ri = randomization_inference(d, unit, time, y, gvar, n_perm=n_perm, ci=False, seed=seed, alpha=alpha,
+                                             cluster=cluster)
+            row("permutation", "is the effect large among reassignments of the adoption dates" +
+                (f" across {cluster}s" if cluster else "") + "? (TWFE statistic)", ri["estimate"], p=ri["p"], kind="inference",
+                note=f"{ri['possible_assignments']} possible assignments" + ("; " + "; ".join(ri["warnings"])
+                                                                            if ri["warnings"] else ""))
+        except ValueError as e:
+            row("permutation", "reassignments of the adoption dates", ran=False, note=f"not run: {e}")
+        try:
+            ts = did_timing_sensitivity(d, unit, time, y, gvar, max_shift=max_shift, control=control, n_boot=n_boot,
+                                        seed=seed, cluster=cluster, alpha=alpha, show=False)
+            dr = ts["date_robust"]
+            rows.append({"check": f"timing (±{max_shift})", "kind": "inference",
+                         "what it checks": "does the conclusion survive date errors?",
+                         "estimate": dr["estimate"], "se": dr["se"], "p": dr["p"], "mde": np.nan,
+                         "rejects": bool(dr["p"] <= alpha) if np.isfinite(dr["p"]) else None, "ran": True, "note": ("survives" if ts["survives"] else "the conclusion depends on the exact "
+                                               "date") + "; " + ts["estimand_note"]})
+        except ValueError as e:
+            row(f"timing (±{max_shift})", "does the conclusion survive date errors?", ran=False, note=f"not run: {e}",
+                kind="inference")
+        try:
+            cmp_ = did_compare(d, unit, time, y, gvar, control=control, anticipation=anticipation, cluster=cluster,
+                               n_boot=n_boot, seed=seed, alpha=alpha, show=False)
+            row("CS vs imputation", "gap between two estimators with different comparisons (points to pre-trends)",
+                cmp_["difference"], cmp_["diff_se"], cmp_["p"], zq * cmp_["diff_se"])
+        except ValueError as e:
+            row("CS vs imputation", "gap between two estimators", ran=False, note=f"not run: {e}")
+    tab = pd.DataFrame(rows).set_index("check")
+    att = abs(headline["estimate"])
+    head_sig = bool(np.isfinite(headline["p"]) and headline["p"] <= alpha)
+    # a falsification check is a finding when it rejects; an inference check when it contradicts the headline
+    tab["finding"] = [None if r["rejects"] is None else (bool(r["rejects"]) if r["kind"] == "falsification"
+                                                         else bool(r["rejects"] != head_sig))
+                      for _, r in tab.iterrows()]
+    tab["informative"] = [None if r["kind"] != "falsification" or not r["ran"] or r["rejects"]
+                          else (bool(r["mde"] < att) if np.isfinite(r["mde"]) else None) for _, r in tab.iterrows()]
+    rejected = [c for c, r in tab.iterrows() if r["finding"]]
+    uninf = [c for c, r in tab.iterrows() if r["informative"] is False]
+    not_run = [c for c, r in tab.iterrows() if not r["ran"]]
+    if rejected:
+        verdict = (f"{len(rejected)} finding(s) at alpha = {alpha:g}: {', '.join(rejected)} (a falsification check "
+                   "that rejects, or an inference check that contradicts the headline). Report them next to the ATT.")
+    else:
+        verdict = (f"No falsification check rejects and no inference check contradicts the headline at alpha = "
+                   f"{alpha:g}. That does not show the design is valid"
+                   + (f"; {len(uninf)} check(s) could not have seen a departure the size of the ATT "
+                      f"(MDE ≥ |ATT|): {', '.join(uninf)}" if uninf else "")
+                   + (f"; {len(not_run)} could not run: {', '.join(not_run)}" if not_run else "") + ".")
+    out = {"table": tab, "headline": headline, "rejected": rejected, "uninformative": uninf, "not_run": not_run,
+           "verdict": verdict, "few_treated": few, "alpha": alpha, "warnings": warns}
+    if show:
+        print(f"\nFalsification matrix (alpha = {alpha:g}; headline ATT {headline['estimate']:.4g}, "
+              f"{headline['method']})")
+        show_cols = ["kind", "estimate", "p", "mde", "finding", "informative", "note"]
+        with pd.option_context("display.max_colwidth", 70, "display.width", 200):
+            print(tab[show_cols].to_string(float_format=lambda v: f"{v:.4g}"))
+        print("  → " + verdict)
+        print("  Not rejecting a check never proves parallel trends or a valid design.")
+        for m in warns:
             print("  WARNING: " + m)
     return out
