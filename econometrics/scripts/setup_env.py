@@ -589,12 +589,17 @@ def _same_dir(a, b) -> bool:
 
 def folder_settings(folder) -> dict:
     """Plugins a folder's own .claude/settings.json (and settings.local.json) turns off, as workspace.py writes."""
-    off = set()
+    off, on = set(), set()
     for name in ("settings.json", "settings.local.json"):
         ep = _load_json(Path(folder) / ".claude" / name).get("enabledPlugins")
         if isinstance(ep, dict):
             off |= {k for k, v in ep.items() if v is False}
-    return {"prepared": bool(off), "plugins_off": len(off)}
+            on |= {k for k, v in ep.items() if v is True}
+    # workspace.py writes this skill true (KEEP) and every other enabled plugin false. One unrelated plugin
+    # turned off by hand is NOT a prepared folder: that folder still needs the clean-folder offer, which the
+    # "already prepared" item suppresses (v2.5.2 review).
+    prepared = bool(off) and any(str(i).startswith("econometrics@") for i in on)
+    return {"prepared": prepared, "plugins_off": len(off), "plugins_on": len(on)}
 
 
 def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:
@@ -630,6 +635,8 @@ def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:
         if str(p.get("id", "")).startswith("econometrics@") and p.get("scope") in ("project", "local") \
                 and isinstance(pp, str) and _same_dir(pp, folder):
             res["project_install"] = {"version": p.get("version"), "scope": p.get("scope")}
+        if str(p.get("id", "")).startswith("econometrics@") and p.get("scope") == "user":
+            res["user_install"] = {"version": p.get("version")}      # what applies if the folder's own goes
         enabled.append(p)
         ip = Path(p["installPath"]) if isinstance(p.get("installPath"), str) and p["installPath"] else None
         key = os.path.normcase(str(ip)) if ip is not None else None
@@ -642,7 +649,7 @@ def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:
     ids = {p.get("id") for p in enabled}
     res.update(checked=True, enabled_plugins=len(ids), skills=n_skills,
                crowded=n_skills >= CROWDED_SKILLS,
-               others_enabled=sorted(i for i in ids if not str(i or "").startswith("econometrics@")))
+               others_enabled=sorted(str(i) for i in ids if i and not str(i).startswith("econometrics@")))
     return res
 
 
@@ -778,13 +785,24 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
                         + ", with a backup)")
     lst = rep["listing"]
     pin = lst.get("project_install")
+    usr = (lst.get("user_install") or {}).get("version")
     ref = rep["latest"].get("version") or rep["skill"].get("version")
     if pin and pin.get("version") and ref and _vtuple(str(pin["version"])) < _vtuple(str(ref)):
-        acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the skill, "
-                    f"pinned at {pin['version']} (current {ref}): sessions here keep loading the old version. "
-                    "With the user's permission, inside the folder: claude plugin uninstall "
-                    f"{PLUGIN_ID} --scope {pin.get('scope')} (the user-scope install then applies), then restart "
-                    "Claude Code")
+        # Uninstalling the folder's own install only helps when a user-scope install is there to take over and
+        # is newer; with no user-scope install that command would remove the skill from the folder
+        # (v2.5.2 review). Then the fix is to update it in place.
+        if usr and _vtuple(str(usr)) > _vtuple(str(pin["version"])):
+            acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the "
+                        f"skill, pinned at {pin['version']}, while the user-scope install is {usr}: sessions here "
+                        "keep loading the old version. With the user's permission, inside the folder: claude "
+                        f"plugin uninstall {PLUGIN_ID} --scope {pin.get('scope')} (the {usr} user-scope install "
+                        "then applies), then restart Claude Code")
+        else:
+            acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the "
+                        f"skill, pinned at {pin['version']} (current {ref}), and it is the only install that "
+                        "applies here: sessions here keep loading the old version. With the user's permission, "
+                        f"inside the folder: claude plugin update {PLUGIN_ID} --scope {pin.get('scope')}, then "
+                        "restart Claude Code (do not uninstall it: there is no user-scope install to take over)")
     if lst.get("checked") and lst.get("crowded") and lst.get("prepared"):
         acts.append(f"skill listing still crowded in this folder although it is already prepared "
                     f"({lst.get('plugins_off')} plugins off in its .claude/settings.json): the {lst['skills']} skills "

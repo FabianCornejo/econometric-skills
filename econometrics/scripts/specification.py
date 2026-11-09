@@ -311,8 +311,9 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
     several real roots the one closest to β̃ in the direction of β° → β̃ is reported and the others are listed.
     With a single control the cubic always has one root that does not solve Oster's equation (at the pole of δ*(β),
     where its numerator and denominator both vanish); it is kept apart (beta_star_spurious) and never reported. psacalc and robomit skip this check, so their
-    choice is kept apart in beta_star_psacalc; it differs only when no real root satisfies the equation, where
-    beta_star_exact is nan.
+    choice is kept apart in beta_star_psacalc; it differs whenever the spurious root is the closest one to β̃,
+    which happens with a genuine root available as well as when there is none (then beta_star_exact is nan).
+    A warning names the difference, so a number from psacalc or robomit can be told apart from this one.
     beta_star_exact_unstable is True when another admissible root is nearer to β* than β* is to β̃ (a heuristic for
     being near a double root, where β* is unstable); then report δ for β = 0, not β*.
     The exact solution is skipped, with a warning, for weighted or panel fits and when the uncontrolled model has
@@ -412,6 +413,10 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
                     else:
                         msg += " Report the choice."
                     w.append(msg)
+                if spurious and any(abs(bp - r) <= tol for r in spurious):
+                    w.append(f"psacalc and robomit would report β* = {bp:.4g} here: that is the spurious root of "
+                             f"the cubic they solve, not a solution of Oster's equation. The solution is "
+                             f"{bx:.4g}; do not reconcile the two.")
                 scale = max(abs(bt), abs(b0 - bt), 1e-12)
                 if not (violates or unstable) and abs(bx - beta_star) > 0.10 * scale:   # one warning per situation
                     w.append(f"The exact β* ({bx:.4g}) and the approximation ({beta_star:.4g}) differ by more than "
@@ -425,6 +430,8 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
               f"identified set [{out['identified_set'][0]:.4f}, {out['identified_set'][1]:.4f}]")
         if "beta_star_exact" in out:
             print(f"Exact: β* = {out['beta_star_exact']:.4f}; δ needed for β = 0: {out['delta_for_zero_exact']:.2f}")
+        for m in w:                                   # the exact β* can be one the warnings say not to report
+            print("  WARNING: " + m)
         dz = out.get("delta_for_zero_exact", delta_zero)
         print(f"δ needed for β = 0: {delta_zero:.2f} (approximation)"
               + (f"; {dz:.2f} (exact)" if "delta_for_zero_exact" in out else "")

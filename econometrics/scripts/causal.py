@@ -2912,10 +2912,16 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
                  f"{blk['p']:.3f}): the evidence depends on the model for the serial correlation; report both.")
     for nm, chk in (("pre-period trend test", trend), ("pre-period placebo", placebo)):
         if chk is not None and chk["rho_clipped"]:
-            w.append(f"The {nm} found the pre-period gap close to a unit root (ρ above 0.95, clipped; "
-                     f"{T0} pre periods): that check is not informative, whatever its p-value. Short pre-periods "
-                     "with moderate persistence do this often (about 18% of 12-period gaps with ρ = 0.4 in the "
-                     "skill's checks).")
+            # the clip inflates the SE: a rejection is conservative and informative, a non-rejection is not
+            if chk["p"] <= alpha:
+                w.append(f"The {nm} found the pre-period gap close to a unit root (ρ above 0.95, clipped; "
+                         f"{T0} pre periods), which inflates its standard error: it rejects anyway (p = "
+                         f"{chk['p']:.3f}), so that finding stands and is if anything understated.")
+            else:
+                w.append(f"The {nm} found the pre-period gap close to a unit root (ρ above 0.95, clipped; "
+                         f"{T0} pre periods): that check did not reject, but it is not informative either. Short "
+                         "pre-periods with moderate persistence do this often (about 18% of 12-period gaps with "
+                         "ρ = 0.4 in the skill's checks).")
     if trend is not None and trend["p"] <= alpha:
         w.append(f"The gap trends before treatment (slope {trend['slope']:.3g} per period, p = {trend['p']:.3f}): "
                  "parallel trends fail in the pre-period, and a post-minus-pre contrast picks up the trend.")
@@ -3011,7 +3017,12 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
     def row(check, what, est=np.nan, se=np.nan, p=np.nan, mde=np.nan, note="", ran=True, kind="falsification",
             clipped=False):
         if clipped:
-            note = (note + "; " if note else "") + "ρ clipped at 0.95 (pre-period gap near a unit root): not informative"
+            # clipping ρ at 0.95 inflates the SE, so a rejection is conservative and still informative; only a
+            # non-rejection is inconclusive (v2.5.2 review: the note contradicted the row's own finding)
+            rej = ran and np.isfinite(p) and p <= alpha
+            note = (note + "; " if note else "") + ("ρ clipped at 0.95 (pre-period gap near a unit root): the "
+                    "test is conservative, so this rejection stands" if rej else
+                    "ρ clipped at 0.95 (pre-period gap near a unit root): not informative")
         rows.append({"check": check, "kind": kind, "what it checks": what, "estimate": est, "se": se, "p": p,
                      "mde": mde, "rejects": (bool(p <= alpha) if ran and np.isfinite(p) else None), "ran": ran,
                      "note": note, "clipped": bool(clipped)})

@@ -331,26 +331,53 @@ acts = rep["actions"]
 check("common folder, crowded listing: the clean folder (workspace.py) is offered, as before",
       rep["listing"]["folder"] == str(folder) and not rep["listing"]["prepared"]
       and any("workspace.py" in a for a in acts), acts)
-(folder / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {"a@m": False, "b@m": False,
-                                                                                  "c@m": True}}), encoding="utf-8")
+# What workspace.py writes: this skill (KEEP) true, every other enabled plugin false.
+(folder / ".claude" / "settings.json").write_text(
+    json.dumps({"enabledPlugins": {"a@m": False, "b@m": False, "econometrics@econometric-skills": True}}),
+    encoding="utf-8")
 rep = se.doctor(offline=True, cdir=cdir, env={}, run=fake_run(crowd), which=claude, os_name="posix", cwd=str(folder))
 acts = rep["actions"]
 check("prepared folder (workspace.py's settings), still crowded: says so and does NOT offer another clean folder",
       rep["listing"]["prepared"] and rep["listing"]["plugins_off"] == 2
       and any("already prepared" in a and "do not offer another clean folder" in a for a in acts)
       and not any("workspace.py" in a for a in acts), acts)
-check("folder_settings reads settings.local.json too",
+# One unrelated plugin turned off by hand is not a prepared folder: the clean-folder offer must survive, or a
+# crowded listing loses its only fix (v2.5.2 review, chat 3).
+byhand = tmp / "analises" / "a mao"
+(byhand / ".claude").mkdir(parents=True)
+(byhand / ".claude" / "settings.json").write_text(json.dumps({"enabledPlugins": {"unrelated@m": False}}),
+                                                  encoding="utf-8")
+rep_bh = se.doctor(offline=True, cdir=cdir, env={}, run=fake_run(crowd), which=claude, os_name="posix",
+                   cwd=str(byhand))
+check("a folder with one unrelated plugin off by hand is NOT 'prepared': the clean folder is still offered",
+      not rep_bh["listing"]["prepared"] and rep_bh["listing"]["plugins_off"] == 1
+      and any("workspace.py" in a for a in rep_bh["actions"])
+      and not any("already prepared" in a for a in rep_bh["actions"]), rep_bh["actions"])
+check("folder_settings reads settings.local.json too, and counts what is on",
       (folder / ".claude" / "settings.local.json").write_text(json.dumps({"enabledPlugins": {"d@m": False}}),
                                                               encoding="utf-8") > 0
-      and se.folder_settings(folder)["plugins_off"] == 3)
+      and se.folder_settings(folder)["plugins_off"] == 3 and se.folder_settings(folder)["plugins_on"] == 1)
 
 ver = se.read_skill_version(se.SKILL_DIR)
+# Pinned folder, WITH a newer user-scope install to take over: uninstalling the folder's own one is right.
+pinned_u = [dict(eco_user, scope="project", projectPath=str(folder), version="2.4.0"), dict(eco_user, version=ver)]
+rep = se.doctor(offline=True, cdir=cdir, env={}, run=fake_run(pinned_u), which=claude, os_name="posix",
+                cwd=str(folder))
+check("folder pinned at an old version with a newer user-scope install: the To-do item names both and uninstalls "
+      "the folder's own",
+      rep["listing"]["project_install"]["version"] == "2.4.0" and rep["listing"]["user_install"]["version"] == ver
+      and any("pinned at 2.4.0" in a and f"user-scope install is {ver}" in a
+              and "claude plugin uninstall econometrics@econometric-skills --scope project" in a
+              for a in rep["actions"]), rep["actions"])
+# Pinned folder and NO user-scope install: uninstalling would remove the skill from the folder (v2.5.2 review).
 pinned = [dict(eco_user, scope="project", projectPath=str(folder), version="2.4.0")]
 rep = se.doctor(offline=True, cdir=cdir, env={}, run=fake_run(pinned), which=claude, os_name="posix", cwd=str(folder))
-check("folder pinned at an old version by its own project install: a To-do item with the uninstall command",
-      rep["listing"]["project_install"]["version"] == "2.4.0"
-      and any("pinned at 2.4.0" in a and "claude plugin uninstall econometrics@econometric-skills --scope project" in a
-              for a in rep["actions"]), rep["actions"])
+check("folder pinned with NO user-scope install: update it in place, and never tell the user to uninstall the "
+      "only install that applies there",
+      rep["listing"]["project_install"]["version"] == "2.4.0" and "user_install" not in rep["listing"]
+      and any("pinned at 2.4.0" in a and "claude plugin update econometrics@econometric-skills --scope project" in a
+              and "do not uninstall it" in a for a in rep["actions"])
+      and not any("plugin uninstall" in a for a in rep["actions"]), rep["actions"])
 same = [dict(eco_user, scope="project", projectPath=str(folder), version=ver)]
 rep = se.doctor(offline=True, cdir=cdir, env={}, run=fake_run(same), which=claude, os_name="posix", cwd=str(folder))
 check("project install at the current version: no 'pinned' item (mutation)",
@@ -717,6 +744,71 @@ runs1 = [ca.randomization_inference(ri_panel({0: 5, 1: 5}), "unit", "time", "y",
 check("with one adoption date nothing changed: the enumeration is the 15 sets and p = hits / 15, so item I "
       "(the observed assignment counted twice) stays fixed",
       all(abs(p - 1 / 15) < 1e-12 for p in runs1), runs1)
+
+
+# --------------------- 12. the rest of the independent review, round 1 (chat 3): warnings that mislead
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+# psacalc and robomit pick the root closest to β̃ without the spurious check, so they can print the spurious
+# root while a genuine solution exists (47 of 342 (δ, R_max) points on this data). The user comparing with
+# Stata has to be told, and the docstring used to claim the two only differ when β* is nan.
+u_s = smf.ols("y ~ x", sim_d).fit()
+c_s = smf.ols("y ~ x + w1", sim_d).fit()
+with warnings.catch_warnings(record=True) as W:
+    warnings.simplefilter("always")
+    o_ps = sp.oster(u_s, c_s, "x", r_max=0.84, delta=-2.0)
+w_ps = [str(x.message) for x in W]
+check("when psacalc and robomit would print the spurious root while a genuine solution exists, a warning names "
+      "both numbers (the docstring used to say the two differ only when β* is nan)",
+      np.isfinite(o_ps["beta_star_exact"]) and o_ps["beta_star_spurious"]
+      and abs(o_ps["beta_star_psacalc"] - o_ps["beta_star_spurious"][0]) < 1e-9
+      and any("psacalc and robomit would report" in m and "spurious" in m for m in w_ps),
+      (o_ps["beta_star_exact"], o_ps["beta_star_psacalc"], w_ps))
+check("that warning stays away from the common case (δ = 1, default R_max): psacalc agrees there",
+      not any("would report" in m for m in oster_quiet(u_s, c_s, "x")["warnings"]),
+      oster_quiet(u_s, c_s, "x")["warnings"])
+buf = io.StringIO()
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    with contextlib.redirect_stdout(buf):
+        o_sh = sp.oster(u_s, c_s, "x", r_max=0.84, delta=-2.0, show=True)
+shown = buf.getvalue()
+check("show=True prints the warnings next to the numbers: a β* the warnings say not to report never appears "
+      "bare (warnings are filtered in the CI and in the suites, so warnings.warn alone is invisible)",
+      o_sh["warnings"] and all("  WARNING: " + m in shown for m in o_sh["warnings"])
+      and shown.count("WARNING") == len(o_sh["warnings"]), shown[-300:])
+
+# ρ clipped at 0.95 inflates the SE, so a check that rejects anyway is conservative and its finding stands;
+# only a non-rejection is uninformative. The warning used to say "not informative, whatever its p-value",
+# contradicting the pre-trend warning next to it and the matrix's own `informative` column.
+def clip_panel(trend, seed, T0, T1=8):
+    rng = np.random.default_rng(seed)
+    T = T0 + T1
+    gap = np.cumsum(rng.normal(0, 1, T)) + trend * np.arange(T)
+    base = rng.normal(0, 1, T)
+    rows_ = []
+    for t in range(T):
+        rows_.append({"u": "ctrl", "t": t + 1, "y": base[t]})
+        rows_.append({"u": "trt", "t": t + 1, "y": base[t] + gap[t]})
+    return pd.DataFrame(rows_)
+
+
+rej_res = ca.did_single_treated(clip_panel(3.0, 0, 12), "u", "t", "y", "trt", 13, show=False)
+rej_w = rej_res["warnings"]                      # the output contract: every entry is relayed to the user
+pt = rej_res["pre_trend"]
+check("a clipped pre-trend test that REJECTS: the warning says the clip inflates the SE and the finding stands, "
+      "and never calls it uninformative",
+      pt["rho_clipped"] and pt["p"] <= 0.05
+      and any("inflates its standard error" in m and "stands" in m for m in rej_w)
+      and not any("not informative" in m for m in rej_w), (pt["p"], rej_w))
+norej = ca.did_single_treated(clip_panel(0.0, 3, 12), "u", "t", "y", "trt", 13, show=False)
+norej_w = norej["warnings"]
+pt2 = norej["pre_trend"]
+check("a clipped pre-trend test that does NOT reject: still called uninformative (the other half of the rule)",
+      pt2["rho_clipped"] and pt2["p"] > 0.05
+      and any("did not reject, but it is not informative" in m for m in norej_w)
+      and not any("inflates its standard error" in m for m in norej_w), (pt2["p"], norej_w))
 
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
