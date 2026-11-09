@@ -253,7 +253,10 @@ def _oster_exact_beta(b0, b1, r0, r1, rmax, delta, syy, sxx, tx):
         return sols[order[0]], [sols[order[1]], sols[order[2]]]
 
     a3 = (delta - 1) * (tx * sxx - tx ** 2)
-    if delta == 1 or abs(a3) <= 1e-12 * max(1.0, abs(tx * sxx)):
+    # a3 has the units of var(x) squared, so the degeneracy test is relative to sigma_xx**2, never to an
+    # absolute floor: with x in small units (sd(x) ~ 1e-3) a floor of 1.0 took the quadratic branch for a
+    # cubic case, moving beta* by 3% and switching off the spurious-root filter (v2.5.2 review, chat 3).
+    if delta == 1 or abs(a3) <= 1e-12 * sxx ** 2:
         theta = delta * rm_rt * (sxx - tx) - rt_ro * tx - sxx * tx * d ** 2
         a2 = tx * d * sxx * (delta - 2)
         a0 = rm_rt * delta * d * sxx
@@ -355,7 +358,10 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
             roots = [float(r) for r in [bp, *alt_p] if np.isfinite(r)]
             sxx, tx = S[1], S[2]
             pole = bt + (b0 - bt) * sxx / (sxx - tx) if sxx - tx > 1e-12 * sxx else None
-            tol = 1e-7 * max(1.0, abs(b0), abs(bt), abs(pole) if pole is not None else 0.0)
+            # relative to the coefficients' own scale, for the same reason (an absolute floor made every
+            # root look like the pole once |beta| fell below ~1e-8)
+            b_scale = max(abs(b0), abs(bt), abs(pole) if pole is not None else 0.0)
+            tol = 1e-7 * b_scale if b_scale > 0 else 1e-12
             spurious = [r for r in roots if pole is not None and abs(r - pole) <= tol]
             genuine = [r for r in roots if r not in spurious]
             side = (lambda r: np.sign(r - bt) == np.sign(bt - b0)) if delta > 0 else (lambda r: True)

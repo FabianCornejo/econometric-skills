@@ -2494,8 +2494,8 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     the observed adoption dates are reassigned to random sets of STATES (every county of a state gets its state's date);
     permuting counties would break the within-state dependence and over-reject. The cluster column must be constant
     within unit, and gvar constant within cluster (an error otherwise). n_units and n_treated then count clusters."""
-    from itertools import combinations
-    from math import comb
+    from itertools import combinations, permutations
+    from math import comb, factorial
     d = df[[unit, time, y, gvar]].dropna(subset=[unit, time, y]).copy()
     d[gvar] = d[gvar].fillna(0)
     if cluster:
@@ -2519,13 +2519,23 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     dates_obs = g_unit[treated].to_numpy()
     u_idx = units.get_indexer(d[key])
     tt = d[time].to_numpy()
-    n_assign = comb(N, N1)
+    # The assignment space is the sets of treated units TIMES the distinct ways the observed adoption dates
+    # can be dealt out among them. With one date there is a single arrangement and the sets are the space;
+    # with staggered dates each set has several arrangements, so both are enumerated (or drawn together).
+    # Enumerating only the sets and drawing one arrangement per set left the OBSERVED assignment out of the
+    # enumeration, and the exact p of v2.5.2 could come out 0 (v2.5.2 review, chat 3).
+    n_date_arr = factorial(N1)
+    for c in np.unique(dates_obs, return_counts=True)[1]:
+        n_date_arr //= factorial(int(c))
+    n_assign = comb(N, N1) * n_date_arr
     rng = np.random.default_rng(seed)
     if n_assign - 1 <= n_perm:
-        sets = [list(c) for c in combinations(range(N), N1)]
+        arrs = ([np.asarray(dates_obs, float)] if n_date_arr == 1 else
+                [np.asarray(a, float) for a in sorted(set(permutations(dates_obs.tolist())))])
+        sets = [(list(c), a) for c in combinations(range(N), N1) for a in arrs]
         exact = True
     else:
-        sets = [list(rng.choice(N, N1, replace=False)) for _ in range(n_perm)]
+        sets = [(list(rng.choice(N, N1, replace=False)), rng.permutation(dates_obs)) for _ in range(n_perm)]
         exact = False
     obs_set = [units.get_loc(u) for u in treated]
 
@@ -2536,7 +2546,7 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
         return ((gi > 0) & (tt >= gi)).astype(float)
 
     D_obs = D_for(obs_set, dates_obs)
-    perms_D = [D_for(sset, rng.permutation(dates_obs)) for sset in sets]
+    perms_D = [D_for(sset, dts) for sset, dts in sets]
     Y = d[y].to_numpy(float)
     if stat is None:
         U = pd.get_dummies(d[unit]).to_numpy(float)
@@ -2554,7 +2564,8 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
             s0 = Dt_obs @ yt0 / (Dt_obs @ Dt_obs)
             sp = (Dt * yt0[:, None]).sum(0) / (Dt ** 2).sum(0)
             hits = np.sum(np.abs(sp) >= abs(s0) - 1e-12)
-            # exact: the enumeration already contains the observed assignment (v2.5.2: it was counted twice)
+            # exact: the enumeration contains the observed assignment (v2.5.2: it was counted twice; the
+            # arrangements of the dates are enumerated too, so this holds with staggered dates as well)
             return hits / len(sets) if exact else (1 + hits) / (len(sets) + 1)
 
         p = float(pval(0.0))
@@ -2571,9 +2582,9 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     else:
         est = float(stat(d.copy()))
         draws = []
-        for sset in sets:
+        for sset, dts in sets:
             g = np.zeros(N)
-            g[sset] = rng.permutation(dates_obs)
+            g[sset] = dts
             dp = d.copy()
             dp[gvar] = g[u_idx]
             draws.append(stat(dp))

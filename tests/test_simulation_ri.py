@@ -16,6 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "econometrics" / "scripts"))
 warnings.filterwarnings("ignore")
+from math import comb, factorial
+
 import numpy as np
 import pandas as pd
 
@@ -50,7 +52,7 @@ def state_panel(seed, n_units=27, n_treated=6, T=20, effect=0.0, rho=0.5, stagge
 # ---------------------------------------------------------------------------------------------
 # Randomization inference
 # ---------------------------------------------------------------------------------------------
-d = state_panel(1, effect=1.0)
+ri_d = d = state_panel(1, effect=1.0)
 ri = causal.randomization_inference(d, "state", "t", "y", "g", n_perm=999, seed=1)
 check("RI: detects an effect of 1.0 (p < 0.05) and CI covers 1",
       ri["p"] < 0.05 and ri["ci_low"] < 1.0 < ri["ci_high"], f"est {ri['estimate']:.3f}, CI ({ri['ci_low']:.2f}, {ri['ci_high']:.2f})")
@@ -59,7 +61,18 @@ Tm = pd.get_dummies(d.t).to_numpy(float)[:, 1:]
 D = ((d.g > 0) & (d.t >= d.g)).astype(float).to_numpy()
 twfe = np.linalg.lstsq(np.column_stack([D, U, Tm]), d.y.to_numpy(), rcond=None)[0][0]
 check("RI statistic = TWFE DiD coefficient", abs(ri["estimate"] - twfe) < 1e-8)
-check("RI: 296,010 possible assignments for 6 of 27, random draws used", ri["possible_assignments"] == 296010 and not ri["exact"])
+# v2.5.2: possible_assignments is the whole space, the sets of treated units TIMES the distinct arrangements
+# of the observed dates among them (here 3 dates over 6 units: 6!/(2!2!2!) = 60 for most draws). Before, only
+# the C(27,6) sets were counted, which undercounted the space the function permutes over and made the
+# "smallest attainable p-value" it reports too large.
+_g = ri_d.groupby("state")["g"].first()
+_tr = _g[_g > 0].to_numpy()
+_arr = factorial(len(_tr))
+for _c in np.unique(_tr, return_counts=True)[1]:
+    _arr //= factorial(int(_c))
+check(f"RI: the assignment space is C(27,6) x {_arr} date arrangements, random draws used",
+      ri["possible_assignments"] == comb(27, 6) * _arr and not ri["exact"] and _arr > 1,
+      f'{ri["possible_assignments"]} vs {comb(27, 6) * _arr}')
 
 rej = []
 for rep in range(200):

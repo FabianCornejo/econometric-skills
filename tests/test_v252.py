@@ -630,5 +630,94 @@ check("ols-regression.md §14 and software-equivalents no longer call oster an a
       and '"d")` (approximation) |' not in swe and "beta_star_exact" in swe)
 
 
+# ------------------------------- 11. fixes from the independent review, round 1 (chat 3, 2026-11-09)
+# Both were absolute floors inside tests that have to be relative, and the exact randomization p-value whose
+# enumeration did not contain the observed assignment. Each check below fails with the code as it was.
+from math import comb as _comb, factorial as _fact  # noqa: E402
+
+sim_d = pd.read_csv(ROOT / "tests" / "data" / "oster_v252.csv")
+
+
+def oster_scaled(xs=1.0, ys=1.0, delta=2.0, rmax=0.885):
+    df = sim_d.copy()
+    df["x"], df["y"] = df["x"] * xs, df["y"] * ys
+    u = smf.ols("y ~ x", df).fit()
+    c = smf.ols("y ~ x + w1", df).fit()
+    with warnings.catch_warnings(record=True) as W:
+        warnings.simplefilter("always")
+        o = sp.oster(u, c, "x", r_max=rmax, delta=delta)
+    return o, [str(w.message) for w in W]
+
+
+ref, ref_w = oster_scaled()
+scales = [1e-2, 1e-3, 3e-4, 1e-6]
+rows = [oster_scaled(xs=s) for s in scales]
+check("Oster exact is equivariant in the units of x: β* scales as 1/scale(x) (sd(x) down to 1.6e-6), the "
+      "spurious root is still found and the warnings do not change",
+      all(abs(o["beta_star_exact"] * s - ref["beta_star_exact"]) < 1e-8 * abs(ref["beta_star_exact"])
+          and len(o["beta_star_spurious"]) == len(ref["beta_star_spurious"]) == 1
+          and len(W) == len(ref_w) == 1 for (o, W), s in zip(rows, scales)),
+      [(f"{s:.0e}", o["beta_star_exact"] * s, len(o["beta_star_spurious"]), len(W)) for (o, W), s in zip(rows, scales)])
+# The old test was abs(a3) <= 1e-12 * max(1.0, abs(tx*sxx)); a3 has the units of var(x) squared, so the floor
+# of 1.0 fired once sd(x) was small. This asserts the old condition WOULD have fired here (mutation): with it,
+# the quadratic branch was taken, β* was 3.1% off, the spurious filter was off and the warning said
+# "report the exact one". Written from the units, not from the implementation's expression.
+o3, _ = oster_scaled(xs=1e-3)
+sxx3, tx3 = o3["exact_inputs"]["sigma_xx"], o3["exact_inputs"]["tau_x"]
+a3 = (2.0 - 1) * tx3 * (sxx3 - tx3)
+check("mutation: at sd(x) ~ 1.6e-3 the old absolute floor would have degenerated the cubic, the relative test "
+      "does not", abs(a3) <= 1e-12 * max(1.0, abs(tx3 * sxx3)) and abs(a3) > 1e-12 * sxx3 ** 2,
+      (a3, 1e-12 * max(1.0, abs(tx3 * sxx3)), 1e-12 * sxx3 ** 2))
+worst = [oster_scaled(xs=s, delta=2.0, rmax=1.0) for s in [1.0, 1e-3, 1e-6]]
+check("the case whose only real root is spurious stays nan in every unit of x, and never says "
+      "'report the exact one'",
+      all(np.isnan(o["beta_star_exact"]) and len(o["beta_star_spurious"]) == 1 and len(W) == 1
+          and "spurious" in W[0] and "report the exact one" not in W[0] for o, W in worst),
+      [(o["beta_star_exact"], W) for o, W in worst])
+ys_rows = [oster_scaled(ys=y) for y in [1e-6, 1e-9]]
+check("the spurious-root tolerance is relative to the coefficients: tiny units of y do not turn every root "
+      "spurious (it used to give 3 spurious roots and β* = nan below |β̃| ~ 1e-8)",
+      all(len(o["beta_star_spurious"]) == 1 and len(o["beta_star_alternatives"]) == 1
+          and abs(o["beta_star_exact"] / y - ref["beta_star_exact"]) < 1e-6 * abs(ref["beta_star_exact"])
+          for (o, _), y in zip(ys_rows, [1e-6, 1e-9])),
+      [(len(o["beta_star_spurious"]), len(o["beta_star_alternatives"])) for o, _ in ys_rows])
+
+
+def ri_panel(dates, eff=20.0, T=8, N=6, seed=7):
+    rng = np.random.default_rng(seed)
+    rows_, g = [], {u: dates.get(u, 0) for u in range(N)}
+    for u in range(N):
+        a = rng.normal(0, 1)
+        for t in range(1, T + 1):
+            dd = 1.0 if g[u] and t >= g[u] else 0.0
+            rows_.append({"unit": u, "time": t, "y": a + 0.3 * t + eff * dd + rng.normal(0, 1), "g": g[u]})
+    return pd.DataFrame(rows_)
+
+
+def arrangements(dates):
+    n = _fact(len(dates))
+    for c in np.unique(np.asarray(dates), return_counts=True)[1]:
+        n //= _fact(int(c))
+    return n
+
+
+for label, dates, n_arr in [("one date", {0: 5, 1: 5}, 1), ("two dates", {0: 3, 1: 5}, 2),
+                            ("three dates", {0: 3, 1: 5, 2: 7}, 6)]:
+    runs = [ca.randomization_inference(ri_panel(dates), "unit", "time", "y", "g", n_perm=999, ci=False, seed=s)
+            for s in range(12)]
+    space = _comb(6, len(dates)) * n_arr
+    check(f"exact randomization p, {label}: the space is C(6,k) x {n_arr} arrangements and p is never below "
+          "1/space (it came out 0.0 in 7 of these 12 seeds with staggered dates)",
+          arrangements(list(dates.values())) == n_arr and all(
+              r["exact"] and r["possible_assignments"] == space and r["p"] >= 1 / space - 1e-12 and r["p"] > 0
+              for r in runs),
+          (space, sorted({round(r["p"], 5) for r in runs})))
+runs1 = [ca.randomization_inference(ri_panel({0: 5, 1: 5}), "unit", "time", "y", "g", n_perm=999, ci=False,
+                                    seed=s)["p"] for s in range(4)]
+check("with one adoption date nothing changed: the enumeration is the 15 sets and p = hits / 15, so item I "
+      "(the observed assignment counted twice) stays fixed",
+      all(abs(p - 1 / 15) < 1e-12 for p in runs1), runs1)
+
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
