@@ -21,6 +21,21 @@ Separating X from W (EconML's convention) prevents a common error: reading the c
 
 Choose W with a causal graph: write it from institutional knowledge and run `dag.adjustment_report(g, treatment, y, df)` (`causal-inference.md` §2.1). It returns the valid adjustment sets and flags mediators, colliders, post-treatment variables and instruments, which must not be in W. For a planned study, add the design's MDE to the card (`simulation.mde_did` / `power_did_sim`, `causal-inference.md` §6.2).
 
+### Identification checklist (causal questions only)
+
+When the question asks for a causal effect, go through every line before estimating and write the answer to each under **Threats** on the card: what was found, or why the line does not apply. Each line names the tool that checks it; a line marked "ask" cannot be settled from the data. Forecasts, descriptive questions and single tests (a mean, a proportion, a sample size) skip this list.
+
+| Threat | Check | Tool |
+|---|---|---|
+| Bad controls: mediators, colliders, post-treatment variables, instruments used as controls | Draw the graph and drop what the report flags; a variable measured after the treatment is post-treatment until shown otherwise | `dag.adjustment_report` |
+| Weak or invalid instrument | First-stage F of the excluded instruments; below 104.7 (one instrument) report the Anderson-Rubin set; exclusion is an argument, not a test | `diagnostics.iv_report` |
+| Spillovers and contaminated controls | Ask whether the treatment reaches the comparison units (neighbours, the same market, shared staff); if it can, drop or separate the exposed controls and say the estimand changed | ask; `causal.did_design` prints the question for DiD |
+| Inference at the wrong level | Cluster where the treatment is assigned, not where the data are; fewer than ~40 clusters: wild cluster bootstrap; few treated clusters: permute at the assignment level | `cluster=`, `estimation.wild_cluster_bootstrap`, `causal.randomization_inference(cluster=)` |
+| Few treated units | One to three treated units: inference from the gap series, never HAC on it; a synthetic comparison when donors fit the pre-period | `causal.did_single_treated`, `causal.synth` |
+| Unobserved confounding (selection on observables) | How strong a hidden confounder would need to be, benchmarked on observed controls; report δ for β = 0, and the exact β\* only when no warning says otherwise | `specification.oster`, `specification.sensitivity`, `causal.dml_sensitivity` |
+
+The DiD-specific questions (exact date, anticipation, gradual start, reversals) stay in step 1 and in `causal.did_design`.
+
 Follow the steps in order; each exists because skipping it produces a specific kind of error. Explain to the user what is being done at each step and why.
 
 ## 1. Frame the question and the hypothesis

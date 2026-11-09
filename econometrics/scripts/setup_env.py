@@ -686,6 +686,9 @@ def doctor(offline: bool = False, *, cdir=None, env=None, opener=None, run=None,
         info = _safe(lambda: probe_interpreter(cmd, run=run), None)
         if info and not _same_file(info["exe"], sys.executable) \
                 and not any(_same_file(info["exe"], o["exe"]) for o in others):
+            # the command the user types to start it ('py -3.14' rather than a long path), for the To do items
+            info["run_with"] = _safe(lambda: run_command(exe=info["exe"], which=which, os_name=os_name,
+                                                         version=_vtuple(info["version"])), info["exe"])
             others.append(info)
     rep["interpreters"] = others
     if offline:
@@ -708,15 +711,20 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
     py = rep["python"]
     complete = [i for i in rep.get("interpreters", []) if i["supported"] and not i["missing_core"]]
     best = max(complete, key=lambda i: _vtuple(i["version"])) if complete else None
+    # the commands in the items below go to the user: when this Python is too old or incomplete and another one
+    # has every core package, they use that one, so the user keeps a single interpreter (v2.5.0.1 NIT)
+    use = (best.get("run_with") or best["exe"]) if best and (not py["supported"] or rep["core_missing"]) \
+        else py["run_with"]
     if not py["supported"]:
         acts.append(f"Python {py['version']} is too old (the skill needs {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+): "
-                    + (f"use {best['exe']} (Python {best['version']}, packages present)" if best
+                    + (f"use {best['exe']} (Python {best['version']}, packages present; run scripts with {use})"
+                       if best
                        else "install a current Python: " + python_install_hint(os_name)))
     elif rep["core_missing"]:
         if best:
             acts.append(f"this Python ({py['version']}) lacks {', '.join(rep['core_missing'])}, but "
                         f"{best['exe']} (Python {best['version']}) has every core package: run the scripts with "
-                        "that one instead of installing again")
+                        f"that one ({use}) instead of installing again")
         else:
             acts.append("install the core packages: " + ", ".join(rep["core_missing"])
                         + f"  ({install_command()})")
@@ -765,7 +773,7 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
         else:
             acts.append("plugin auto-update is off for econometric-skills (default for third-party "
                         "marketplaces). With the user's permission: /plugin -> Marketplaces -> econometric-skills "
-                        "-> Enable auto-update, or " + f'{py["run_with"]} "{Path(__file__).resolve()}" '
+                        "-> Enable auto-update, or " + f'{use} "{Path(__file__).resolve()}" '
                         "--enable-autoupdate (writes it to " + str(Path(rep.get("claude_dir", "~/.claude")) / "settings.json")
                         + ", with a backup)")
     lst = rep["listing"]
@@ -784,7 +792,7 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
     elif lst.get("checked") and lst.get("crowded"):
         acts.append(f"crowded skill listing ({lst['skills']} skills in {lst['enabled_plugins']} enabled plugins): "
                     "offer a clean analysis folder, "
-                    + f'{py["run_with"]} "{Path(__file__).resolve().parent / "workspace.py"}" <folder>, '
+                    + f'{use} "{Path(__file__).resolve().parent / "workspace.py"}" <folder>, '
                     "which turns the other plugins off in that folder only")
     return acts
 
@@ -804,7 +812,8 @@ def print_doctor(rep: dict) -> None:
     print(f"Run scripts with: {py['run_with']}")
     for i in rep["interpreters"]:
         state = "all core packages" if not i["missing_core"] else f"missing {len(i['missing_core'])} core packages"
-        print(f"  other Python {i['version']} ({i['exe']}): {state}")
+        print(f"  other Python {i['version']} ({i['exe']}): {state}"
+              + (f"; run with {i['run_with']}" if i.get("run_with") and not i["missing_core"] else ""))
     print("Core packages: " + ("all present" if not rep["core_missing"] else "missing or outdated: "
                                + ", ".join(rep["core_missing"])))
     print("Optional extras (installed only when a task needs them, with the user's permission):")

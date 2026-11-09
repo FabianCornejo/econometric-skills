@@ -62,7 +62,7 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | `predict, stdp` / `predict, stdf` (CI vs. prediction interval) | forecast std. errors | `specification.prediction_intervals(res, newdata)` |
 | `lincom b1 + b2 + b3` / `nlcom (_b[x]+_b[L.x])/(1-_b[L.y])` | `c(2)+c(3)` Wald | `specification.long_run_effect(res, x_terms, y_lag_terms)` |
 | `reg ..., beta` | — | `specification.standardized_coefficients(res)` |
-| `psacalc delta d` / `psacalc beta d` | — | `specification.oster(res_uncontrolled, res_controlled, "d")` (approximation) |
+| `psacalc delta d` / `psacalc beta d` (R: `robomit::o_delta`, `o_beta`) | — | `specification.oster(res_uncontrolled, res_controlled, "d")`: exact keys `beta_star_exact`, `delta_for_zero_exact` (match `psacalc`/`robomit` except their spurious root); `beta_star`, `delta_for_zero` are the approximation; no `mcontrol` |
 | `sensemakr` | — | `specification.sensitivity(res, "d")` |
 | `xtreg ... , re` + unit means (`mundlak`, `xthybrid`) | — | `diagnostics.mundlak_test(...)` |
 | `estat gof` / overdispersion after `poisson` | — | `diagnostics.count_diagnostics(res)` |

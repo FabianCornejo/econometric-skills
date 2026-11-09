@@ -485,5 +485,150 @@ check("random draws (12 assignments > n_perm + 1): still (1 + hits)/(n_perm + 1)
       not r["exact"] and abs(r["p"] * 6 - round(r["p"] * 6)) < 1e-9 and r["p"] >= 1 / 6 - 1e-12, r["p"])
 
 
+# ------------------------------------------------- 8. H: the To-do commands use the complete interpreter (chat 3)
+# v2.5.0.1 NIT: run from an incomplete Python (3.12, no packages) while another one (3.14) had everything, the doctor
+# told the user to run --enable-autoupdate and workspace.py with 'py -3.12'. They work (standard library only), but
+# the user should keep one interpreter: the one the first item tells them to use.
+def rep_h(core_missing, interps, supported=True, version="3.12.10"):
+    return {"python": {"exe": "/usr/bin/python3.12", "version": version, "supported": supported,
+                       "run_with": "py -3.12"},
+            "core_missing": core_missing, "interpreters": interps,
+            "latest": {"version": None, "status": "not checked (--offline)"}, "copies": [],
+            "skill": {"dir": str(se.SKILL_DIR), "version": ver},
+            "autoupdate": {"registered": True, "on": False, "blocked_by": [], "configured": False, "source": "x"},
+            "listing": {"checked": True, "crowded": True, "prepared": False, "skills": 900, "enabled_plugins": 80,
+                        "folder": str(folder)},
+            "claude_dir": str(cdir)}
+
+
+full = {"exe": "/opt/py314/python3.14", "version": "3.14.8", "supported": True, "missing_core": [],
+        "run_with": "py -3.14"}
+au_ws = lambda acts: [a for a in acts if "--enable-autoupdate" in a or "workspace.py" in a]
+acts = se.doctor_actions(rep_h(["numpy>=2.1"], [full]), os_name="nt")
+check("incomplete Python, a complete 3.14 found: the first item names its command, and the auto-update and "
+      "workspace.py commands use it, never 'py -3.12'",
+      "(py -3.14)" in acts[0] and len(au_ws(acts)) == 2 and all("py -3.14 \"" in a for a in au_ws(acts))
+      and not any("py -3.12" in a for a in acts), acts)
+acts = se.doctor_actions(rep_h([], [full]), os_name="nt")
+check("complete Python: its own command stays in every item, even with a newer complete one around (mutation)",
+      len(au_ws(acts)) == 2 and all("py -3.12 \"" in a for a in au_ws(acts)) and not any("py -3.14" in a for a in acts),
+      acts)
+acts = se.doctor_actions(rep_h(["numpy>=2.1"], [dict(full, missing_core=["scipy>=1.13"])]), os_name="nt")
+check("incomplete Python and no complete one: install item, and the commands keep this Python",
+      any(a.startswith("install the core packages") for a in acts)
+      and all("py -3.12 \"" in a for a in au_ws(acts)), acts)
+acts = se.doctor_actions(rep_h([], [full], supported=False, version="3.9.7"), os_name="nt")
+check("Python too old, a complete one found: 'run scripts with py -3.14' and the commands use it",
+      "run scripts with py -3.14" in acts[0] and all("py -3.14 \"" in a for a in au_ws(acts)), acts)
+old_shape = {k: v for k, v in full.items() if k != "run_with"}
+acts = se.doctor_actions(rep_h(["numpy>=2.1"], [old_shape]), os_name="nt")
+check("an interpreter entry without run_with (report from an older doctor): falls back to its path",
+      all("/opt/py314/python3.14 \"" in a for a in au_ws(acts)), acts)
+
+exe_file = tmp / "bin" / "python3.14"
+exe_file.parent.mkdir()
+exe_file.write_text("", encoding="utf-8")
+real_cand, real_probe = se.python_candidates, se.probe_interpreter
+se.python_candidates = lambda **k: [str(exe_file)]
+se.probe_interpreter = lambda cmd, run=None: {"exe": str(exe_file), "version": "3.14.8", "missing_core": [],
+                                              "supported": True}
+try:
+    w3 = lambda n: str(exe_file) if n == "python3" else claude(n)
+    rep = se.doctor(offline=True, cdir=cdir, env={}, run=fake_run(crowd), which=w3, os_name="posix", cwd=str(folder))
+    rep2 = se.doctor(offline=True, cdir=cdir, env={}, run=fake_run(crowd), which=claude, os_name="posix",
+                     cwd=str(folder))
+finally:
+    se.python_candidates, se.probe_interpreter = real_cand, real_probe
+check("doctor: each other interpreter carries the command that starts it ('python3' when that is it on the PATH)",
+      [i.get("run_with") for i in rep["interpreters"]] == ["python3"], rep["interpreters"])
+check("doctor: not on the PATH -> its full path, quoted (the folder has a space), never a bare name",
+      [i.get("run_with") for i in rep2["interpreters"]] == [f'"{exe_file}"'] and " " in str(exe_file),
+      rep2["interpreters"])
+
+# ------------------------------------------------------------- 9. E: the identification checklist (chat 3)
+import importlib  # noqa: E402
+import re  # noqa: E402
+
+SK = ROOT / "econometrics"
+skill_md = (SK / "SKILL.md").read_text(encoding="utf-8")
+sec3 = skill_md[skill_md.index("## 3. Consultant workflow"):skill_md.index("## 4. Non-negotiable rules")]
+step0 = next(line for line in sec3.splitlines() if line.startswith("0. **Study card**"))
+check("SKILL.md §3, step 0: causal questions fill the threats with the checklist in workflow.md §0; forecasts skip it",
+      "identification checklist in `references/workflow.md` §0" in step0 and "forecasts skip it" in step0
+      and step0.startswith("0. **Study card** before any estimate: question, estimand, design"), step0)
+wf = (SK / "references" / "workflow.md").read_text(encoding="utf-8")
+m = re.search(r"### Identification checklist \(causal questions only\)\n(.*?)\n## 1\.", wf, re.S)
+block = m.group(1) if m else ""
+check("workflow.md §0 holds the checklist, with the six threats of the plan and the skip rule",
+      m is not None and all(k in block for k in ("Bad controls", "Weak or invalid instrument", "Spillovers",
+                                                  "Inference at the wrong level", "Few treated units",
+                                                  "Unobserved confounding")) and "Forecasts" in block)
+named = sorted(set(re.findall(r"`(\w+)\.(\w+)(?:\(|`)", block)))
+missing = []
+for mod, fn in named:
+    try:
+        if not callable(getattr(importlib.import_module(mod), fn, None)):
+            missing.append(f"{mod}.{fn}")
+    except ImportError:
+        missing.append(f"{mod}.{fn}")
+check("every function the checklist names exists in the skill (advice must match the tools)",
+      len(named) >= 9 and not missing, (named, missing))
+check("the check that every named function exists would catch a wrong name (mutation)",
+      not callable(getattr(importlib.import_module("causal"), "synthetic_control", None)))
+
+
+def fm(path):
+    t = path.read_text(encoding="utf-8")
+    head = t.split("---")[1]
+    return {k.strip(): v.strip().strip("'") for k, v in (ln.split(":", 1) for ln in head.strip().splitlines())}
+
+
+R = SK / "evals" / "routing"
+fc, fcf = fm(R / "forecast-no-checklist" / "graders" / "answer.md"), fm(R / "forecast-no-checklist" / "graders" /
+                                                                       "forecast.md")
+neg = re.compile(fc["pattern"], re.I)
+check("forecast case: the answer grader asserts the checklist is ABSENT (match: not_contains)",
+      fc["type"] == "regex" and fc.get("match") == "not_contains" and fc.get("target") == "last_message")
+check("forecast case: a forecasting answer passes, an answer that runs the checklist fails",
+      not neg.search("Use ETS e SARIMA com validação fora da amostra (origem móvel) contra o ingênuo sazonal.")
+      and neg.search("Antes, o checklist de identificação: controles ruins, spillovers e Oster.")
+      and re.search(fcf["pattern"], "Compare com o ingênuo sazonal fora da amostra.", re.I))
+ca_g = re.compile(fm(R / "causal-checklist-post-treatment" / "graders" / "answer.md")["pattern"], re.I)
+check("causal case: passes only when the answer flags the post-treatment variable AND unobserved selection",
+      ca_g.search("Funcionários depois da adesão é pós-tratamento. Como as empresas escolheram, faça a "
+                  "sensibilidade de Oster.")
+      and not ca_g.search("Funcionários depois da adesão é pós-tratamento: não use como controle.")
+      and not ca_g.search("Faça a sensibilidade a confundidores não observados."))
+ref = (R / "two-groups" / "graders" / "skill-fired.md").read_text(encoding="utf-8")
+check("both new cases use the standard skill-fired grader",
+      all((R / c / "graders" / "skill-fired.md").read_text(encoding="utf-8") == ref
+          for c in ("forecast-no-checklist", "causal-checklist-post-treatment")))
+p0 = (R / "causal-checklist-post-treatment" / "prompt.md").read_text(encoding="utf-8").lower()
+check("causal case does not ask about controls (unlike training-controls): the checklist must bring it up",
+      "controle" not in p0 and "depois da adesão" in p0 and "escolheram participar" in p0)
+
+# ----------------------------------------------------- 10. H text: §7 within its v2.5.1 size, and the Oster rule
+sec7 = skill_md[skill_md.index("## 7. Environment"):skill_md.index("## 8.")]
+check("SKILL.md §7 did not grow (v2.5.1: 2,859 characters)", len(sec7) <= 2859, len(sec7))
+check("§7: run the doctor from the analysis folder or --folder; one question at the end; non-blocking items do not "
+      "hold up the analysis; --offline only without network; the app copy is updated by the user",
+      all(k in sec7 for k in ("from the analysis folder (or pass `--folder PATH`)", "at the end of the reply",
+                              "non-blocking items", "never hold up the analysis", "`--offline` only without network",
+                              "which the user updates in Customize → Skills",
+                              "the complete one the \"To do\" names")), sec7)
+rules = (SK / "references" / "interpretation-rules.md").read_text(encoding="utf-8")
+r252 = rules[rules.index("## Rules added in v2.5.2"):] if "## Rules added in v2.5.2" in rules else ""
+check("interpretation rules v2.5.2: δ depends on R_max and is not a probability; 1.3·R̃ is a calibration",
+      all(k in r252 for k in ("not a probability", "depends on R_max", "calibration", "not a fact about the data")))
+check("interpretation rules v2.5.2: report the exact solution, and δ for β = 0 when β* is not reportable",
+      all(k in r252 for k in ("beta_star_exact", "Assumption 3", "spurious", "beta_star_exact_unstable",
+                              "report δ for β = 0")))
+ols = (SK / "references" / "ols-regression.md").read_text(encoding="utf-8")
+swe = (SK / "references" / "software-equivalents.md").read_text(encoding="utf-8")
+check("ols-regression.md §14 and software-equivalents no longer call oster an approximation only",
+      "solves the exact version" not in ols and "beta_star_exact" in ols and "robomit" in ols
+      and '"d")` (approximation) |' not in swe and "beta_star_exact" in swe)
+
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
