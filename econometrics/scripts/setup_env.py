@@ -887,6 +887,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if (a.json or a.offline or a.folder) and not a.doctor:
         ap.error("--json, --offline and --folder go with --doctor")
+    if a.folder and not Path(a.folder).is_dir():
+        ap.error(f"--folder: {a.folder} is not a folder")
     if a.skill_dir:
         print(recommended_skill_dir())
         return 0

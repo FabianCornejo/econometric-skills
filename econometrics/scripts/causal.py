@@ -3147,7 +3147,8 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
             ts = did_timing_sensitivity(d, unit, time, y, gvar, max_shift=max_shift, control=control, n_boot=n_boot,
                                         seed=seed, cluster=cluster, alpha=alpha, show=False)
             dr = ts["date_robust"]
-            rows.append({"check": f"timing (±{max_shift})", "kind": "inference",
+            rows.append({"clipped": False,         # the one row built by hand: without it the column is NaN
+                         "check": f"timing (±{max_shift})", "kind": "inference",
                          "what it checks": "does the conclusion survive date errors?",
                          "estimate": dr["estimate"], "se": dr["se"], "p": dr["p"], "mde": np.nan,
                          "rejects": bool(dr["p"] <= alpha) if np.isfinite(dr["p"]) else None, "ran": True, "note": ("survives" if ts["survives"] else "the conclusion depends on the exact "
