@@ -517,14 +517,20 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
             for i, t_ in enumerate(terms):
                 R[i, list(base.params.index).index(t_)] = 1
             F = float(np.squeeze(base.f_test(R).fvalue))
-            q = len(terms)
-            bench[f"{gname} ({q} dummies, jointly)"] = q * F / (q * F + base.df_resid)
+            k = len(terms)                        # number of joint restrictions; never reuse `q` (v2.5.2.1)
+            bench[f"{gname} ({k} dummies, jointly)"] = k * F / (k * F + base.df_resid)
     out["benchmarks"] = pd.Series(bench, name="partial R² with outcome").sort_values(ascending=False)
     if show:
+        qq = out["q"]                             # the label shows the q the statistics were computed with
         print(f"\nSensitivity of {treatment} (Cinelli-Hazlett): partial R² = {out['partial_r2']:.3%}, "
-              f"RV(q={q}) = {out['rv_q']:.2%}, RV(q={q}, α={alpha}) = {out['rv_qa']:.2%}")
-        print(f"A confounder explaining {out['rv_q']:.1%} of the residual variance of both {treatment} and the "
-              f"outcome would remove the estimate; {out['rv_qa']:.1%} would make it insignificant.")
+              f"RV(q={qq}) = {out['rv_q']:.2%}, RV(q={qq}, α={alpha}) = {out['rv_qa']:.2%}")
+        if qq == 1:
+            print(f"A confounder explaining {out['rv_q']:.1%} of the residual variance of both {treatment} and the "
+                  f"outcome would remove the estimate; {out['rv_qa']:.1%} would make it insignificant.")
+        else:                                     # RV_q reduces the estimate by 100q%; RV_q,α puts (1−q)·estimate in the CI
+            print(f"A confounder explaining {out['rv_q']:.1%} of the residual variance of both {treatment} and the "
+                  f"outcome would reduce the estimate by {qq:.0%} (to {1 - qq:g} times its value); "
+                  f"{out['rv_qa']:.1%} would put that reduced value inside the {1 - alpha:.0%} confidence interval.")
         if len(out["benchmarks"]):
             print("Observed covariates (partial R² with outcome), for comparison:")
             print(out["benchmarks"].to_string(float_format=lambda v: f"{v:.2%}"))
