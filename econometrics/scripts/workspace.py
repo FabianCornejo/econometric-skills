@@ -28,6 +28,7 @@ from pathlib import Path
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
 KEEP = ("econometrics",)          # a bare name keeps the plugin from any marketplace
+PREPARED_KEY = "_preparedBy"      # read by setup_env.folder_settings; Claude Code ignores it
 
 
 def workspace_settings(installed: list[dict], keep=KEEP, existing: dict | None = None) -> tuple[dict, list[str]]:
@@ -56,6 +57,11 @@ def workspace_settings(installed: list[dict], keep=KEEP, existing: dict | None =
         if "@" in k and k not in ids:
             enabled.setdefault(k, True)
     settings["enabledPlugins"] = dict(sorted(enabled.items()))
+    # A marker so the doctor knows this folder was prepared HERE, whatever the skill was installed as. Inferring
+    # it from an "econometrics@…: true" key failed both ways: that key is never written when the skill is a copy
+    # from the Claude app, and it is also written by enabling this skill for one project (v2.5.2 review, chat 3).
+    # Claude Code ignores keys it does not know (checked against CLI 2.1.321: the settings still applied).
+    settings[PREPARED_KEY] = "econometrics/workspace.py"
     return settings, off
 
 

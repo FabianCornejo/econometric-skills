@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import warnings
 from pathlib import Path
 
@@ -39,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "econometrics" / "scripts"))
 import _console  # noqa: E402,F401
 import causal as ca  # noqa: E402
+import workspace as ws  # noqa: E402
 import setup_env as se  # noqa: E402
 import specification as sp  # noqa: E402
 
@@ -331,13 +333,19 @@ acts = rep["actions"]
 check("common folder, crowded listing: the clean folder (workspace.py) is offered, as before",
       rep["listing"]["folder"] == str(folder) and not rep["listing"]["prepared"]
       and any("workspace.py" in a for a in acts), acts)
-# What workspace.py writes: this skill (KEEP) true, every other enabled plugin false.
-(folder / ".claude" / "settings.json").write_text(
-    json.dumps({"enabledPlugins": {"a@m": False, "b@m": False, "econometrics@econometric-skills": True}}),
-    encoding="utf-8")
+# The fixture comes from workspace.py itself, so it cannot drift from what the tool writes: the hand-written
+# one claimed a key ("econometrics@…": true) that the tool only writes when the skill is a plugin, and the
+# doctor believed it (v2.5.2 review round 2, chat 3).
+ws_settings, ws_off = ws.workspace_settings([{"id": "a@m", "enabled": True}, {"id": "b@m", "enabled": True},
+                                             {"id": "econometrics@econometric-skills", "enabled": True}])
+(folder / ".claude" / "settings.json").write_text(json.dumps(ws_settings), encoding="utf-8")
+check("workspace.py marks the folder it prepares, and turns the other plugins off",
+      ws_settings.get(ws.PREPARED_KEY, "").endswith("workspace.py") and sorted(ws_off) == ["a@m", "b@m"]
+      and ws_settings["enabledPlugins"]["econometrics@econometric-skills"] is True, ws_settings)
 rep = se.doctor(offline=True, cdir=cdir, env={}, run=fake_run(crowd), which=claude, os_name="posix", cwd=str(folder))
 acts = rep["actions"]
-check("prepared folder (workspace.py's settings), still crowded: says so and does NOT offer another clean folder",
+check("prepared folder (settings written by workspace.py), still crowded: says so and does NOT offer another "
+      "clean folder",
       rep["listing"]["prepared"] and rep["listing"]["plugins_off"] == 2
       and any("already prepared" in a and "do not offer another clean folder" in a for a in acts)
       and not any("workspace.py" in a for a in acts), acts)
@@ -809,6 +817,134 @@ check("a clipped pre-trend test that does NOT reject: still called uninformative
       pt2["rho_clipped"] and pt2["p"] > 0.05
       and any("did not reject, but it is not informative" in m for m in norej_w)
       and not any("inflates its standard error" in m for m in norej_w), (pt2["p"], norej_w))
+
+
+# ================================================ 11. Fixes from the independent review, round 2 (chat 3)
+
+# --- 11a. randomization_inference no longer walks factorial(N1) permutations to find a handful of arrangements
+from itertools import permutations as _perms  # noqa: E402  (an oracle, not the implementation)
+
+for dates in ([5.0, 5.0, 8.0], [1.0, 2.0, 3.0], [4.0] * 4, [1.0, 1.0, 2.0, 2.0], [7.0, 7.0, 9.0, 9.0, 9.0]):
+    check(f"distinct arrangements of {dates} match itertools, in the same (lexicographic) order",
+          ca._distinct_arrangements(np.asarray(dates)) == sorted(set(_perms(dates))), dates)
+t0 = time.perf_counter()
+arr20 = ca._distinct_arrangements(np.asarray([5.0] * 19 + [8.0]))
+el20 = time.perf_counter() - t0
+check("20 treated units, two adoption dates: the 20 arrangements come out at once, not after 20! steps "
+      "(2.4e18 permutations: the function hung with no message)", len(arr20) == 20 and el20 < 1.0, el20)
+
+
+def ri_panel(N, N1, dates, T=6, seed=3, eff=3.0):
+    rng = np.random.default_rng(seed)
+    g = {u: (dates[i] if i < N1 else 0.0) for i, u in enumerate(range(N))}
+    rows = [(u, t, rng.normal() + 0.1 * t + eff * (1.0 if g[u] and t >= g[u] else 0.0) + rng.normal(0, 0.4), g[u])
+            for u in range(N) for t in range(1, T + 1)]
+    return pd.DataFrame(rows, columns=["u", "t", "y", "g"])
+
+
+t0 = time.perf_counter()
+ri13 = ca.randomization_inference(ri_panel(13, 12, [5.0] * 11 + [8.0]), unit="u", time="t", y="y", gvar="g",
+                                  n_perm=999, seed=0)
+el13 = time.perf_counter() - t0
+check("13 units, 12 treated, two dates: exact p over the 156 assignments, in under a second (it took 25 s, and "
+      "15 units took an hour)",
+      ri13["exact"] and ri13["possible_assignments"] == 156 and el13 < 1.0
+      # exact enumeration means p is a whole number of assignments out of 156, the observed one among them
+      and abs(ri13["p"] * 156 - round(ri13["p"] * 156)) < 1e-9 and 0 < ri13["p"] <= 5 / 156,
+      (el13, ri13["p"], ri13["p"] * 156))
+# the p-values of designs that already worked must not move: same arrangements, same order
+for N, N1, dts, want_exact in ((9, 3, [4.0, 4.0, 6.0], True), (8, 3, [3.0, 5.0, 6.0], True),
+                               (10, 4, [4.0, 4.0, 6.0, 6.0], False)):
+    d_ri = ri_panel(N, N1, dts)
+    r_ri = ca.randomization_inference(d_ri, unit="u", time="t", y="y", gvar="g", n_perm=999, seed=0)
+    sets_now = [(list(c), a) for c in __import__("itertools").combinations(range(N), N1)
+                for a in ([np.asarray(dts, float)] if len(set(dts)) == 1
+                          else [np.asarray(x, float) for x in sorted(set(_perms(dts)))])]
+    check(f"N={N}, {N1} treated: the assignment space is unchanged ({'exact' if want_exact else 'sampled'})",
+          r_ri["exact"] is want_exact
+          and (r_ri["possible_assignments"] == len(sets_now) if want_exact else True), r_ri["possible_assignments"])
+
+# --- 11b. oster refuses a fit without an intercept (its R² is uncentered, so every bound would be wrong)
+rng_ni = np.random.default_rng(11)
+n_ni = 4000
+z_ni = rng_ni.normal(size=n_ni)
+x_ni = 0.6 * z_ni + rng_ni.normal(size=n_ni)
+d_ni = pd.DataFrame({"x": x_ni, "z": z_ni, "y": 1.0 + 1.0 * x_ni + 2.0 * z_ni + rng_ni.normal(size=n_ni)})
+fits = {k: smf.ols(f, d_ni).fit() for k, f in (("s0", "y ~ x"), ("s1", "y ~ x + z"),
+                                               ("n0", "y ~ x - 1"), ("n1", "y ~ x + z - 1"))}
+for a, b, lab in (("n0", "n1", "neither fit"), ("s0", "n1", "the controlled fit"), ("n0", "s1", "the uncontrolled fit")):
+    try:
+        sp.oster(fits[a], fits[b], "x", r_max=1.0)
+        got = "no error"
+    except ValueError as e:
+        got = str(e)
+    check(f"oster refuses when {lab} has an intercept missing (uncentered R²: β* was 35% off, and a larger "
+          f"intercept flipped the sign, with no warning)",
+          "no intercept" in got and "uncentered" in got, got[:90])
+with warnings.catch_warnings(record=True) as w_ni:
+    warnings.simplefilter("always")
+    o_ni = sp.oster(fits["s0"], fits["s1"], "x", r_max=1.0)
+check("with intercepts the result is unchanged and silent (the refusal does not touch the ordinary path)",
+      abs(o_ni["beta_star_exact"] - 0.701950) < 1e-5 and not w_ni, (o_ni["beta_star_exact"], len(w_ni)))
+check("_has_intercept: statsmodels' own flag, and a constant column under another name still counts",
+      sp._has_intercept(fits["s0"]) and not sp._has_intercept(fits["n0"])
+      and sp._has_intercept(sm.OLS(d_ni["y"], pd.DataFrame({"one": 1.0, "x": d_ni["x"]})).fit()))
+
+# --- 11c. a prepared folder is recognised by workspace.py's marker, whatever the skill was installed as
+prep_dir = tmp / "prep"
+
+
+def prep_folder(name, settings_obj):
+    f = prep_dir / name
+    (f / ".claude").mkdir(parents=True)
+    (f / ".claude" / "settings.json").write_text(json.dumps(settings_obj), encoding="utf-8")
+    return f
+
+
+E_ID = "econometrics@econometric-skills"
+mark = {ws.PREPARED_KEY: "econometrics/workspace.py"}
+prep_cases = [
+    ("plugin skill, prepared by workspace.py", {"enabledPlugins": {"a@m": False, E_ID: True}, **mark}, True),
+    ("skill copied by the Claude app (no econometrics key at all), prepared by workspace.py",
+     {"enabledPlugins": {"a@m": False, "b@m": False}, **mark}, True),
+    ("one unrelated plugin off by hand", {"enabledPlugins": {"a@m": False}}, False),
+    ("one off by hand plus this skill enabled for the project (what passed as prepared before)",
+     {"enabledPlugins": {"a@m": False, E_ID: True}}, False),
+    ("no settings at all", {}, False),
+    ("marked, but this skill turned off here", {"enabledPlugins": {"a@m": False, E_ID: False}, **mark}, False),
+]
+for k, (lab, obj, want) in enumerate(prep_cases):
+    got = se.folder_settings(prep_folder(f"p{k}", obj))["prepared"]
+    check(f"prepared folder — {lab}: {want}", got is want, got)
+check("the marker is what decides, so a folder prepared by an older workspace.py is offered a clean folder "
+      "again (the safe error) rather than being silently skipped",
+      not se.folder_settings(prep_folder("old", {"enabledPlugins": {"a@m": False, E_ID: True}}))["prepared"])
+
+# --- 11d. the two new routing graders: the holes round 2 found
+neg_pat = re.compile(fm(R / "forecast-no-checklist" / "graders" / "answer.md")["pattern"], re.I)
+ca_pat = re.compile(fm(R / "causal-checklist-post-treatment" / "graders" / "answer.md")["pattern"], re.I)
+must_fail_forecast = ["nao use um controle ruim, cuide do nivel de agrupamento e dos mediadores",
+                      "cuidado com controle ruim", "veja se ha mediador no meio",
+                      "pense no nivel de atribuicao do tratamento", "o problema das unidades tratadas poucas",
+                      "antes, o checklist de identificacao"]
+check("forecast case: an answer that runs the checklist is caught, including 'controle ruim' in the singular "
+      "(the pattern only had 'controles ruins')",
+      all(neg_pat.search(t) for t in must_fail_forecast),
+      [t for t in must_fail_forecast if not neg_pat.search(t)])
+check("forecast case: a forecasting answer still passes",
+      not any(neg_pat.search(t) for t in
+              ["Use ETS e SARIMA; valide fora da amostra com origem movel contra o ingenuo sazonal.",
+               "Separe as ultimas 6 observacoes e compare o erro com o do benchmark ingenuo."]))
+check("causal case: generic 'sensibilidade' no longer passes; the sensitivity must be to what is unobserved",
+      ca_pat.search("Funcionarios depois da adesao e pos-tratamento. Como as empresas escolheram, faca "
+                    "sensibilidade a confundidores nao observados (Oster).")
+      and not ca_pat.search("Trate funcionarios como mediador e faca uma analise de sensibilidade dos "
+                            "resultados ao numero de bins")
+      and not ca_pat.search("Funcionarios depois da adesao e pos-tratamento: nao use como controle."))
+n_cases = len([d for d in (R).iterdir() if d.is_dir()])
+check(f"README states how many requests the routing evals send, and it matches the {n_cases} cases on disk",
+      f"sends twenty-two plain requests" in (ROOT / "README.md").read_text(encoding="utf-8") and n_cases == 22,
+      n_cases)
 
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")

@@ -194,6 +194,19 @@ def ovb_decomposition(data: pd.DataFrame, y: str, focal: str, omitted: str,
     return out
 
 
+def _has_intercept(res) -> bool:
+    """Whether a fit has an intercept, by statsmodels' own flag (what decides centered vs uncentered R²),
+    with a scan for a constant column as the fallback."""
+    m = getattr(res, "model", None)
+    if m is None:
+        return True                                  # not a statsmodels fit: the caller's other gates handle it
+    if getattr(m, "k_constant", None):
+        return True
+    X = np.asarray(getattr(m, "exog", np.empty((0, 0))), float)
+    return X.ndim == 2 and X.shape[0] > 0 and any(
+        np.allclose(X[:, k], X[0, k]) for k in range(X.shape[1]))
+
+
 def _oster_inputs(res_uncontrolled, res_controlled, focal: str):
     """σ²_y, σ²_x and τ_x for the exact Oster estimator, from the controlled fit, or (None, reason).
 
@@ -300,7 +313,8 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
     """Coefficient stability (Oster, 2019): the approximate estimator and, with exact=True, the exact one.
 
     res_uncontrolled: y on the focal variable alone (plus an intercept); res_controlled: adds the observed
-    controls. Same sample, unweighted OLS (statsmodels).
+    controls. Same sample, unweighted OLS (statsmodels). Both fits must have an intercept: without one
+    statsmodels reports an uncentered R² and every bound here would be wrong, so the function refuses.
     Approximation (keys beta_star, delta_for_zero, identified_set):
       β* = β̃ − δ(β° − β̃)(R_max − R̃)/(R̃ − R°)      bias-adjusted effect for a given δ
       δ(β=0) = β̃(R̃ − R°) / [(β° − β̃)(R_max − R̃)]  how strong selection on unobservables must be,
@@ -321,6 +335,17 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
     Default R_max = min(1.3·R̃, 1) (Oster's calibration, not a fact about the data). δ depends on the R_max chosen
     and is not a probability; |δ(β=0)| > 1 is the usual robustness bar.
     """
+    # Every number here is a function of R², and statsmodels reports an UNCENTERED R² for a fit without an
+    # intercept. Oster's decomposition needs the centered one (its identity R°σ²_y = β°²σ²_x holds only with an
+    # intercept), so both the approximation and the exact solution come out wrong, and quietly: with y = 1 + x + 2z
+    # the approximation gave 2530 and the exact solution 0.456 against the right 0.702, with no warning at all,
+    # and a slightly larger intercept flipped the sign of the effect (v2.5.2 review, chat 3). Refuse instead.
+    for res, which in ((res_uncontrolled, "uncontrolled"), (res_controlled, "controlled")):
+        if not _has_intercept(res):
+            raise ValueError(
+                f"The {which} regression has no intercept, so its R² is uncentered and Oster's bounds do not "
+                "apply: every quantity here (β*, δ for β = 0, the identified set) would be wrong without "
+                "warning. Refit both models with an intercept.")
     b0, r0 = float(res_uncontrolled.params[focal]), float(res_uncontrolled.rsquared)
     bt, rt = float(res_controlled.params[focal]), float(res_controlled.rsquared)
     w = []

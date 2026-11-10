@@ -589,17 +589,25 @@ def _same_dir(a, b) -> bool:
 
 def folder_settings(folder) -> dict:
     """Plugins a folder's own .claude/settings.json (and settings.local.json) turns off, as workspace.py writes."""
-    off, on = set(), set()
+    off, on, marked = set(), set(), False
     for name in ("settings.json", "settings.local.json"):
-        ep = _load_json(Path(folder) / ".claude" / name).get("enabledPlugins")
+        st = _load_json(Path(folder) / ".claude" / name)
+        marked |= str(st.get("_preparedBy", "")).endswith("workspace.py")
+        ep = st.get("enabledPlugins")
         if isinstance(ep, dict):
             off |= {k for k, v in ep.items() if v is False}
             on |= {k for k, v in ep.items() if v is True}
-    # workspace.py writes this skill true (KEEP) and every other enabled plugin false. One unrelated plugin
-    # turned off by hand is NOT a prepared folder: that folder still needs the clean-folder offer, which the
-    # "already prepared" item suppresses (v2.5.2 review).
-    prepared = bool(off) and any(str(i).startswith("econometrics@") for i in on)
-    return {"prepared": prepared, "plugins_off": len(off), "plugins_on": len(on)}
+    # Prepared = workspace.py's own marker, and this skill not turned off here. Asking instead for an
+    # "econometrics@…: true" key failed both ways (v2.5.2 review, chat 3): that key is never written when the
+    # skill is a copy from the Claude app, so a folder workspace.py had cleaned was offered a clean folder
+    # again — the very finding this version set out to fix; and it is also written by enabling this skill for
+    # one project, so one unrelated plugin turned off by hand plus that key passed as prepared and suppressed
+    # the clean-folder offer, the only cure for a crowded listing. A folder cleaned by an older workspace.py
+    # has no marker and is offered a clean folder again: the safe error, and running workspace.py twice is
+    # harmless. Plugins still enabled do NOT rule out a prepared folder (--keep, and skills the app syncs).
+    skill_off = any(str(i).startswith("econometrics@") for i in off)
+    return {"prepared": bool(marked) and not skill_off, "plugins_off": len(off), "plugins_on": len(on),
+            "skill_off": skill_off}
 
 
 def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:

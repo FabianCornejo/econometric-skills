@@ -2494,7 +2494,7 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     the observed adoption dates are reassigned to random sets of STATES (every county of a state gets its state's date);
     permuting counties would break the within-state dependence and over-reject. The cluster column must be constant
     within unit, and gvar constant within cluster (an error otherwise). n_units and n_treated then count clusters."""
-    from itertools import combinations, permutations
+    from itertools import combinations
     from math import comb, factorial
     d = df[[unit, time, y, gvar]].dropna(subset=[unit, time, y]).copy()
     d[gvar] = d[gvar].fillna(0)
@@ -2531,7 +2531,7 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     rng = np.random.default_rng(seed)
     if n_assign - 1 <= n_perm:
         arrs = ([np.asarray(dates_obs, float)] if n_date_arr == 1 else
-                [np.asarray(a, float) for a in sorted(set(permutations(dates_obs.tolist())))])
+                [np.asarray(a, float) for a in _distinct_arrangements(dates_obs)])
         sets = [(list(c), a) for c in combinations(range(N), N1) for a in arrs]
         exact = True
     else:
@@ -2964,6 +2964,35 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
 
 
 # =============================================================================
+def _distinct_arrangements(values) -> list:
+    """Every distinct ordering of a multiset, in lexicographic order, generated directly.
+
+    Deduplicating factorial(n) permutations gives the same list but costs n! steps even when only a
+    handful of orderings are distinct: with 14 treated units and two adoption dates that is 87 billion
+    steps for 210 arrangements, and randomization_inference hung with no message (v2.5.2 review, chat 3).
+    Taking the smallest value still available at each position yields lexicographic order, so the
+    arrangements come out in the same order as before and no p-value changes."""
+    vals, counts = np.unique(np.asarray(values), return_counts=True)
+    vals = [float(v) for v in vals]
+    counts = [int(c) for c in counts]
+    n, out, cur = len(values), [], []
+
+    def walk():
+        if len(cur) == n:
+            out.append(tuple(cur))
+            return
+        for i, v in enumerate(vals):
+            if counts[i]:
+                counts[i] -= 1
+                cur.append(v)
+                walk()
+                cur.pop()
+                counts[i] += 1
+
+    walk()
+    return out
+
+
 # Falsification matrix for a DiD (v2.5.1)
 # =============================================================================
 def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
