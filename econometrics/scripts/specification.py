@@ -454,7 +454,11 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
         print(f"\nOster (R_max = {rmax:.3f}, δ = {delta}): β̃ = {bt:.4f} → β* = {beta_star:.4f} (approximation); "
               f"identified set [{out['identified_set'][0]:.4f}, {out['identified_set'][1]:.4f}]")
         if "beta_star_exact" in out:
-            print(f"Exact: β* = {out['beta_star_exact']:.4f}; δ needed for β = 0: {out['delta_for_zero_exact']:.2f}")
+            ise = out["identified_set_exact"]     # v2.5.3: computed since v2.5.2, never printed before
+            iset = (f"identified set [{ise[0]:.4f}, {ise[1]:.4f}] (exact)" if ise is not None
+                    else "no exact identified set (no admissible real root; see the warning)")
+            print(f"Exact: β* = {out['beta_star_exact']:.4f}; {iset}; "
+                  f"δ needed for β = 0: {out['delta_for_zero_exact']:.2f}")
         for m in w:                                   # the exact β* can be one the warnings say not to report
             print("  WARNING: " + m)
         dz = out.get("delta_for_zero_exact", delta_zero)
@@ -464,6 +468,34 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
     return out
 
 
+def _check_q(q):
+    """Validate the q of the robustness values (v2.5.3): a real number > 0, finite, not a bool.
+
+    q is the share of the estimate the confounder would remove (q = 1: all of it; q = 2: flip its sign). q <= 0
+    has no meaning (q = -1 printed "reduce the estimate by -100% (to 2 times its value)"), and True passed as 1.
+    The value is kept as given (an int stays an int, np.float32 keeps its exact value): only the label rounds."""
+    import numbers
+    if isinstance(q, (bool, np.bool_)) or not isinstance(q, numbers.Real):
+        raise TypeError(f"q must be a real number > 0 (the share of the estimate to remove; 1 = all of it), "
+                        f"got {q!r}")
+    if not np.isfinite(float(q)) or q <= 0:
+        raise ValueError(f"q must be finite and > 0 (the share of the estimate to remove; 1 = all of it), got {q!r}")
+    return int(q) if isinstance(q, numbers.Integral) else float(q)
+
+
+def _q_is_one(q) -> bool:
+    """q a rounding error away from 1 reads as q = 1 (the text branch only; the numbers use q as given)."""
+    return abs(float(q) - 1.0) <= 1e-9
+
+
+def _q_label(q) -> str:
+    """q as printed: integers as given ("2"), floats to 6 significant digits ("0.1" for np.float32(0.1), "1.0")."""
+    import numbers
+    if isinstance(q, numbers.Integral):
+        return str(int(q))
+    return repr(float(f"{float(q):.6g}"))
+
+
 def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA) -> dict:
     """Cinelli and Hazlett (2020) sensitivity statistics from a classical OLS t-statistic.
 
@@ -471,7 +503,9 @@ def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA)
     rv_q: minimum partial R² that a confounder would need with BOTH treatment and outcome to
           reduce the estimate by 100·q% (q = 1: to zero).
     rv_qa: the same, to make the reduced estimate no longer significant at level alpha.
+    q must be a finite real number > 0 (v2.5.3: ValueError otherwise; TypeError for a bool or a non-number).
     """
+    q = _check_q(q)
     t, dof = abs(float(t)), float(dof)
     f = t / np.sqrt(dof)
     fq = q * f
@@ -522,16 +556,27 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
     out["benchmarks"] = pd.Series(bench, name="partial R² with outcome").sort_values(ascending=False)
     if show:
         qq = out["q"]                             # the label shows the q the statistics were computed with
+        lab = _q_label(qq)
         print(f"\nSensitivity of {treatment} (Cinelli-Hazlett): partial R² = {out['partial_r2']:.3%}, "
-              f"RV(q={qq}) = {out['rv_q']:.2%}, RV(q={qq}, α={alpha}) = {out['rv_qa']:.2%}")
-        if qq == 1:
+              f"RV(q={lab}) = {out['rv_q']:.2%}, RV(q={lab}, α={alpha}) = {out['rv_qa']:.2%}")
+        level = f"{round((1 - alpha) * 100, 6):g}%"
+        # "already" is judged on the CI the user sees (df), not on the paper's df − 1 convention (a null
+        # confounder costs one degree of freedom): between the two, rv_qa is 0 but the reported CI excludes the
+        # target. The target is (1 − q)·estimate, which lies inside the CI when q·|t| <= t_crit(df).
+        q_eff = 1.0 if _q_is_one(qq) else float(qq)
+        in_reported = q_eff * abs(float(base.tvalues[treatment])) <= stats.t.ppf(1 - alpha / 2, base.df_resid)
+        if _q_is_one(qq):
+            if in_reported:                       # v2.5.3: was "0.0% would make it insignificant"
+                tail = f"it is already not significant at the {level} level, with no confounder"
+            elif out["rv_qa"] == 0:
+                tail = (f"it is only just significant at the {level} level: adding any regressor, even one unrelated "
+                        f"to both, makes it insignificant")
+            else:                                 # the v2.5.2.1 sentence, byte for byte
+                tail = f"{out['rv_qa']:.1%} would make it insignificant"
             print(f"A confounder explaining {out['rv_q']:.1%} of the residual variance of both {treatment} and the "
-                  f"outcome would remove the estimate; {out['rv_qa']:.1%} would make it insignificant.")
+                  f"outcome would remove the estimate; {tail}.")
         else:                                     # RV_q reduces the estimate by 100q%; RV_q,α puts (1−q)·estimate in the CI
-            pct, rest, level = f"{round(qq * 100, 6):g}%", f"{round(1 - qq, 6):g}", f"{round((1 - alpha) * 100, 6):g}%"
-            # "already inside" is judged on the CI the user sees (df), not on the paper's df − 1 convention
-            # (a null confounder costs one degree of freedom): between the two, rv_qa is 0 but the reported CI excludes it
-            in_reported = qq * abs(float(base.tvalues[treatment])) <= stats.t.ppf(1 - alpha / 2, base.df_resid)
+            pct, rest = f"{round(qq * 100, 6):g}%", f"{round(1 - qq, 6):g}"
             if in_reported:
                 tail = f"that reduced value is already inside the {level} confidence interval, with no confounder"
             elif out["rv_qa"] == 0:
