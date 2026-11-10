@@ -528,9 +528,12 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
             print(f"A confounder explaining {out['rv_q']:.1%} of the residual variance of both {treatment} and the "
                   f"outcome would remove the estimate; {out['rv_qa']:.1%} would make it insignificant.")
         else:                                     # RV_q reduces the estimate by 100q%; RV_q,α puts (1−q)·estimate in the CI
+            pct, rest, level = f"{round(qq * 100, 6):g}%", f"{round(1 - qq, 6):g}", f"{round((1 - alpha) * 100, 6):g}%"
+            tail = (f"that reduced value is already inside the {level} confidence interval, with no confounder"
+                    if out["rv_qa"] == 0 else
+                    f"{out['rv_qa']:.1%} would put that reduced value inside the {level} confidence interval")
             print(f"A confounder explaining {out['rv_q']:.1%} of the residual variance of both {treatment} and the "
-                  f"outcome would reduce the estimate by {qq:.0%} (to {1 - qq:g} times its value); "
-                  f"{out['rv_qa']:.1%} would put that reduced value inside the {1 - alpha:.0%} confidence interval.")
+                  f"outcome would reduce the estimate by {pct} (to {rest} times its value); {tail}.")
         if len(out["benchmarks"]):
             print("Observed covariates (partial R² with outcome), for comparison:")
             print(out["benchmarks"].to_string(float_format=lambda v: f"{v:.2%}"))

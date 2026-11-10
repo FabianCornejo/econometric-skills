@@ -6,7 +6,8 @@ statistics were computed with. The numbers were right (robustness_value runs bef
 line also said "would remove the estimate" for every q, which is true only for q = 1.
 
 What is checked here:
-  1. the printed q is the q requested and the one in out["q"], with a 6-level categorical in the model;
+  1. the printed q is the q requested and the one in out["q"], with 6- and 4-level categoricals, two
+     categoricals at once (the old code printed the dummies of the last one), and q given as an int;
   2. the joint benchmark keeps its label and equals the partial R² from refitting without the dummies;
   3. no number changed: references fixed from the code at 8df4e07 (v2.5.2), three designs, three q's;
   4. the q = 1 text is byte-identical to v2.5.2 when there is no categorical (the case the bug never hit);
@@ -16,8 +17,9 @@ What is checked here:
      found on a 2-D grid (it does not assume monotonicity: near R²_yz = 1 the adjusted SE collapses),
      including the large-effect branch.
 
-Mutation (done when written): against specification.py of 8df4e07 the label checks of (1) and the sentence
-checks of (5) fail; (2), (3), (4) and the definition checks of (5) pass.
+Mutation (done when written): against specification.py of 8df4e07 (v2.5.2) 22 checks fail, all of them label
+or sentence checks; the numbers, benchmarks and definition checks pass. Against c14039c (the first fix, before
+the independent review) the 4 formatting / RV_q,α = 0 checks fail.
 
 Run from the repository root:  python3 tests/test_v2521.py
 Needs: statsmodels, scipy.
@@ -81,6 +83,21 @@ _, txt_b = printed(fits["B"], 2.0)
 check("label: q=2 with a 4-level categorical prints RV(q=2.0), not RV(q=3",
       "RV(q=2.0)" in txt_b and "RV(q=3" not in txt_b)
 
+# two categoricals: the old code printed the dummies of the LAST one (region: 2), so q=1 came out as RV(q=2)
+d2 = dA.copy()
+d2["regiao"] = np.random.default_rng(99).choice(["N", "S", "L"], len(d2))
+fit2 = smf.ols("y ~ d + x1 + C(setor) + C(regiao)", d2).fit()
+o2, txt2 = printed(fit2, 1.0)
+check("label: two categoricals (5 and 2 dummies), q=1 prints RV(q=1.0), not RV(q=2 nor RV(q=5",
+      re.findall(r"RV\(q=([^,)]+)", txt2) == ["1.0", "1.0"] and "RV(q=2" not in txt2 and "RV(q=5" not in txt2,
+      str(re.findall(r"RV\(q=([^,)]+)", txt2)))
+check("benchmark: two categoricals keep one joint benchmark each",
+      {"C(setor) (5 dummies, jointly)", "C(regiao) (2 dummies, jointly)"} <= set(o2["benchmarks"].index),
+      str(list(o2["benchmarks"].index)))
+o_int, txt_int = printed(fits["A"], 2)
+check("label: q given as int 2 prints RV(q=2) and the 200% sentence",
+      re.findall(r"RV\(q=([^,)]+)", txt_int) == ["2", "2"] and "reduce the estimate by 200% (to -1 times" in txt_int)
+
 # --- 2. joint benchmark: label kept, value by refitting ----------------------------------------------
 bA = sp.sensitivity(fits["A"], "d")["benchmarks"]
 key = "C(setor) (5 dummies, jointly)"
@@ -138,6 +155,24 @@ _, txt90 = printed(fits["A"], 2.0, alpha=0.10)
 check("sentence: the CI level follows alpha (α=0.10 -> 90%)", "inside the 90% confidence interval" in txt90)
 
 
+_, txt_a10 = printed(fits["A"], 1.0, alpha=0.10)
+check("q=1 with α=0.10: label shows α=0.1 and the q=1 sentence is kept",
+      "RV(q=1.0, α=0.1)" in txt_a10 and "would make it insignificant" in txt_a10 and "confidence interval" not in txt_a10)
+_, txt_a001 = printed(fits["A"], 2.0, alpha=0.001)
+check("sentence: α=0.001 prints the 99.9% interval, not a rounded 100%",
+      "inside the 99.9% confidence interval" in txt_a001 and "100% confidence" not in txt_a001)
+_, txt_q8 = printed(fits["A"], 0.125)
+check("sentence: q=0.125 prints 'by 12.5% (to 0.875 times', consistent with each other",
+      "reduce the estimate by 12.5% (to 0.875 times its value)" in txt_q8)
+_, txt_q3 = printed(fits["A"], 1 / 3)
+check("sentence: q=1/3 prints 33.3333% and 0.666667 (no float noise)",
+      "by 33.3333% (to 0.666667 times its value)" in txt_q3)
+o_z, txt_z = printed(fits["A"], 0.125)
+check("sentence: RV_q,α = 0 says the reduced value is already inside the CI, not '0.0% would put'",
+      o_z["rv_qa"] == 0 and "already inside the 95% confidence interval, with no confounder" in txt_z
+      and "0.0% would put" not in txt_z, f"rv_qa={o_z['rv_qa']}")
+
+
 def adjusted(tau, se, dof, r2yz, r2dz):
     """Cinelli and Hazlett (2020, sec. 4): bias bound and adjusted SE of a confounder with partial R²s
     (r2yz with the outcome, r2dz with the treatment). Written from the paper, not from specification.py."""
@@ -171,6 +206,9 @@ for q in (0.5, 1.0, 2.0):
     m = minimax_rv_qa(tau, se, dof, q, 0.05)
     check(f"definition: RV_q,α is the smallest strength whose CI reaches (1 − q)·τ̂ (q={q}, grid 1/1500)",
           on_grid(m, o["rv_qa"], 1500), f"grid {m:.5f} vs {o['rv_qa']:.5f}")
+est0, se0 = adjusted(tau, se, dof, 0.0, 0.0)   # no confounder: the plain (df-1)-based CI of the paper
+check("definition: when RV_q,α = 0, (1 − q)·τ̂ is inside the unadjusted CI (q=0.125)",
+      est0 - stats.t.ppf(0.975, dof - 1) * se0 <= (1 - 0.125) * tau, f"{(est0 - stats.t.ppf(0.975, dof - 1) * se0) / tau:.4f}")
 for t_big, dof_big, q in ((30.0, 50, 1.0), (40.0, 30, 2.0)):        # large-effect branch of RV_q,α
     r = sp.robustness_value(t_big, dof_big, q=q)
     fq = q * t_big / np.sqrt(dof_big)
