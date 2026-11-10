@@ -397,12 +397,16 @@ dfr = pd.DataFrame(dict(y=yy_, d=dd_, x=xx_))
 r_hc = smf.ols("y ~ d + x", dfr).fit(cov_type="HC1")
 r_cl = smf.ols("y ~ d + x", dfr).fit()
 o, txt, _ = run(sp.sensitivity, r_hc, "d", show=True)
+txt_hc = txt
 check("B1 premise: HC1 says significant, the classical SE does not",
       r_hc.pvalues["d"] < 0.05 < r_cl.pvalues["d"], f"{r_hc.pvalues['d']:.4f} vs {r_cl.pvalues['d']:.4f}")
 check("B1: the verdict is labelled as the classical one, with both t's and the cov_type",
       "use the classical SE" in txt and f"t = {r_cl.tvalues['d']:.2f}" in txt and f"HC1 fit gives t = "
       f"{r_hc.tvalues['d']:.2f}" in txt, txt)
 o, txt, _ = run(sp.sensitivity, r_cl, "d", show=True)
+check("B1: the verdict itself is the classical one (classical p > 0.05): 'already not significant at the 5% level'",
+      "it is already not significant at the 5% level, with no confounder" in txt_hc and "only just" not in txt_hc,
+      txt_hc.splitlines()[2])
 check("B1: a classical fit has no such line", "use the classical SE" not in txt)
 # B3: Oster prints the exact identified set only as reportable when the warnings allow it
 mt = pd.read_csv(HERE.parents[0] / "tools" / "r_reference" / "output" / "mtcars.csv")
@@ -460,6 +464,59 @@ try:
 except TypeError as e:
     b6 = "int or a float" in str(e)
 check("B6: Decimal is a TypeError that says 'int or a float'", b6 is True, str(b6))
+
+# --- 9. review round 2 (2026-11-10) ---------------------------------------------------------------------------
+# the lower edge of the band: |t| strictly between t_df and t_{df-1} (the midpoint used above lies above t_{df-1})
+def edge_fit(q_, seed=2532):
+    rng_ = np.random.default_rng(seed)
+    n_ = 15
+    w_ = pd.DataFrame(dict(d=rng_.normal(size=n_), x1=rng_.normal(size=n_)))
+    w_["e"] = w_.x1 + rng_.normal(size=n_)
+    b_ = smf.ols("e ~ d + x1", w_).fit()
+    df_ = b_.df_resid
+    t_e = 0.5 * (stats.t.ppf(0.975, df_) + stats.t.ppf(0.975, df_ - 1)) / q_       # q·|t| inside (t_df, t_{df-1})
+    w_["y"] = w_.e + (t_e * b_.bse["d"] - b_.params["d"]) * w_.d
+    return w_, smf.ols("y ~ d + x1", w_).fit(), df_, rng_
+
+
+for q_ in (1.0, 0.5):
+    w_, r_e, df_, rng_ = edge_fit(q_)
+    qt = q_ * abs(r_e.tvalues["d"])
+    o, txt, _ = run(sp.sensitivity, r_e, "d", q=q_, show=True)
+    ci = r_e.conf_int(0.05).loc["d"]
+    target = (1 - q_) * r_e.params["d"]
+    check(f"band, lower edge (q={q_}): premise t_df < q|t| < t_(df-1); the reported CI excludes the target",
+          stats.t.ppf(0.975, df_) < qt < stats.t.ppf(0.975, df_ - 1) and not (ci[0] <= target <= ci[1]), f"{qt:.4f}")
+    want = ("only just significant at the 5% level: adding a regressor unrelated to both" if q_ == 1
+            else "just outside the 95% confidence interval: adding a regressor unrelated to both")
+    check(f"band, lower edge (q={q_}): the band sentence, not 'already'", want in txt and "already" not in txt,
+          txt.splitlines()[2])
+    Z_ = np.column_stack([np.ones(len(w_)), w_.d, w_.x1, w_.y])
+    u_ = rng_.normal(size=len(w_))
+    w_["z0"] = u_ - Z_ @ np.linalg.lstsq(Z_, u_, rcond=None)[0]
+    ci0 = smf.ols("y ~ d + x1 + z0", w_).fit().conf_int(0.05).loc["d"]
+    check(f"band, lower edge (q={q_}), the claim: with a regressor orthogonal to both the target enters the CI",
+          ci0[0] <= target <= ci0[1], f"CI {list(np.round(ci0, 4))}, target {target:.4f}")
+# the threshold of "less than 0.1%": 0.06% prints as 0.1%, 0.04% does not
+check("_pct: 0.0006 -> '0.1%', 0.0004 -> 'less than 0.1%', 0 -> '0.0%', 0.25 -> '25.0%'",
+      [sp._pct(v) for v in (0.0006, 0.0004, 0.0, 0.25)] == ["0.1%", "less than 0.1%", "0.0%", "25.0%"],
+      str([sp._pct(v) for v in (0.0006, 0.0004, 0.0, 0.25)]))
+# the q != 1 'less than 0.1%' path: q·|t| just above the band
+q_ = 0.5
+wb2 = wb.copy()
+wb2["y"] = wb2.e + (t_top / q_ * bb.bse["d"] - bb.params["d"]) * wb2.d
+o, txt, _ = run(sp.sensitivity, smf.ols("y ~ d + x1", wb2).fit(), "d", q=q_, show=True)
+check("q = 0.5 just above the band: 'less than 0.1% would put that reduced value inside', not '0.0%'",
+      0 < o["rv_qa"] < 0.0005 and "less than 0.1% would put that reduced value inside" in txt and " 0.0%" not in txt,
+      f"{o['rv_qa']:.2e}")
+try:
+    sp.robustness_value(3.0, 100, q=2 ** 1100)
+    big = "accepted"
+except ValueError:
+    big = "ValueError"
+except Exception as e:
+    big = type(e).__name__
+check("q = 2**1100 (too large for a float) is a ValueError, not an OverflowError", big == "ValueError", big)
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

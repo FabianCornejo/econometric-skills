@@ -65,8 +65,9 @@ def loop_reassignments(fn):
 
     Nested functions, lambdas and classes are their own scope and are not entered. In a comprehension only a walrus
     binds in the function (its loop variables do not). A loop's `else` block and a for's iterable run once, so they
-    are outside the loop; a while's test runs on every pass. Not covered: `nonlocal` rebinding from a nested
-    function (needs scope analysis; never used in scripts/)."""
+    are outside the loop; a while's test runs on every pass; a comprehension is a loop of its own (a walrus in it
+    counts even outside any for/while). Not covered: `nonlocal` rebinding from a nested function, and a walrus in a
+    nested def's or lambda's defaults or decorators (need scope analysis; none occurs in scripts/)."""
     a = fn.args
     params = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs}
     params |= {x.arg for x in (a.vararg, a.kwarg) if x is not None}
@@ -98,7 +99,10 @@ def loop_reassignments(fn):
                 visit(ch, in_loop, comp)
             return
         for ch in ast.iter_child_nodes(node):
-            visit(ch, in_loop, comp or isinstance(ch, _COMPS))
+            if isinstance(ch, _COMPS):            # a comprehension is itself a loop: a walrus in it rebinds every pass
+                visit(ch, True, True)
+            else:
+                visit(ch, in_loop, comp)
 
     for stmt in fn.body:
         visit(stmt, False)
@@ -152,6 +156,8 @@ VARIANTS = {
                                                              "        z = [(q := j) for j in range(3)]\n",
     "a def inside a loop named like a parameter": "def f(g, show=False):\n    for i in range(2):\n"
                                                   "        def g():\n            pass\n",
+    "walrus in a comprehension, outside any for/while (the one-line form of the bug)":
+        "def f(q, show=False):\n    z = [(q := len(t)) for t in g]\n    print(q)\n",
     "assignment in a while test": "def f(q, show=False):\n    while (q := q - 1) > 0:\n        pass\n",
 }
 for label, src in VARIANTS.items():

@@ -485,7 +485,11 @@ def _check_q(q):
     if isinstance(q, (bool, np.bool_)) or not isinstance(q, numbers.Real):
         raise TypeError(f"q must be an int or a float > 0 (the share of the estimate to remove; 1 = all of it), "
                         f"got {q!r}")
-    if not np.isfinite(float(q)) or q <= 0:
+    try:
+        finite = bool(np.isfinite(float(q)))
+    except OverflowError:                         # an int too large for a float (2**1100)
+        finite = False
+    if not finite or q <= 0:
         raise ValueError(f"q must be finite and > 0 (the share of the estimate to remove; 1 = all of it), got {q!r}")
     return int(q) if isinstance(q, numbers.Integral) else float(q)
 
@@ -582,7 +586,7 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
         # "already" is judged on the classical CI with df (the one these statistics come from), not on the paper's
         # df − 1 convention (a null confounder costs one degree of freedom): between the two, rv_qa is 0 but that
         # CI excludes the target. The target is (1 − q)·estimate, inside the CI when q·|t| <= t_crit(df); this
-        # implies rv_qa = 0, so "already" never sits next to a positive RV_q,α.
+        # implies rv_qa = 0 for the same q (up to q only rounding to 1, where the header shows 0.00% anyway).
         one = _q_is_one(qq)
         q_eff = 1.0 if one else float(qq)
         in_reported = q_eff * abs(float(base.tvalues[treatment])) <= stats.t.ppf(1 - alpha / 2, base.df_resid)
