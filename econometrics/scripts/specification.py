@@ -529,9 +529,16 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
                   f"outcome would remove the estimate; {out['rv_qa']:.1%} would make it insignificant.")
         else:                                     # RV_q reduces the estimate by 100q%; RV_q,α puts (1−q)·estimate in the CI
             pct, rest, level = f"{round(qq * 100, 6):g}%", f"{round(1 - qq, 6):g}", f"{round((1 - alpha) * 100, 6):g}%"
-            tail = (f"that reduced value is already inside the {level} confidence interval, with no confounder"
-                    if out["rv_qa"] == 0 else
-                    f"{out['rv_qa']:.1%} would put that reduced value inside the {level} confidence interval")
+            # "already inside" is judged on the CI the user sees (df), not on the paper's df − 1 convention
+            # (a null confounder costs one degree of freedom): between the two, rv_qa is 0 but the reported CI excludes it
+            in_reported = qq * abs(float(base.tvalues[treatment])) <= stats.t.ppf(1 - alpha / 2, base.df_resid)
+            if in_reported:
+                tail = f"that reduced value is already inside the {level} confidence interval, with no confounder"
+            elif out["rv_qa"] == 0:
+                tail = (f"that reduced value is just outside the {level} confidence interval: adding any regressor, "
+                        f"even one unrelated to both, puts it inside")
+            else:
+                tail = f"{out['rv_qa']:.1%} would put that reduced value inside the {level} confidence interval"
             print(f"A confounder explaining {out['rv_q']:.1%} of the residual variance of both {treatment} and the "
                   f"outcome would reduce the estimate by {pct} (to {rest} times its value); {tail}.")
         if len(out["benchmarks"]):

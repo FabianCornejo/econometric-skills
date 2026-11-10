@@ -17,9 +17,9 @@ What is checked here:
      found on a 2-D grid (it does not assume monotonicity: near R²_yz = 1 the adjusted SE collapses),
      including the large-effect branch.
 
-Mutation (done when written): against specification.py of 8df4e07 (v2.5.2) 22 checks fail, all of them label
-or sentence checks; the numbers, benchmarks and definition checks pass. Against c14039c (the first fix, before
-the independent review) the 4 formatting / RV_q,α = 0 checks fail.
+Mutation (done when written): against specification.py of 8df4e07 (v2.5.2) only label and sentence checks fail;
+the numbers, benchmarks and definition checks pass. Against c14039c (the first fix, before the independent
+review) the formatting and RV_q,α = 0 checks fail; against 1624728 (before review round 2) the window check fails.
 
 Run from the repository root:  python3 tests/test_v2521.py
 Needs: statsmodels, scipy.
@@ -78,7 +78,7 @@ for q in (1.0, 2.0, 0.5):
     check(f"label: q={q} with a 6-level categorical prints RV(q={q}) twice and nothing else",
           labels == [str(q), str(q)], str(labels))
     check(f"label: q={q} never prints the number of dummies (RV(q=5)", "RV(q=5" not in txt)
-    check(f"label: q={q} matches out['q']", out["q"] == q and all(float(v) == out["q"] for v in labels))
+    check(f"label: q={q} printed value equals out['q']", len(labels) == 2 and all(float(v) == out["q"] for v in labels))
 _, txt_b = printed(fits["B"], 2.0)
 check("label: q=2 with a 4-level categorical prints RV(q=2.0), not RV(q=3",
       "RV(q=2.0)" in txt_b and "RV(q=3" not in txt_b)
@@ -207,8 +207,27 @@ for q in (0.5, 1.0, 2.0):
     check(f"definition: RV_q,α is the smallest strength whose CI reaches (1 − q)·τ̂ (q={q}, grid 1/1500)",
           on_grid(m, o["rv_qa"], 1500), f"grid {m:.5f} vs {o['rv_qa']:.5f}")
 est0, se0 = adjusted(tau, se, dof, 0.0, 0.0)   # no confounder: the plain (df-1)-based CI of the paper
-check("definition: when RV_q,α = 0, (1 − q)·τ̂ is inside the unadjusted CI (q=0.125)",
+check("definition: when RV_q,α = 0, (1 − q)·τ̂ is inside the paper's null-confounder CI (df − 1 convention, q=0.125)",
       est0 - stats.t.ppf(0.975, dof - 1) * se0 <= (1 - 0.125) * tau, f"{(est0 - stats.t.ppf(0.975, dof - 1) * se0) / tau:.4f}")
+# The "already inside" sentence is judged on the CI the user sees (statsmodels conf_int, df), not on the paper's
+# df − 1 convention. Between the two, RV_q,α = 0 but the reported CI excludes (1 − q)·τ̂: build q inside that window.
+dW = data(57, 15, 2)
+fW = smf.ols("y ~ d + x1", dW).fit()
+tW, dfW = abs(float(fW.tvalues["d"])), float(fW.df_resid)
+lo_c, hi_c = stats.t.ppf(0.975, dfW), stats.t.ppf(0.975, dfW - 1) * np.sqrt(dfW / (dfW - 1))
+qW = 0.5 * (lo_c + hi_c) / tW                           # q·|t| in the middle of the window
+oW, txtW = printed(fW, qW)
+ciW = fW.conf_int().loc["d"]
+redW = (1 - qW) * float(fW.params["d"])
+check(f"window (df={dfW:.0f}): RV_q,α = 0 while the reported CI excludes (1 − q)·τ̂",
+      oW["rv_qa"] == 0 and not (ciW[0] <= redW <= ciW[1]), f"CI {tuple(ciW.round(4))}, (1−q)τ̂ {redW:.4f}")
+check("window: the text does not say 'already inside' and says adding any regressor puts it inside",
+      "already inside" not in txtW and "just outside the 95% confidence interval: adding any regressor" in txtW,
+      txtW.splitlines()[2] if len(txtW.splitlines()) > 2 else txtW)
+o8, txt8 = printed(fits["A"], 0.125)
+ci8 = fits["A"].conf_int().loc["d"]
+check("'already inside' only when the reported CI (statsmodels conf_int) contains (1 − q)·τ̂ (q=0.125)",
+      "already inside" in txt8 and ci8[0] <= 0.875 * float(fits["A"].params["d"]) <= ci8[1])
 for t_big, dof_big, q in ((30.0, 50, 1.0), (40.0, 30, 2.0)):        # large-effect branch of RV_q,α
     r = sp.robustness_value(t_big, dof_big, q=q)
     fq = q * t_big / np.sqrt(dof_big)
