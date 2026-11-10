@@ -231,6 +231,7 @@ check("definition: with rho = 0 the bias bound is zero at every strength", all(b
 o, txt, _ = run(causal.dml_sensitivity, res, rho=0.0, show=True)
 check("text: rho = 0 says no confounder moves theta (ceiling), never 'a confounder explaining 100.0% ... would move'",
       o["rv"] == 1.0 and "no confounder with cf_y = cf_d short of 100% and rho = 0.0 moves theta to 0.0000" in rv_line(txt)
+      and rv_line(txt).endswith("; nor does any make it no longer significant.")
       and "would move theta" not in txt and "makes it no longer significant" not in txt, rv_line(txt))
 check("text: a zero bias bound is flagged as saying nothing about confounding",
       "bias bound is zero" in txt and "say nothing about confounding" in txt, txt)
@@ -367,13 +368,25 @@ o, txt, _ = run(causal.dml_sensitivity, res1, rho=1e-6, show=True)
 check("A4: rho = 1e-6 hits the search ceiling; the text limits the claim to strengths short of 100%",
       o["rv"] == 1.0 and o["bias_bound"] > 0 and "short of 100%" in rv_line(txt) and "bias bound is zero" not in txt,
       rv_line(txt))
-# A3: a NaN rho (what dml_benchmark returns for a benchmark with no strength) is a clear ValueError
-try:
-    causal.dml_sensitivity(res1, 0.0, 0.05, rho=float("nan"), show=False)
-    a3 = "accepted"
-except ValueError as e:
-    a3 = "rho" in str(e) and "finite" in str(e)
-check("A3: rho = nan is a ValueError naming rho", a3 is True, str(a3))
+# A3: a NaN rho (what dml_benchmark returns for a benchmark with no strength) is a clear ValueError; so is ±inf
+for bad_rho in (float("nan"), float("inf"), -float("inf")):
+    try:
+        causal.dml_sensitivity(res1, 0.0, 0.05, rho=bad_rho, show=False)
+        a3 = "accepted"
+    except ValueError as e:
+        a3 = bool("rho" in str(e) and "finite" in str(e)) and (("benchmark" in str(e)) == bool(np.isnan(bad_rho)))
+    check(f"A3: rho = {bad_rho} is a ValueError naming rho (the benchmark hint only for nan)", a3 is True, str(a3))
+# DML strengths that would print as zero: a large rho (accepted; |rho| > 1 is not validated) makes RV tiny
+o, txt, _ = run(causal.dml_sensitivity, res1, rho=30000.0, show=True)
+check("DML: 0 < RV, RVa < 0.005% print '< 0.01%' and 'explaining < 0.1%', never 0.00%",
+      0 < o["rva"] <= o["rv"] < 5e-5 and rv_line(txt).startswith("  RV = < 0.01%: a confounder explaining < 0.1% ")
+      and "RVa = < 0.01% makes it no longer significant." in rv_line(txt) and "0.00%" not in txt, rv_line(txt))
+o, txt, _ = run(causal.dml_sensitivity, res1, rho=6000.0, show=True)
+check("DML: the '< 0.01%' threshold is 0.005%: RV in [0.005%, 0.01%) prints 'RV = 0.01%', not '< 0.01%'",
+      5e-5 <= o["rv"] < 1e-4 and rv_line(txt).startswith("  RV = 0.01%: "), f"{o['rv']:.2e} {rv_line(txt)[:40]}")
+o, txt, _ = run(causal.dml_sensitivity, res1, rho=3000.0, show=True)
+check("DML: 0.005% <= RV < 0.05%: 'RV = 0.0x%' with 'explaining < 0.1%' (not 'explaining 0.0%')",
+      5e-5 <= o["rv"] < 5e-4 and "explaining < 0.1%" in rv_line(txt) and "explaining 0.0%" not in txt, rv_line(txt))
 # A5: alpha set at the p-value (the reported CI ends at 0 up to rounding): RVa = 0 never prints as a strength
 bad = []
 for s_ in range(100, 130):

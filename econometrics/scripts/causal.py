@@ -285,16 +285,17 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
     functions of theta and S, median over the sample splits of dml_plr). Robustness values:
     rv = strength (cf_y = cf_d) that drives theta to (1 - q) theta; rva = strength at which the
     confidence bound reaches that value (q = 1: makes it no longer significant). Both are searched on
-    cf in (1e-9, 1 - 1e-9): 1.0 means no strength in that range reaches the target (always so with
+    sqrt(cf) in (1e-9, 1 - 1e-9): 1.0 means no strength in that range reaches the target (always so with
     rho = 0, where the bias bound is zero; with a tiny |rho| the bound only gets there as cf -> 1),
     0.0 for rva means the zero-confounder confidence bound already reaches it. Calibrate cf_y
     and cf_d with dml_benchmark: "a confounder as strong as income" is a statement the reader can
     judge. q must be a finite real number > 0 (v2.5.3)."""
     from specification import _check_q, _q_is_one
     q = _check_q(q)
-    if not np.isfinite(rho):                  # the NaN rho of a benchmark with no strength crashed brentq
-        raise ValueError(f"rho must be finite (got {rho!r}); a benchmark with cf_y = 0 or cf_d = 0 has an "
-                         "undefined rho and is no reference (see the warning of dml_benchmark)")
+    if not np.isfinite(rho):                  # NaN crashed brentq; inf printed RV = RVa = 0.00% (7c25644)
+        raise ValueError(f"rho must be finite (got {rho!r})" + (
+            "; a benchmark with cf_y = 0 or cf_d = 0 has an undefined rho and is no reference (see the warning of "
+            "dml_benchmark)" if np.isnan(rho) else ""))
     if "residuals" not in res:
         raise ValueError("pass the dict returned by causal.dml_plr")
     z = stats.norm.ppf(1 - alpha / 2)
@@ -364,7 +365,7 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
         elif rva >= 1.0:
             rva_txt = ("nor does any make it no longer significant" if one
                        else f"nor does any put that value inside the {level} confidence bounds")
-        elif one:                                 # the v2.5.2.1 sentence, byte for byte unless RVa < 0.005%
+        elif one:                                 # the v2.5.2.1 sentence, byte for byte (strengths >= 0.05%)
             rva_txt = f"RVa = {pct(rva, 2)} makes it no longer significant"
         else:
             rva_txt = f"RVa = {pct(rva, 2)} would put that value inside the {level} confidence bounds"
@@ -408,7 +409,7 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
                           f"covariates, its estimated share {side} zero or below (clipped to 0), so it is no reference "
                           "for how strong a confounder could be: its cf_y and cf_d give dml_sensitivity a bias bound "
                           "of zero, not a robustness result, and its NaN rho is refused. Use covariates that matter "
-                          "for both D and Y as benchmarks.")
+                          "for both D and Y as benchmarks.", stacklevel=2)
     return pd.DataFrame(rows).set_index("benchmark")
 
 
