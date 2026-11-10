@@ -2,6 +2,14 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.5.2.1 — `specification.sensitivity` prints the q it was asked for
+
+Origin: the second validation of v2.5.2 on a real request (an agent caught it and told the user). No number changes; only printed text.
+
+- **The label.** Inside the loop that builds the joint benchmark of a categorical variable, `q = len(terms)` overwrote the parameter `q` (since v2.2.1). With any categorical covariate (sector, region, year), `sensitivity(..., show=True)` printed `RV(q=<number of dummies>)` whatever `q` was passed: `RV(q=5)` for `q=1` and for `q=2` alike. The statistics were right — `robustness_value` runs before the loop and `out["q"]` was always correct —, but a report copying the printed line would publish the wrong statistic (q = 5 is "reduce the effect by 500%", not "remove it"). The loop variable is now `k`, and the label prints `out["q"]`.
+- **The sentence under it.** It said "would remove the estimate; … would make it insignificant" for every `q`, which is true only for `q = 1`. For other values it now says what Cinelli and Hazlett (2020) define: RV_q reduces the estimate by 100·q% (to (1 − q) times its value), and RV_q,α puts that reduced value inside the (1 − α) confidence interval. With `q = 1` the text is unchanged.
+- **Tests** (`tests/test_v2521.py`, 36 checks): the printed label against `q` and `out["q"]` with 6- and 4-level categoricals; the joint benchmark against the partial R² from refitting without the dummies; every returned number fixed from v2.5.2 in three designs and three `q`; the `q = 1` text byte-identical to v2.5.2 without a categorical; and the new sentence checked against the definition with the bias bound written from the paper — on a 2-D grid of confounder strengths, which also covers the large-effect branch of RV_q,α. Against the v2.5.2 code the 15 label and sentence checks fail.
+
 ## v2.5.2 — Exact Oster, an identification checklist, and the doctor in the analysis folder
 
 Origin: two items deferred from v2.5.1 (the exact Oster solution and an identification checklist), the two findings of the v2.5.1 validation on a real request (the doctor ran from inside the skill's folder and offered a clean folder that was already in use; a clipped ρ in a pre-period check passed silently), and the low-priority notes on section 7 from v2.5.0.1.
