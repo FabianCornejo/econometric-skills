@@ -221,8 +221,11 @@ ciW = fW.conf_int().loc["d"]
 redW = (1 - qW) * float(fW.params["d"])
 check(f"window (df={dfW:.0f}): RV_q,α = 0 while the reported CI excludes (1 − q)·τ̂",
       oW["rv_qa"] == 0 and not (ciW[0] <= redW <= ciW[1]), f"CI {tuple(ciW.round(4))}, (1−q)τ̂ {redW:.4f}")
-check("window: the text does not say 'already inside' and says adding any regressor puts it inside",
-      "already inside" not in txtW and "just outside the 95% confidence interval: adding any regressor" in txtW,
+# v2.5.3 (review): "adding any regressor puts it inside" was false (a regressor that predicts y lowers the SE); only one
+# unrelated to both is sure to, by costing one degree of freedom. This check had fixed the false wording.
+check("window: the text does not say 'already inside' and says a regressor unrelated to both puts it inside",
+      "already inside" not in txtW and "just outside the 95% confidence interval: adding a regressor unrelated to both "
+      "(it only costs one degree of freedom) would put it inside" in txtW and "any regressor" not in txtW,
       txtW.splitlines()[2] if len(txtW.splitlines()) > 2 else txtW)
 o8, txt8 = printed(fits["A"], 0.125)
 ci8 = fits["A"].conf_int().loc["d"]
