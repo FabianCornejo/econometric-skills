@@ -1,0 +1,147 @@
+R: R version 4.6.2 (2026-10-29 ucrt) 
+robomit: 1.0.7 
+
+--- mtcars | o_beta delta = 1 R2max = 0.9 
+                            Name      Value
+1                          beta* -2.0001850
+2      (beta*-beta controlled)^2  5.5630520
+3         Alternative Solution 1 -7.0140950
+4  (beta[AS1]-beta controlled)^2  7.0506070
+5       Uncontrolled Coefficient -5.3444716
+6         Controlled Coefficient -4.3587972
+7          Uncontrolled R-square  0.7528328
+8            Controlled R-square  0.8347678
+9                   Max R-square  0.9000000
+10                         delta  1.0000000
+--- mtcars | o_beta delta = 0.5 R2max = 0.9 
+                            Name      Value
+1                          beta* -3.5136220
+2      (beta*-beta controlled)^2         NA
+3         Alternative Solution 1         NA
+4  (beta[AS1]-beta controlled)^2         NA
+5         Alternative Solution 2         NA
+6  (beta[AS2]-beta controlled)^2         NA
+7       Uncontrolled Coefficient -5.3444716
+8         Controlled Coefficient -4.3587972
+9          Uncontrolled R-square  0.7528328
+10           Controlled R-square  0.8347678
+11                  Max R-square  0.9000000
+12                         delta  0.5000000
+--- mtcars | o_beta delta = 2 R2max = 0.9 
+                            Name      Value
+1                          beta* -6.4061070
+2      (beta*-beta controlled)^2         NA
+3         Alternative Solution 1         NA
+4  (beta[AS1]-beta controlled)^2         NA
+5         Alternative Solution 2         NA
+6  (beta[AS2]-beta controlled)^2         NA
+7       Uncontrolled Coefficient -5.3444716
+8         Controlled Coefficient -4.3587972
+9          Uncontrolled R-square  0.7528328
+10           Controlled R-square  0.8347678
+11                  Max R-square  0.9000000
+12                         delta  2.0000000
+--- mtcars | o_delta beta = 0 R2max = 0.9 
+                      Name      Value
+1                   delta*  1.1511360
+2 Uncontrolled Coefficient -5.3444716
+3   Controlled Coefficient -4.3587972
+4    Uncontrolled R-square  0.7528328
+5      Controlled R-square  0.8347678
+6             Max R-square  0.9000000
+7                 beta hat  0.0000000
+--- sim | o_beta delta = 0.5 R2max = 0.885 
+                            Name     Value
+1                          beta* 1.4312730
+2      (beta*-beta controlled)^2 0.0041050
+3         Alternative Solution 1 4.1760800
+4  (beta[AS1]-beta controlled)^2 8.1863590
+5         Alternative Solution 2 2.8036770
+6  (beta[AS2]-beta controlled)^2 9.1863590
+7       Uncontrolled Coefficient 1.6355396
+8         Controlled Coefficient 1.4953414
+9          Uncontrolled R-square 0.7912038
+10           Controlled R-square 0.8396437
+11                  Max R-square 0.8850000
+12                         delta 0.5000000
+--- sim | o_beta delta = 1 R2max = 0.885 
+                            Name     Value
+1                          beta* 1.3640680
+2      (beta*-beta controlled)^2 0.0172330
+3         Alternative Solution 1 2.8036770
+4  (beta[AS1]-beta controlled)^2 1.7117410
+5       Uncontrolled Coefficient 1.6355396
+6         Controlled Coefficient 1.4953414
+7          Uncontrolled R-square 0.7912038
+8            Controlled R-square 0.8396437
+9                   Max R-square 0.8850000
+10                         delta 1.0000000
+--- sim | o_beta delta = 2 R2max = 0.885 
+                            Name     Value
+1                          beta* 1.1317510
+2      (beta*-beta controlled)^2 0.1321980
+3         Alternative Solution 1 0.5505970
+4  (beta[AS1]-beta controlled)^2 0.8925430
+5         Alternative Solution 2 2.8036770
+6  (beta[AS2]-beta controlled)^2 2.7117410
+7       Uncontrolled Coefficient 1.6355396
+8         Controlled Coefficient 1.4953414
+9          Uncontrolled R-square 0.7912038
+10           Controlled R-square 0.8396437
+11                  Max R-square 0.8850000
+12                         delta 2.0000000
+--- sim | o_beta delta = 2 R2max = 1 
+                            Name     Value
+1                          beta* 2.8036770
+2      (beta*-beta controlled)^2        NA
+3         Alternative Solution 1        NA
+4  (beta[AS1]-beta controlled)^2        NA
+5         Alternative Solution 2        NA
+6  (beta[AS2]-beta controlled)^2        NA
+7       Uncontrolled Coefficient 1.6355396
+8         Controlled Coefficient 1.4953414
+9          Uncontrolled R-square 0.7912038
+10           Controlled R-square 0.8396437
+11                  Max R-square 1.0000000
+12                         delta 2.0000000
+--- sim | o_beta delta = 3 R2max = 0.86 
+                            Name     Value
+1                          beta* 2.8036770
+2      (beta*-beta controlled)^2        NA
+3         Alternative Solution 1        NA
+4  (beta[AS1]-beta controlled)^2        NA
+5         Alternative Solution 2        NA
+6  (beta[AS2]-beta controlled)^2        NA
+7       Uncontrolled Coefficient 1.6355396
+8         Controlled Coefficient 1.4953414
+9          Uncontrolled R-square 0.7912038
+10           Controlled R-square 0.8396437
+11                  Max R-square 0.8600000
+12                         delta 3.0000000
+--- sim | o_delta beta = 0 R2max = 0.885 
+                      Name     Value
+1                   delta* 1.7412000
+2 Uncontrolled Coefficient 1.6355396
+3   Controlled Coefficient 1.4953414
+4    Uncontrolled R-square 0.7912038
+5      Controlled R-square 0.8396437
+6             Max R-square 0.8850000
+7                 beta hat 0.0000000
+--- sim | o_delta beta = 0 R2max = 1 
+                      Name     Value
+1                   delta* 1.4745210
+2 Uncontrolled Coefficient 1.6355396
+3   Controlled Coefficient 1.4953414
+4    Uncontrolled R-square 0.7912038
+5      Controlled R-square 0.8396437
+6             Max R-square 1.0000000
+7                 beta hat 0.0000000
+--- sim | o_delta beta = 1 R2max = 0.885 
+                      Name     Value
+1                   delta* 2.1419500
+2 Uncontrolled Coefficient 1.6355396
+3   Controlled Coefficient 1.4953414
+4    Uncontrolled R-square 0.7912038
+5      Controlled R-square 0.8396437
+6             Max R-square 0.8850000
+7                 beta hat 1.0000000

@@ -2479,7 +2479,8 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     Under the sharp null of no effect for anyone, which units adopted is (as if) random, so the
     statistic is recomputed after reassigning the observed adoption dates to random sets of the
     same number of units (all sets when there are no more than n_perm of them). p = share of
-    |stat*| >= |stat| (with the observed assignment counted).
+    |stat*| >= |stat|: over all assignments when they are enumerated (the observed one is among them), and
+    (1 + #) / (n_perm + 1) with random draws.
     stat=None uses the static TWFE DiD coefficient (unit and time fixed effects), computed fast by
     residualizing on the fixed effects once; pass a function stat(df_perm) -> float for any other
     statistic (e.g. lambda d: att_gt(d, unit, time, y, gvar, n_boot=0, show=False)["overall"]["estimate"]); the CI is then skipped.
@@ -2494,7 +2495,7 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     permuting counties would break the within-state dependence and over-reject. The cluster column must be constant
     within unit, and gvar constant within cluster (an error otherwise). n_units and n_treated then count clusters."""
     from itertools import combinations
-    from math import comb
+    from math import comb, factorial
     d = df[[unit, time, y, gvar]].dropna(subset=[unit, time, y]).copy()
     d[gvar] = d[gvar].fillna(0)
     if cluster:
@@ -2518,13 +2519,23 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     dates_obs = g_unit[treated].to_numpy()
     u_idx = units.get_indexer(d[key])
     tt = d[time].to_numpy()
-    n_assign = comb(N, N1)
+    # The assignment space is the sets of treated units TIMES the distinct ways the observed adoption dates
+    # can be dealt out among them. With one date there is a single arrangement and the sets are the space;
+    # with staggered dates each set has several arrangements, so both are enumerated (or drawn together).
+    # Enumerating only the sets and drawing one arrangement per set left the OBSERVED assignment out of the
+    # enumeration, and the exact p of v2.5.2 could come out 0 (v2.5.2 review, chat 3).
+    n_date_arr = factorial(N1)
+    for c in np.unique(dates_obs, return_counts=True)[1]:
+        n_date_arr //= factorial(int(c))
+    n_assign = comb(N, N1) * n_date_arr
     rng = np.random.default_rng(seed)
     if n_assign - 1 <= n_perm:
-        sets = [list(c) for c in combinations(range(N), N1)]
+        arrs = ([np.asarray(dates_obs, float)] if n_date_arr == 1 else
+                [np.asarray(a, float) for a in _distinct_arrangements(dates_obs)])
+        sets = [(list(c), a) for c in combinations(range(N), N1) for a in arrs]
         exact = True
     else:
-        sets = [list(rng.choice(N, N1, replace=False)) for _ in range(n_perm)]
+        sets = [(list(rng.choice(N, N1, replace=False)), rng.permutation(dates_obs)) for _ in range(n_perm)]
         exact = False
     obs_set = [units.get_loc(u) for u in treated]
 
@@ -2535,7 +2546,7 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
         return ((gi > 0) & (tt >= gi)).astype(float)
 
     D_obs = D_for(obs_set, dates_obs)
-    perms_D = [D_for(sset, rng.permutation(dates_obs)) for sset in sets]
+    perms_D = [D_for(sset, dts) for sset, dts in sets]
     Y = d[y].to_numpy(float)
     if stat is None:
         U = pd.get_dummies(d[unit]).to_numpy(float)
@@ -2552,7 +2563,10 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
             yt0 = y_t - tau * Dt_obs
             s0 = Dt_obs @ yt0 / (Dt_obs @ Dt_obs)
             sp = (Dt * yt0[:, None]).sum(0) / (Dt ** 2).sum(0)
-            return (1 + np.sum(np.abs(sp) >= abs(s0) - 1e-12)) / (len(sets) + 1)
+            hits = np.sum(np.abs(sp) >= abs(s0) - 1e-12)
+            # exact: the enumeration contains the observed assignment (v2.5.2: it was counted twice; the
+            # arrangements of the dates are enumerated too, so this holds with staggered dates as well)
+            return hits / len(sets) if exact else (1 + hits) / (len(sets) + 1)
 
         p = float(pval(0.0))
         lo = hi = np.nan
@@ -2568,14 +2582,15 @@ def randomization_inference(df: pd.DataFrame, unit: str, time: str, y: str, gvar
     else:
         est = float(stat(d.copy()))
         draws = []
-        for sset in sets:
+        for sset, dts in sets:
             g = np.zeros(N)
-            g[sset] = rng.permutation(dates_obs)
+            g[sset] = dts
             dp = d.copy()
             dp[gvar] = g[u_idx]
             draws.append(stat(dp))
         draws = np.asarray(draws, float)
-        p = float((1 + np.sum(np.abs(draws) >= abs(est) - 1e-12)) / (len(draws) + 1))
+        hits = np.sum(np.abs(draws) >= abs(est) - 1e-12)
+        p = float(hits / len(draws) if exact else (1 + hits) / (len(draws) + 1))
         lo = hi = np.nan
         method = "randomization inference (user statistic)"
     warn = []
@@ -2863,14 +2878,15 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
     if T0 >= 12:
         tr_res = _sts_calibrated(g[:T0], None, alpha, n_sim, rng)
         trend = {"slope": tr_res["estimate"], "se": tr_res["se"], "p": tr_res["p"], "ci_low": tr_res["ci_low"],
-                 "ci_high": tr_res["ci_high"], "mde": (tr_res["crit"] + z80) * tr_res["se"], "rho": tr_res["rho"]}
+                 "ci_high": tr_res["ci_high"], "mde": (tr_res["crit"] + z80) * tr_res["se"], "rho": tr_res["rho"],
+                 "rho_clipped": tr_res["rho_clipped"]}
     placebo = None
     if T0 >= 16:
         h = T0 // 2
         pl = _sts_calibrated(g[:T0], h, alpha, n_sim, rng)
         placebo = {"fake_t0": periods[h], "estimate": pl["estimate"], "se": pl["se"], "p": pl["p"],
                    "ci_low": pl["ci_low"], "ci_high": pl["ci_high"], "mde": (pl["crit"] + z80) * pl["se"],
-                   "rho": pl["rho"]}
+                   "rho": pl["rho"], "rho_clipped": pl["rho_clipped"]}
     rej_main = main["p"] <= alpha
     agree = None if blk is None or not np.isfinite(blk["p"]) else bool(rej_main == (blk["p"] <= alpha))
     if len(g) < 20:
@@ -2894,6 +2910,18 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
     if agree is False:
         w.append(f"The two routes disagree at alpha = {alpha:g} (main p = {main['p']:.3f}, block means p = "
                  f"{blk['p']:.3f}): the evidence depends on the model for the serial correlation; report both.")
+    for nm, chk in (("pre-period trend test", trend), ("pre-period placebo", placebo)):
+        if chk is not None and chk["rho_clipped"]:
+            # the clip inflates the SE: a rejection is conservative and informative, a non-rejection is not
+            if chk["p"] <= alpha:
+                w.append(f"The {nm} found the pre-period gap close to a unit root (ρ above 0.95, clipped; "
+                         f"{T0} pre periods), which inflates its standard error: it rejects anyway (p = "
+                         f"{chk['p']:.3f}), so that finding stands and is if anything understated.")
+            else:
+                w.append(f"The {nm} found the pre-period gap close to a unit root (ρ above 0.95, clipped; "
+                         f"{T0} pre periods): that check did not reject, but it is not informative either. Short "
+                         "pre-periods with moderate persistence do this often (about 18% of 12-period gaps with "
+                         "ρ = 0.4 in the skill's checks).")
     if trend is not None and trend["p"] <= alpha:
         w.append(f"The gap trends before treatment (slope {trend['slope']:.3g} per period, p = {trend['p']:.3f}): "
                  "parallel trends fail in the pre-period, and a post-minus-pre contrast picks up the trend.")
@@ -2936,6 +2964,35 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
 
 
 # =============================================================================
+def _distinct_arrangements(values) -> list:
+    """Every distinct ordering of a multiset, in lexicographic order, generated directly.
+
+    Deduplicating factorial(n) permutations gives the same list but costs n! steps even when only a
+    handful of orderings are distinct: with 14 treated units and two adoption dates that is 87 billion
+    steps for 210 arrangements, and randomization_inference hung with no message (v2.5.2 review, chat 3).
+    Taking the smallest value still available at each position yields lexicographic order, so the
+    arrangements come out in the same order as before and no p-value changes."""
+    vals, counts = np.unique(np.asarray(values), return_counts=True)
+    vals = [float(v) for v in vals]
+    counts = [int(c) for c in counts]
+    n, out, cur = len(values), [], []
+
+    def walk():
+        if len(cur) == n:
+            out.append(tuple(cur))
+            return
+        for i, v in enumerate(vals):
+            if counts[i]:
+                counts[i] -= 1
+                cur.append(v)
+                walk()
+                cur.pop()
+                counts[i] += 1
+
+    walk()
+    return out
+
+
 # Falsification matrix for a DiD (v2.5.1)
 # =============================================================================
 def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
@@ -2986,10 +3043,18 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
     dates = np.sort(d.loc[d[gvar] > 0, gvar].unique())
     rows, warns = [], []
 
-    def row(check, what, est=np.nan, se=np.nan, p=np.nan, mde=np.nan, note="", ran=True, kind="falsification"):
+    def row(check, what, est=np.nan, se=np.nan, p=np.nan, mde=np.nan, note="", ran=True, kind="falsification",
+            clipped=False):
+        if clipped:
+            # clipping ρ at 0.95 inflates the SE, so a rejection is conservative and still informative; only a
+            # non-rejection is inconclusive (v2.5.2 review: the note contradicted the row's own finding)
+            rej = ran and np.isfinite(p) and p <= alpha
+            note = (note + "; " if note else "") + ("ρ clipped at 0.95 (pre-period gap near a unit root): the "
+                    "test is conservative, so this rejection stands" if rej else
+                    "ρ clipped at 0.95 (pre-period gap near a unit root): not informative")
         rows.append({"check": check, "kind": kind, "what it checks": what, "estimate": est, "se": se, "p": p,
                      "mde": mde, "rejects": (bool(p <= alpha) if ran and np.isfinite(p) else None), "ran": ran,
-                     "note": note})
+                     "note": note, "clipped": bool(clipped)})
 
     few = 0 < n_tr <= 3 and len(dates) == 1
     if few:
@@ -3016,14 +3081,14 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
             row("pre-period trend (gap series)", "slope of the treated−control gap before treatment", pt["slope"],
                 pt["se"], pt["p"], pt["mde"] * span,
                 f"estimate = slope per period; MDE = smallest detectable slope × {span:g}, the bias it would add to "
-                "the post-minus-pre contrast")
+                "the post-minus-pre contrast", clipped=pt.get("rho_clipped", False))
         else:
             row("pre-period trend (gap series)", "slope of the gap before treatment", ran=False,
                 note="fewer than 12 pre periods (the trend test needs 12)")
         pp = head["pre_placebo"]
         if pp:
             row("placebo date (gap series)", f"level shift at a fake date ({pp['fake_t0']}) before treatment",
-                pp["estimate"], pp["se"], pp["p"], pp["mde"])
+                pp["estimate"], pp["se"], pp["p"], pp["mde"], clipped=pp.get("rho_clipped", False))
         else:
             row("placebo date (gap series)", "level shift at a fake date before treatment", ran=False,
                 note="fewer than 16 pre periods (the step placebo needs 16)")
@@ -3111,7 +3176,8 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
             ts = did_timing_sensitivity(d, unit, time, y, gvar, max_shift=max_shift, control=control, n_boot=n_boot,
                                         seed=seed, cluster=cluster, alpha=alpha, show=False)
             dr = ts["date_robust"]
-            rows.append({"check": f"timing (±{max_shift})", "kind": "inference",
+            rows.append({"clipped": False,         # the one row built by hand: without it the column is NaN
+                         "check": f"timing (±{max_shift})", "kind": "inference",
                          "what it checks": "does the conclusion survive date errors?",
                          "estimate": dr["estimate"], "se": dr["se"], "p": dr["p"], "mde": np.nan,
                          "rejects": bool(dr["p"] <= alpha) if np.isfinite(dr["p"]) else None, "ran": True, "note": ("survives" if ts["survives"] else "the conclusion depends on the exact "
@@ -3134,7 +3200,9 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
                                                          else bool(r["rejects"] != head_sig))
                       for _, r in tab.iterrows()]
     tab["informative"] = [None if r["kind"] != "falsification" or not r["ran"] or r["rejects"]
+                          else False if r["clipped"]
                           else (bool(r["mde"] < att) if np.isfinite(r["mde"]) else None) for _, r in tab.iterrows()]
+    tab = tab.drop(columns="clipped")
     rejected = [c for c, r in tab.iterrows() if r["finding"]]
     uninf = [c for c, r in tab.iterrows() if r["informative"] is False]
     not_run = [c for c, r in tab.iterrows() if not r["ran"]]
@@ -3145,7 +3213,7 @@ def did_falsification(df: pd.DataFrame, unit: str, time: str, y: str, gvar: str,
         verdict = (f"No falsification check rejects and no inference check contradicts the headline at alpha = "
                    f"{alpha:g}. That does not show the design is valid"
                    + (f"; {len(uninf)} check(s) could not have seen a departure the size of the ATT "
-                      f"(MDE ≥ |ATT|): {', '.join(uninf)}" if uninf else "")
+                      f"(MDE ≥ |ATT|, or ρ clipped): {', '.join(uninf)}" if uninf else "")
                    + (f"; {len(not_run)} could not run: {', '.join(not_run)}" if not_run else "") + ".")
     out = {"table": tab, "headline": headline, "rejected": rejected, "uninformative": uninf, "not_run": not_run,
            "verdict": verdict, "few_treated": few, "alpha": alpha, "warnings": warns}
