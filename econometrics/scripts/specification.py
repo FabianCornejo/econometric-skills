@@ -365,6 +365,7 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
     if rt - r0 < 0.01:
         w.append(f"The controls raise R² by only {rt - r0:.4f}: they say little about selection, so δ is "
                  "driven by R_max and the noise in R² rather than by the data; do not read δ as robustness.")
+    not_to_report = False                         # the exact β* violates Assumption 3 or is unstable
     if exact:
         if int(res_uncontrolled.nobs) != int(res_controlled.nobs):
             inp, why = None, "the two regressions use different samples"
@@ -426,6 +427,7 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
                 near = [a for a in adm[1:] if abs(a - bx) < abs(bx - bt)]
                 unstable = bool(near) and not violates
                 out["beta_star_exact_unstable"] = unstable
+                not_to_report = violates or unstable
                 if len(adm) > 1 and not violates:
                     msg = (f"The exact equation has {len(adm)} admissible real roots: β* = {bx:.4g} is the one "
                            f"closest to β̃ in the direction of the move from β° (Oster's rule); the other(s): "
@@ -455,8 +457,13 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
               f"identified set [{out['identified_set'][0]:.4f}, {out['identified_set'][1]:.4f}]")
         if "beta_star_exact" in out:
             ise = out["identified_set_exact"]     # v2.5.3: computed since v2.5.2, never printed before
-            iset = (f"identified set [{ise[0]:.4f}, {ise[1]:.4f}] (exact)" if ise is not None
-                    else "no exact identified set (no admissible real root; see the warning)")
+            if ise is None:
+                iset = "no exact identified set (no admissible real root; see the warning)"
+            elif not_to_report:                   # a root the warnings say not to report (v2.5.3 review)
+                iset = (f"identified set [{ise[0]:.4f}, {ise[1]:.4f}] from that root, not to be reported "
+                        "(see the warning)")
+            else:
+                iset = f"identified set [{ise[0]:.4f}, {ise[1]:.4f}] (exact)"
             print(f"Exact: β* = {out['beta_star_exact']:.4f}; {iset}; "
                   f"δ needed for β = 0: {out['delta_for_zero_exact']:.2f}")
         for m in w:                                   # the exact β* can be one the warnings say not to report
@@ -476,24 +483,35 @@ def _check_q(q):
     The value is kept as given (an int stays an int, np.float32 keeps its exact value): only the label rounds."""
     import numbers
     if isinstance(q, (bool, np.bool_)) or not isinstance(q, numbers.Real):
-        raise TypeError(f"q must be a real number > 0 (the share of the estimate to remove; 1 = all of it), "
+        raise TypeError(f"q must be an int or a float > 0 (the share of the estimate to remove; 1 = all of it), "
                         f"got {q!r}")
     if not np.isfinite(float(q)) or q <= 0:
         raise ValueError(f"q must be finite and > 0 (the share of the estimate to remove; 1 = all of it), got {q!r}")
     return int(q) if isinstance(q, numbers.Integral) else float(q)
 
 
-def _q_is_one(q) -> bool:
-    """q a rounding error away from 1 reads as q = 1 (the text branch only; the numbers use q as given)."""
-    return abs(float(q) - 1.0) <= 1e-9
-
-
 def _q_label(q) -> str:
-    """q as printed: integers as given ("2"), floats to 6 significant digits ("0.1" for np.float32(0.1), "1.0")."""
+    """q as printed: integers as given ("2"), floats to 6 significant digits ("0.1" for np.float32(0.1), "1.0",
+    "1.23457e+08"); a float that prints without a point or exponent gets ".0", so 1.0 stays "1.0"."""
     import numbers
     if isinstance(q, numbers.Integral):
         return str(int(q))
-    return repr(float(f"{float(q):.6g}"))
+    s = f"{float(q):.6g}"
+    return s if any(c in s for c in ".en") else s + ".0"
+
+
+def _q_is_one(q) -> bool:
+    """q that prints as 1 reads as q = 1 in the text (the numbers use q as given): the label and the sentence
+    always agree (q = 0.9999999 printed RV(q=1.0) with the q != 1 sentence, review of v2.5.3)."""
+    return float(_q_label(q)) == 1.0
+
+
+def _pct(x, digits=1) -> str:
+    """A share as a percentage with `digits` decimals; a positive share that would print as zero says
+    "less than 0.1%" (it printed "0.0% would make it insignificant" just above the df/df − 1 band)."""
+    if 0 < x < 0.5 * 10 ** -(digits + 2):
+        return f"less than {10 ** -digits:.{digits}f}%"
+    return f"{x:.{digits}%}"
 
 
 def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA) -> dict:
@@ -559,33 +577,41 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
         lab = _q_label(qq)
         print(f"\nSensitivity of {treatment} (Cinelli-Hazlett): partial R² = {out['partial_r2']:.3%}, "
               f"RV(q={lab}) = {out['rv_q']:.2%}, RV(q={lab}, α={alpha}) = {out['rv_qa']:.2%}")
-        level = f"{round((1 - alpha) * 100, 6):g}%"
-        # "already" is judged on the CI the user sees (df), not on the paper's df − 1 convention (a null
-        # confounder costs one degree of freedom): between the two, rv_qa is 0 but the reported CI excludes the
-        # target. The target is (1 − q)·estimate, which lies inside the CI when q·|t| <= t_crit(df).
-        q_eff = 1.0 if _q_is_one(qq) else float(qq)
+        level = f"{round((1 - alpha) * 100, 6):g}%"           # confidence level of the interval
+        sig = f"{round(alpha * 100, 6):g}%"                    # significance level of the test
+        # "already" is judged on the classical CI with df (the one these statistics come from), not on the paper's
+        # df − 1 convention (a null confounder costs one degree of freedom): between the two, rv_qa is 0 but that
+        # CI excludes the target. The target is (1 − q)·estimate, inside the CI when q·|t| <= t_crit(df); this
+        # implies rv_qa = 0, so "already" never sits next to a positive RV_q,α.
+        one = _q_is_one(qq)
+        q_eff = 1.0 if one else float(qq)
         in_reported = q_eff * abs(float(base.tvalues[treatment])) <= stats.t.ppf(1 - alpha / 2, base.df_resid)
-        if _q_is_one(qq):
+        # the band: only a regressor unrelated to both (zero partial R² with D and Y) is sure to push it over, by
+        # costing one degree of freedom; one that predicts Y lowers the SE (review of v2.5.3)
+        null_reg = "adding a regressor unrelated to both (it only costs one degree of freedom)"
+        if one:
             if in_reported:                       # v2.5.3: was "0.0% would make it insignificant"
-                tail = f"it is already not significant at the {level} level, with no confounder"
+                tail = f"it is already not significant at the {sig} level, with no confounder"
             elif out["rv_qa"] == 0:
-                tail = (f"it is only just significant at the {level} level: adding any regressor, even one unrelated "
-                        f"to both, makes it insignificant")
-            else:                                 # the v2.5.2.1 sentence, byte for byte
-                tail = f"{out['rv_qa']:.1%} would make it insignificant"
-            print(f"A confounder explaining {out['rv_q']:.1%} of the residual variance of both {treatment} and the "
+                tail = f"it is only just significant at the {sig} level: {null_reg} would make it insignificant"
+            else:                                 # the v2.5.2.1 sentence, byte for byte unless RV_q,α < 0.05%
+                tail = f"{_pct(out['rv_qa'])} would make it insignificant"
+            print(f"A confounder explaining {_pct(out['rv_q'])} of the residual variance of both {treatment} and the "
                   f"outcome would remove the estimate; {tail}.")
         else:                                     # RV_q reduces the estimate by 100q%; RV_q,α puts (1−q)·estimate in the CI
-            pct, rest = f"{round(qq * 100, 6):g}%", f"{round(1 - qq, 6):g}"
+            pct, rest = f"{float(qq) * 100:.6g}%", f"{1 - float(qq):.6g}"
             if in_reported:
                 tail = f"that reduced value is already inside the {level} confidence interval, with no confounder"
             elif out["rv_qa"] == 0:
-                tail = (f"that reduced value is just outside the {level} confidence interval: adding any regressor, "
-                        f"even one unrelated to both, puts it inside")
+                tail = f"that reduced value is just outside the {level} confidence interval: {null_reg} would put it inside"
             else:
-                tail = f"{out['rv_qa']:.1%} would put that reduced value inside the {level} confidence interval"
-            print(f"A confounder explaining {out['rv_q']:.1%} of the residual variance of both {treatment} and the "
+                tail = f"{_pct(out['rv_qa'])} would put that reduced value inside the {level} confidence interval"
+            print(f"A confounder explaining {_pct(out['rv_q'])} of the residual variance of both {treatment} and the "
                   f"outcome would reduce the estimate by {pct} (to {rest} times its value); {tail}.")
+        if base is not res:                       # robust fit: the verdicts above are for the classical SE
+            t_cl, t_rb = float(base.tvalues[treatment]), float(res.tvalues[treatment])
+            print(f"These statistics and verdicts use the classical SE, as the formulas require (t = {t_cl:.2f}); your "
+                  f"{res.cov_type} fit gives t = {t_rb:.2f}, so its significance can differ from the verdict above.")
         if len(out["benchmarks"]):
             print("Observed covariates (partial R² with outcome), for comparison:")
             print(out["benchmarks"].to_string(float_format=lambda v: f"{v:.2%}"))

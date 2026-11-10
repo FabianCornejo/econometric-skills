@@ -285,12 +285,16 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
     functions of theta and S, median over the sample splits of dml_plr). Robustness values:
     rv = strength (cf_y = cf_d) that drives theta to (1 - q) theta; rva = strength at which the
     confidence bound reaches that value (q = 1: makes it no longer significant). Both are searched on
-    (0, 1): 1.0 means no strength reaches the target (always so with rho = 0, where the bias bound is
-    zero), 0.0 for rva means the zero-confounder confidence bound already reaches it. Calibrate cf_y
+    cf in (1e-9, 1 - 1e-9): 1.0 means no strength in that range reaches the target (always so with
+    rho = 0, where the bias bound is zero; with a tiny |rho| the bound only gets there as cf -> 1),
+    0.0 for rva means the zero-confounder confidence bound already reaches it. Calibrate cf_y
     and cf_d with dml_benchmark: "a confounder as strong as income" is a statement the reader can
     judge. q must be a finite real number > 0 (v2.5.3)."""
     from specification import _check_q, _q_is_one
     q = _check_q(q)
+    if not np.isfinite(rho):                  # the NaN rho of a benchmark with no strength crashed brentq
+        raise ValueError(f"rho must be finite (got {rho!r}); a benchmark with cf_y = 0 or cf_d = 0 has an "
+                         "undefined rho and is no reference (see the warning of dml_benchmark)")
     if "residuals" not in res:
         raise ValueError("pass the dict returned by causal.dml_plr")
     z = stats.norm.ppf(1 - alpha / 2)
@@ -333,33 +337,37 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
         level = f"{round(100 * (1 - alpha), 6):g}%"   # v2.5.3: was :.0f, which printed "100%" for alpha = 0.001
         print(f"\nDML-PLR sensitivity: theta = {th:.4f} (SE {res['se']:.4f}), S = {S:.4f}")
         print(f"  confounder with cf_y = {cf_y:.1%}, cf_d = {cf_d:.1%}, rho = {rho}: bias <= {B:.4f}")
-        if cf_y == 0 or cf_d == 0 or rho == 0:
+        if np.isfinite(B) and B == 0:        # keyed on the bound itself (cf_d = 1 gives an infinite one)
             print("  The bias bound is zero: a confounder with cf_y = 0, cf_d = 0 or rho = 0 changes nothing, so these "
                   "bounds say nothing about confounding (a benchmark with no strength is no reference).")
         print(f"  bounds [{lo:.4f}, {hi:.4f}]; {level} confidence bounds [{ci_lo:.4f}, {ci_hi:.4f}]")
-        if rv >= 1.0:                             # the ceiling of the search: no strength reaches the target
-            rv_txt = (f"RV = 100% (ceiling): no confounder with cf_y = cf_d and rho = {rho} moves theta to "
-                      f"{target:.4f}")
+        def pct(x, d):                            # a positive share that would print as zero says so
+            return f"< {10 ** -d:.{d}f}%" if 0 < x < 0.5 * 10 ** -(d + 2) else f"{x:.{d}%}"
+        if rv >= 1.0:                             # the ceiling of the search, cf up to 1 − 1e-9
+            rv_txt = (f"RV = 100% (ceiling): no confounder with cf_y = cf_d short of 100% and rho = {rho} moves "
+                      f"theta to {target:.4f}")
         else:
-            rv_txt = (f"RV = {rv:.2%}: a confounder explaining {rv:.1%} of the residual variance of both D and Y "
-                      f"would move theta to {target:.4f}")
+            rv_txt = (f"RV = {pct(rv, 2)}: a confounder explaining {pct(rv, 1)} of the residual variance of both D "
+                      f"and Y would move theta to {target:.4f}")
         # "already" is judged on the CI the reader sees: theta ± z·SE of dml_plr at this alpha. That SE is the
         # median of sqrt(se_r² + (theta_r − theta)²) over the sample splits, never below the median per-split SE
-        # inside rva, so this CI contains the zero-confounder confidence bounds: it can contain the target while
-        # rva is still > 0, never the other way round (checked in tests/test_v253.py).
+        # inside rva, so this CI contains the zero-confounder confidence bounds up to rounding: it can contain the
+        # target while rva is still > 0. The reverse (rva = 0, the reported CI excluding the target) happens only
+        # by an ulp (review of v2.5.3: 30 of 200 seeds with n_rep = 1), so rva = 0 also reads as "already".
         z_rep = stats.norm.ppf(1 - alpha / 2)
-        in_reported = th - z_rep * res["se"] <= target <= th + z_rep * res["se"]
+        in_reported = (th - z_rep * res["se"] <= target <= th + z_rep * res["se"]) or rva == 0
+        sig = f"{round(100 * alpha, 6):g}%"
         if in_reported and one:
-            rva_txt = f"the estimate is already not significant at the {level} level, with no confounder"
+            rva_txt = f"the estimate is already not significant at the {sig} level, with no confounder"
         elif in_reported:
             rva_txt = f"that value is already inside the {level} confidence interval, with no confounder"
         elif rva >= 1.0:
             rva_txt = ("nor does any make it no longer significant" if one
                        else f"nor does any put that value inside the {level} confidence bounds")
-        elif one:                                 # the v2.5.2.1 sentence, byte for byte
-            rva_txt = f"RVa = {rva:.2%} makes it no longer significant"
+        elif one:                                 # the v2.5.2.1 sentence, byte for byte unless RVa < 0.005%
+            rva_txt = f"RVa = {pct(rva, 2)} makes it no longer significant"
         else:
-            rva_txt = f"RVa = {rva:.2%} would put that value inside the {level} confidence bounds"
+            rva_txt = f"RVa = {pct(rva, 2)} would put that value inside the {level} confidence bounds"
         print(f"  {rv_txt}; {rva_txt}.")
         print("  Benchmark these strengths against observed covariates with causal.dml_benchmark.")
     return out
@@ -393,13 +401,14 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
                      "rho": float(np.clip(dth / denom, -1, 1)) if np.isfinite(denom) and denom > 0 else np.nan,
                      "theta_without": rs["estimate"], "delta_theta": dth})
         if cy == 0 or cd == 0:                    # v2.5.3: this used to come back silently with rho = NaN
-            side = ("none of the outcome's or the treatment's residual variance" if cy == 0 and cd == 0
-                    else "none of the outcome's residual variance" if cy == 0
-                    else "none of the treatment's residual variance")
+            side = ("of the outcome's and of the treatment's residual variance are" if cy == 0 and cd == 0
+                    else "of the outcome's residual variance is" if cy == 0
+                    else "of the treatment's residual variance is")
             warnings.warn(f"Benchmark {b}: cf_y = {cy:.3g}, cf_d = {cd:.3g}, rho undefined. Given the other "
-                          f"covariates, {b} explains {side}, so it is no reference for how strong a confounder could be; passing these "
-                          "values to dml_sensitivity gives a bias bound of zero, not a robustness result. Use "
-                          "covariates that matter for both D and Y as benchmarks.")
+                          f"covariates, its estimated share {side} zero or below (clipped to 0), so it is no reference "
+                          "for how strong a confounder could be: its cf_y and cf_d give dml_sensitivity a bias bound "
+                          "of zero, not a robustness result, and its NaN rho is refused. Use covariates that matter "
+                          "for both D and Y as benchmarks.")
     return pd.DataFrame(rows).set_index("benchmark")
 
 

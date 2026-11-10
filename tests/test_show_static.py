@@ -34,46 +34,74 @@ def check(name, cond, info=""):
 
 # (module, function, parameter): why reassigning it inside a loop is intended
 ALLOWED = {
-    ("estimation", "mle", "method"): "falls back to BFGS when the requested optimizer fails; nothing prints it",
+    ("estimation", "mle", "method"): "falls back to BFGS when the requested optimizer fails; the returned "
+                                     "'method' reports the optimizer actually used",
     ("simulation", "mde_did_sim", "lo"): "bisection bounds of the search for the minimum detectable effect",
     ("simulation", "mde_did_sim", "hi"): "bisection bounds of the search for the minimum detectable effect",
 }
-_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef,
-           ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+_FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+_COMPS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 
 
-def _names(target):
-    if isinstance(target, ast.Name):
-        yield target.id
-    elif isinstance(target, (ast.Tuple, ast.List)):
-        for e in target.elts:
-            yield from _names(e)
-    elif isinstance(target, ast.Starred):
-        yield from _names(target.value)
+def _bound(node):
+    """Names a single node binds or unbinds in the enclosing function scope (not recursive)."""
+    if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        return [node.id]
+    if isinstance(node, ast.ExceptHandler) and node.name:
+        return [node.name]
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return [(a.asname or a.name).split(".")[0] for a in node.names]
+    match_nodes = tuple(getattr(ast, n) for n in ("MatchAs", "MatchStar") if hasattr(ast, n))
+    if match_nodes and isinstance(node, match_nodes) and node.name:
+        return [node.name]
+    if hasattr(ast, "MatchMapping") and isinstance(node, ast.MatchMapping) and node.rest:
+        return [node.rest]
+    return []
 
 
 def loop_reassignments(fn):
-    """(parameter, line) for every parameter of `fn` reassigned inside a loop of `fn` itself."""
+    """(parameter, line) for every parameter of `fn` rebound (assignment, augmented or annotated assignment, walrus,
+    for target, with/except/import alias, del, match capture) inside a for/while of `fn` itself.
+
+    Nested functions, lambdas and classes are their own scope and are not entered. In a comprehension only a walrus
+    binds in the function (its loop variables do not). A loop's `else` block and a for's iterable run once, so they
+    are outside the loop; a while's test runs on every pass. Not covered: `nonlocal` rebinding from a nested
+    function (needs scope analysis; never used in scripts/)."""
     a = fn.args
     params = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs}
     params |= {x.arg for x in (a.vararg, a.kwarg) if x is not None}
     hits = []
 
-    def visit(node, in_loop):
+    def visit(node, in_loop, comp=False):
+        if isinstance(node, _FUNCS):              # its own scope; only its name binds here (def q(): ... in a loop)
+            name = getattr(node, "name", None)
+            if in_loop and not comp and name in params:
+                hits.append((name, node.lineno))
+            return
+        if in_loop:
+            if comp:
+                names = [node.target.id] if isinstance(node, ast.NamedExpr) else []
+            else:
+                names = _bound(node)
+            hits.extend((n, getattr(node, "lineno", 0)) for n in names if n in params)
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            visit(node.iter, in_loop, comp)
+            for ch in [node.target, *node.body]:
+                visit(ch, True, comp)
+            for ch in node.orelse:
+                visit(ch, in_loop, comp)
+            return
+        if isinstance(node, ast.While):
+            for ch in [node.test, *node.body]:
+                visit(ch, True, comp)
+            for ch in node.orelse:
+                visit(ch, in_loop, comp)
+            return
         for ch in ast.iter_child_nodes(node):
-            if isinstance(ch, _SCOPES):
-                continue
-            targets = []
-            if isinstance(ch, (ast.For, ast.AsyncFor)):
-                targets.append(ch.target)          # the loop variable is reassigned on every pass
-            elif in_loop and isinstance(ch, ast.Assign):
-                targets.extend(ch.targets)
-            elif in_loop and isinstance(ch, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr)):
-                targets.append(ch.target)
-            hits.extend((n, ch.lineno) for t in targets for n in _names(t) if n in params)
-            visit(ch, in_loop or isinstance(ch, (ast.For, ast.AsyncFor, ast.While)))
+            visit(ch, in_loop, comp or isinstance(ch, _COMPS))
 
-    visit(fn, False)
+    for stmt in fn.body:
+        visit(stmt, False)
     return params, hits
 
 
@@ -113,6 +141,18 @@ VARIANTS = {
     "walrus inside a loop": "def f(k, show=False):\n    for i in range(3):\n        if (k := i) > 1:\n            pass\n",
     "nested for whose target is a parameter": "def f(t, show=False):\n    for i in range(2):\n"
                                               "        for t in range(2):\n            pass\n",
+    "with ... as": "def f(q, show=False):\n    for i in range(2):\n        with open('x') as q:\n            pass\n",
+    "except ... as": "def f(q, show=False):\n    for i in range(2):\n        try:\n            pass\n"
+                     "        except ValueError as q:\n            pass\n",
+    "del": "def f(q, show=False):\n    while True:\n        del q\n",
+    "import ... as": "def f(np, show=False):\n    for i in range(2):\n        import numpy as np\n",
+    "match capture": "def f(q, show=False):\n    for i in range(2):\n        match i:\n"
+                     "            case [q, *_]:\n                pass\n",
+    "walrus inside a comprehension (binds in the function)": "def f(q, show=False):\n    for i in range(2):\n"
+                                                             "        z = [(q := j) for j in range(3)]\n",
+    "a def inside a loop named like a parameter": "def f(g, show=False):\n    for i in range(2):\n"
+                                                  "        def g():\n            pass\n",
+    "assignment in a while test": "def f(q, show=False):\n    while (q := q - 1) > 0:\n        pass\n",
 }
 for label, src in VARIANTS.items():
     check(f"guard catches: {label}", len(scan_source(src, "m")) == 1, str(scan_source(src, "m")))
@@ -125,6 +165,11 @@ CLEAN = {
     "a nested function has its own scope": "def f(q, show=False):\n    for i in range(2):\n"
                                            "        def g(q):\n            q = 2\n",
     "a local that is not a parameter": "def f(a, show=False):\n    for i in range(2):\n        k = i\n",
+    "the else block of a loop runs once": "def f(q, show=False):\n    for i in range(2):\n        pass\n"
+                                          "    else:\n        q = 3\n",
+    "a walrus in a for's iterable runs once": "def f(q, show=False):\n    for i in (q := [1, 2]):\n        pass\n",
+    "a comprehension's own loop variable": "def f(q, show=False):\n    for i in range(2):\n"
+                                           "        z = {q: 1 for q in range(3)}\n",
 }
 for label, src in CLEAN.items():
     check(f"guard stays quiet: {label}", scan_source(src, "m") == [], str(scan_source(src, "m")))
