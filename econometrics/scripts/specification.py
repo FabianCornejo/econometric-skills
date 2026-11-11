@@ -1155,9 +1155,9 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                       f"{br['kd_max']:.6g}).")
             elif br["k_needed_beyond_cap"]:
                 print(f"  A confounder {kn:.3g}x as strong as {lab} in explaining the treatment could, in the worst "
-                      f"case, {goal}, but only with the outcome fully explained: from {br['k_cap']:.4g}x (the same k "
-                      f"for both) the implied partial R² with the outcome already reaches 100%, so beyond it only the "
-                      f"treatment side grows (this k is not the same for treatment and outcome).")
+                      f"case, {goal}, but only with the outcome fully explained: at k_cap = {br['k_cap']:.4g}x (with kd = "
+                      f"ky) the implied partial R² with the outcome already reaches 100%, so beyond it only the "
+                      f"treatment side grows.")
             else:
                 print(f"  A confounder {kn:.3g}x as strong as {lab} (same k for treatment and outcome) could, in the "
                       f"worst case, {goal}.")

@@ -246,7 +246,7 @@ def dml_plr(df: pd.DataFrame, y: str, d: str, X: list[str], learner_y=None, lear
         thetas.append(th); ses.append(se); resid.append((uy, vd))
     th = float(np.median(thetas))
     se = float(np.median(np.sqrt(np.array(ses) ** 2 + (np.array(thetas) - th) ** 2)))
-    return _out("theta (DML-PLR)", th, se, len(Y), n_folds=n_folds, n_rep=n_rep,
+    return _out("theta (DML-PLR)", th, se, len(Y), n_folds=n_folds, n_rep=n_rep, seed=seed,
                 residuals=resid, var_y=float(np.var(Y)), thetas=thetas)
 
 
@@ -387,12 +387,27 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
     return out
 
 
+def _split_mismatch(res: dict, rs: dict, n_long: int, n_short: int) -> str:
+    """Why the sample splits of res and of a refit cannot be paired by position ('' if they can): v2.6.2 review."""
+    if n_long != n_short:
+        return f"res has {n_long} sample splits and the refit {n_short}"
+    if len(res.get("thetas", ())) != n_long or len(rs.get("thetas", ())) != n_short:
+        return "res has no per-split thetas"
+    if "seed" not in res:
+        return "res does not record its seed (a dml_plr result from before v2.6.2)"
+    for key in ("seed", "n_folds"):
+        if res.get(key) != rs.get(key):
+            return f"res has {key} = {res.get(key)!r} and the refit {rs.get(key)!r}"
+    return ""
+
+
 def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: list[str],
                   res: dict | None = None, **dml_kwargs) -> pd.DataFrame:
-    """Implied sensitivity parameters of observed covariates (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022,
-    the benchmarking appendix: Appendix F, eq. 22-23, in arXiv 2112.13398v5; the v6 of September 2026 renumbers it; as DoubleML's sensitivity_benchmark): refit dml_plr without each benchmark covariate X_j and
-    measure the gains it brings, relative to the full model (subscript l, with X_j; s, without it), in each sample
-    split r and then as the median over the splits, as DoubleML does (v2.6.2 review):
+    """Implied sensitivity parameters of observed covariates (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022;
+    Appendix F, eq. 22-23, of arXiv 2112.13398v5, Appendix E in v6). cf_y, cf_d and rho are those of DoubleML's
+    sensitivity_benchmark; delta_theta and the NaN rho of a benchmark with no strength are the skill's (below).
+    Refit dml_plr without each benchmark covariate X_j and measure the gains it brings, relative to the full model
+    (subscript l, with X_j; s, without it), in each sample split r and then as the median over the splits:
       gain_y = median_r (sigma2_s,r - sigma2_l,r) / sigma2_l,r   (G_Y: added explained variance of the outcome over
                                                                   what the full model leaves unexplained)
       gain_d = median_r (nu2_l,r - nu2_s,r) / nu2_s,r            (G_D, nu2 = E[alpha^2] = 1/E[(D - m(X))^2])
@@ -402,8 +417,9 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
              is 0 (no strength: the skill's rule since v2.5.3)
       delta_theta = theta_s - theta_l (medians over the splits, as before);  k_d_max = 1/gain_d
       r2_y, r2_d = the partial R² that cf_y and cf_d were before v2.6.2, computed as before (ratios of medians).
-    The splits are paired by position: dml_plr with the same seed and n_rep splits the rows the same way in the
-    full and the short fit; if res has another number of splits, the gains fall back to ratios of medians (warning).
+    The splits are paired by position, which is valid when res and the refits use the same seed, n_folds and n_rep
+    (KFold depends only on the rows and the seed); dml_plr stores its seed since v2.6.2. When they differ, or when res
+    has no per-split thetas or no seed, the gains fall back to ratios of medians, with a warning that says why.
     v2.6.2: cf_y and cf_d were the partial R² r2_y, r2_d, always below the paper's gains, so "a confounder as strong as
     X_j" gave a smaller (less conservative) bound than the paper's benchmark; cf_d was also cut at 0.999 silently.
     For "a confounder k times as strong as X_j" use dml_bounds (the paper scales the gains by k). Benchmarks are
@@ -420,7 +436,8 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
         ry = max((s2s - s2l) / s2s, 0.0)            # partial R² forms (cf_y, cf_d before v2.6.2), as before
         rd = max((n2l - n2s) / n2l, 0.0)
         dth = rs["estimate"] - res["estimate"]
-        if len(sh) == len(long) and len(rs.get("thetas", ())) == len(sh) and len(res.get("thetas", ())) == len(long):
+        why = _split_mismatch(res, rs, len(long), len(sh))
+        if not why:
             gys = np.array([max(s_["sigma2"] / l_["sigma2"] - 1, 0.0) for s_, l_ in zip(sh, long)])
             gds = np.array([max(l_["nu2"] / s_["nu2"] - 1, 0.0) for s_, l_ in zip(sh, long)])
             dths = np.array(rs["thetas"]) - np.array(res["thetas"])
@@ -430,9 +447,9 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
                 mag = np.where(den > 0, np.minimum(np.abs(dths) / den, 1.0), 1.0)
             rho_b = float(np.median(np.sign(dths) * mag))
         else:
-            warnings.warn(f"Benchmark {b}: res has {len(long)} sample splits and the refit {len(sh)}; the gains are "
-                          "ratios of the medians over the splits, not medians of the split gains (pass dml_benchmark "
-                          "the same n_rep and seed as dml_plr to pair them)", stacklevel=2)
+            warnings.warn(f"Benchmark {b}: {why}, so the splits cannot be paired; the gains are ratios of the medians "
+                          "over the splits, not medians of the split gains as in DoubleML (pass dml_benchmark the same "
+                          "seed, n_folds and n_rep as dml_plr)", stacklevel=2)
             gys = np.array([max(s2s / s2l - 1, 0.0)]); gds = np.array([max(n2l / n2s - 1, 0.0)])
             Ss = np.median([r_["S"] for r_ in sh])
             denom = Ss * np.sqrt(ry * rd / (1 - rd)) if ry > 0 and 0 < rd < 1 else np.nan   # = sqrt(dsigma2 * dnu2)
@@ -453,21 +470,25 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
                           "for how strong a confounder could be: its cf_y and cf_d give dml_sensitivity a bias bound "
                           "of zero, not a robustness result, and its NaN rho is refused. Use covariates that matter "
                           "for both D and Y as benchmarks.", stacklevel=2)
-        cut = [f"{nm} = {v:.3g}" for nm, v, lim in (("gain_y", gy, gy > 1), ("gain_d", gd, gd >= 1)) if lim]
-        if cut:                                   # v2.6.2: as DoubleML, cut to 1; say what that means
-            warnings.warn(f"Benchmark {b}: {', '.join(cut)} cut to 1 in cf_y/cf_d. A confounder as strong as {b} would "
-                          + ("explain all the residual variance of the outcome (cf_y = 1)" if gy > 1 else "")
-                          + (" and " if gy > 1 and gd >= 1 else "")
-                          + ("leave no residual variation in the treatment (cf_d = 1: the bound is infinite; "
-                             f"dml_bounds accepts kd below k_d_max = {1 / gd:.3g})" if gd >= 1 else "")
-                          + ".", stacklevel=2)
+        cfy_, cfd_ = rows[-1]["cf_y"], rows[-1]["cf_d"]
+        parts = []                                # v2.6.2 review: state the returned cf, not the uncut median
+        if gy > 1:
+            parts.append(f"gain_y = {gy:.3g} is above 1 (cf_y, the median of the split gains cut to 1, is {cfy_:.3g}); "
+                         "dml_bounds holds ky * gain_y at 1")
+        if gd >= 1:
+            parts.append(f"gain_d = {gd:.3g} is 1 or more (cf_d = {cfd_:.3g}"
+                         + (": the bound of dml_sensitivity is infinite" if cfd_ >= 1 else "") + "); dml_bounds refuses "
+                         f"every kd at or above k_d_max = {1 / gd:.3g}")
+        if parts:
+            warnings.warn(f"Benchmark {b}: " + "; ".join(parts) + ".", stacklevel=2)
     return pd.DataFrame(rows).set_index("benchmark")
 
 
 def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark", alpha: float = ALPHA,
                show: bool = True) -> dict:
     """Bounds for DML-PLR under a confounder k times as strong as an observed covariate (v2.6.2): the analogue of
-    specification.ovb_bounds, following Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis (2022, the benchmarking appendix: Appendix F, eq. 22-23, in arXiv 2112.13398v5; the v6 of September 2026 renumbers it):
+    specification.ovb_bounds, following Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis (2022; Appendix F, eq. 22-23,
+    of arXiv 2112.13398v5, Appendix E in v6):
     the benchmark's gains are scaled by k, cf_y = ky * gain_y and cf_d = kd * gain_d.
 
     res    the dict of dml_plr (with its residuals); bench  the DataFrame of dml_benchmark (or any with columns
@@ -479,7 +500,9 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
            skipped, one outside [-1, 1] is a ValueError); or a number in [-1, 1] for every line (1: the worst case,
            the paper's conservative default).
 
-    Conventions of the skill (the paper states none): cf_y = ky * gain_y above 1 is held at 1 (the confounder would
+    It scales gain_y and gain_d (the medians of the split gains), not cf_y and cf_d: at k = 1 the two agree unless the
+    split gains straddle 1 with an even number of splits. Conventions of the skill (the paper states none): cf_y =
+    ky * gain_y above 1 is held at 1 (the confounder would
     explain all of the outcome's residual variance), with one warning per benchmark; kd * gain_d >= 1 is impossible
     (cf_d = 1 gives an infinite bound). The bounds and confidence bounds are those of dml_sensitivity with that cf_y,
     cf_d and rho (influence functions, median over the sample splits); the gains and rho are estimates whose own
@@ -502,7 +525,7 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
             raise ValueError(f"rho is 'benchmark' or a number in [-1, 1], got {rho!r}")
     elif isinstance(rho, (bool, np.bool_)) or not isinstance(rho, numbers.Real):
         raise TypeError(f"rho is 'benchmark' or one number in [-1, 1], got {rho!r}")
-    elif not np.isfinite(rho) or abs(rho) > 1:
+    elif not np.isfinite(float(rho)) or abs(float(rho)) > 1:
         raise ValueError(f"rho is a correlation and must be finite and in [-1, 1], got {rho!r} (1 is the worst case)")
     default_kd = kd is None
     kd_arr = _check_k(_KD_DEFAULT if default_kd else kd, "kd")
@@ -541,7 +564,7 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
             raise ValueError(f"benchmark {lab!r} has rho = {rb!r}, outside [-1, 1]: rho is a correlation (dml_benchmark "
                              "clips it); fix the bench table or pass a number")
         kmax = 1 / gd
-        bad = kd_arr * gd >= 1                    # the product itself (kd just below 1/gd can round to 1)
+        bad = (kd_arr >= kmax) | (kd_arr * gd >= 1)   # both: kd = fl(1/gd) can give a product just below 1
         kd_b, ky_b = kd_arr, ky_arr
         if bad.any():
             if not default_kd:
