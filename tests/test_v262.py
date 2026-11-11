@@ -302,12 +302,14 @@ rng = np.random.default_rng(9)
 n = 400
 splits_long = [(rng.normal(size=n), rng.normal(size=n)) for _ in range(3)]
 splits_short = [splits_long[0]] + [(uy + 0.3 * rng.normal(size=n), vd * 1.2) for uy, vd in splits_long[1:]]
-FAKE_LONG = {"residuals": splits_long, "thetas": [0.10, 0.12, 0.11], "estimate": 0.11, "se": 0.05}
-FAKE_SHORT = {"residuals": splits_short, "thetas": [0.30, 0.20, 0.25], "estimate": 0.25, "se": 0.05}
+FAKE_LONG = {"residuals": splits_long, "thetas": [0.10, 0.12, 0.11], "estimate": 0.11, "se": 0.05, "seed": 0,
+             "n_folds": 5}
+FAKE_SHORT = {"residuals": splits_short, "thetas": [0.30, 0.20, 0.25], "estimate": 0.25, "se": 0.05, "seed": 0,
+              "n_folds": 5}
 _orig_plr = causal.dml_plr
 causal.dml_plr = lambda *a, **k: FAKE_SHORT
 try:
-    BF, _, _ = run(causal.dml_benchmark, None, "y", "d", ["x1", "x2"], ["x1"], res=FAKE_LONG)
+    BF, _, wF = run(causal.dml_benchmark, None, "y", "d", ["x1", "x2"], ["x1"], res=FAKE_LONG)
 finally:
     causal.dml_plr = _orig_plr
 
@@ -323,8 +325,68 @@ for (ul, vl), (us, vs), tl, ts in zip(splits_long, splits_short, FAKE_LONG["thet
     den_ = np.sqrt(max(s2s_ - s2l_, 0) * max(n2l_ - n2s_, 0))
     rr.append(np.sign(ts - tl) * (min(abs(ts - tl) / den_, 1) if den_ > 0 else 1.0))
 check("a split with denominator 0 counts as sign(dth)·1, as in DoubleML (the median stays finite; mutation)",
-      np.isfinite(BF.loc["x1", "rho"]) and abs(BF.loc["x1", "rho"] - np.median(rr)) < 1e-12 and rr[0] == 1.0,
+      np.isfinite(BF.loc["x1", "rho"]) and abs(BF.loc["x1", "rho"] - np.median(rr)) < 1e-12 and rr[0] == 1.0
+      and not any("cannot be paired" in s_ for s_ in wF),
       (BF.loc["x1", "rho"], rr))
+
+# review round 2: two splits whose gains straddle 1 (mocked splits, built from the gains wanted)
+def two_splits(gys, gds, n_=300, seed_=4):
+    r_ = np.random.default_rng(seed_)
+    lo_, sh_ = [], []
+    for gy_, gd_ in zip(gys, gds):
+        uy, vd = r_.normal(size=n_), r_.normal(size=n_)
+        vd = vd - vd.mean()
+        uy = uy - (np.sum(vd * uy) / np.sum(vd * vd)) * vd          # theta = 0 in the split: sigma2 = mean(uy²)
+        lo_.append((uy, vd))
+        sh_.append((uy * np.sqrt(1 + gy_), vd * np.sqrt(1 + gd_)))  # sigma2 x (1 + gy); nu2 / (1 + gd)
+    return lo_, sh_
+
+
+lo2, sh2 = two_splits((0.8, 1.6), (0.5, 1.5))
+L2 = {"residuals": lo2, "thetas": [0.0, 0.0], "estimate": 0.0, "se": 0.05, "seed": 0, "n_folds": 5}
+S2 = {"residuals": sh2, "thetas": [0.1, 0.2], "estimate": 0.15, "se": 0.05, "seed": 0, "n_folds": 5}
+causal.dml_plr = lambda *a, **k: S2
+try:
+    B2, _, w2 = run(causal.dml_benchmark, None, "y", "d", ["x1"], ["x1"], res=L2)
+finally:
+    causal.dml_plr = _orig_plr
+r2_ = B2.loc["x1"]
+check("even n_rep, split gains (0.8, 1.6) and (0.5, 1.5): gain_y 1.2, gain_d 1.0, cf_y 0.9, cf_d 0.75 (medians of the "
+      "cut split gains, as DoubleML)",
+      abs(r2_["gain_y"] - 1.2) < 1e-9 and abs(r2_["gain_d"] - 1.0) < 1e-9 and abs(r2_["cf_y"] - 0.9) < 1e-9
+      and abs(r2_["cf_d"] - 0.75) < 1e-9, r2_[["gain_y", "gain_d", "cf_y", "cf_d"]].tolist())
+wb = [s_ for s_ in w2 if s_.startswith("Benchmark x1")]
+check("even n_rep: the warning states the returned cf (0.9, 0.75) and never 'infinite' when cf_d < 1 (review round 2)",
+      len(wb) == 1 and "0.9" in wb[0] and "0.75" in wb[0] and "infinite" not in wb[0], wb)
+# fallback: seed, n_folds, thetas or the number of splits differ -> ratios of medians, with the reason
+
+
+def ratio_gains(res_l, res_s):
+    m_ = lambda r: (np.median([np.mean((u - (np.sum(v * u) / np.sum(v * v)) * v) ** 2) for u, v in r["residuals"]]),
+                    np.median([1 / np.mean(v * v) for u, v in r["residuals"]]))
+    (s2l_, n2l_), (s2s_, n2s_) = m_(res_l), m_(res_s)
+    return s2s_ / s2l_ - 1, n2l_ / n2s_ - 1
+
+
+RS7 = causal.dml_plr(DN, "y", "d", ["x1", "x2", "x3"], n_rep=3, n_folds=3, seed=7, **RF)
+for label, kw_, why in (("seed", dict(n_rep=3, n_folds=3, seed=0), "seed = 7"),
+                        ("n_folds", dict(n_rep=3, n_folds=4, seed=7), "n_folds = 3"),
+                        ("n_rep", dict(n_rep=2, n_folds=3, seed=7), "3 sample splits and the refit 2")):
+    Bf, _, wf = run(causal.dml_benchmark, DN, "y", "d", ["x1", "x2", "x3"], ["x2"], res=RS7, **kw_, **RF)
+    gyf, gdf = ratio_gains(RS7, causal.dml_plr(DN, "y", "d", ["x1", "x3"], **kw_, **RF))
+    check(f"fallback when {label} differs: a warning that says why ({why!r}) and gains = ratios of medians",
+          any("cannot be paired" in s_ and why in s_ for s_ in wf)
+          and abs(Bf.loc["x2", "gain_y"] - max(gyf, 0)) < 1e-12 and abs(Bf.loc["x2", "gain_d"] - max(gdf, 0)) < 1e-12,
+          (wf, Bf.loc["x2", ["gain_y", "gain_d"]].tolist(), gyf, gdf))
+Bp, _, wp = run(causal.dml_benchmark, DN, "y", "d", ["x1", "x2", "x3"], ["x2"], res=RS7, n_rep=3, n_folds=3, seed=7,
+                **RF)
+check("same seed, n_folds and n_rep: paired, no fallback warning", not any("cannot be paired" in s_ for s_ in wp), wp)
+for label, res_, why in (("no thetas", {k_: v_ for k_, v_ in RS7.items() if k_ != "thetas"}, "no per-split thetas"),
+                         ("no seed", {k_: v_ for k_, v_ in RS7.items() if k_ != "seed"}, "does not record its seed")):
+    _, _, wq = run(causal.dml_benchmark, DN, "y", "d", ["x1", "x2", "x3"], ["x2"], res=res_, n_rep=3, n_folds=3,
+                   seed=7, **RF)
+    check(f"fallback when res has {label}: the warning names it (never 'res has 3 sample splits and the refit 3')",
+          any(why in s_ for s_ in wq) and not any("3 sample splits and the refit 3" in s_ for s_ in wq), wq)
 
 ref = json.loads((HERE / "data" / "doubleml_benchmark_v262.json").read_text())
 rng = np.random.default_rng(20261111)
@@ -412,22 +474,28 @@ b_one = causal.dml_bounds(RG, HB, kd=1, rho=1.0, show=False)["bounds"].iloc[0]["
 b_neg = causal.dml_bounds(RG, HB, kd=1, rho=-1.0, show=False)["bounds"].iloc[0]["bias_bound"]
 check("rho: the benchmark's (0.5) by default gives half the bias bound of rho = 1; rho = -1 the same as 1",
       abs(b_half - b_one / 2) < 1e-12 and abs(b_neg - b_one) < 1e-12, (b_half, b_one, b_neg))
+b_one_pre = causal.dml_bounds(RG, HB, kd=1, rho=1.0, show=False)["bounds"].iloc[0]["bias_bound"]
 oe, _, _ = run(causal.dml_bounds, RG, HB.assign(rho=[1.5]), show=False)
 check("a bench rho of 1.5 under rho='benchmark' is a ValueError naming the benchmark (review: it printed rho 1.50)",
       isinstance(oe, ValueError) and "'b'" in str(oe) and "rho" in str(oe), repr(oe))
 oe, _, _ = run(causal.dml_bounds, RG, HB.assign(rho=[-1.0]), show=False)
 check("a bench rho of -1 is accepted (the boundary)", isinstance(oe, dict) and len(oe["bounds"]) == 3 - 1, repr(oe)[:80])
+from fractions import Fraction   # noqa: E402
+oe, _, _ = run(causal.dml_bounds, RG, HB, kd=1, rho=Fraction(1, 2), show=False)
+check("rho = Fraction(1, 2) is accepted as 0.5 (review round 2: a numpy TypeError)",
+      isinstance(oe, dict) and abs(oe["bounds"]["bias_bound"].iloc[0] - b_one_pre / 2) < 1e-12, repr(oe)[:100])
 for bad_ in (True, None, [1.0, 0.5]):
     oe, _, _ = run(causal.dml_bounds, RG, HB, rho=bad_, show=False)
     check(f"rho = {bad_!r} is a TypeError (review: True read as 1, None and lists gave numpy errors)",
           isinstance(oe, TypeError), repr(oe))
 H3 = pd.DataFrame({"gain_y": [0.3], "gain_d": [0.3], "rho": [1.0]}, index=["b"])
-kd_edge = np.nextafter(1 / 0.3, 0)
-oe, _, _ = run(causal.dml_bounds, RG, H3, kd=kd_edge, show=False)
-check(f"kd = nextafter(1/0.3, 0): refused when kd·gain_d rounds to 1 or more, accepted only if below 1 "
-      f"(kd·gd = {kd_edge * 0.3!r}; review: a 7.8e7 bound)",
-      isinstance(oe, ValueError) if kd_edge * 0.3 >= 1 else (isinstance(oe, dict) and oe["bounds"]["cf_d"].iloc[0] < 1),
-      repr(oe)[:120])
+refused = []
+for gd_ in np.linspace(0.01, 0.99, 2000):          # kd = fl(1/gd): the product can round just below 1 (298 of 2000)
+    oe, _, _ = run(causal.dml_bounds, RG, pd.DataFrame({"gain_y": [0.1], "gain_d": [gd_], "rho": [1.0]}, index=["b"]),
+                   kd=1 / gd_, show=False)
+    refused.append(isinstance(oe, ValueError))
+check("kd = fl(1/gain_d) is refused for all 2000 gain_d in [0.01, 0.99] (review round 2: bounds of 2.7e7 when the "
+      "product rounded below 1)", all(refused), sum(refused))
 oe, _, _ = run(causal.dml_bounds, RG, H3, kd=1 / 0.3 * (1 - 1e-6), show=False)
 check("kd·gain_d = 1 − 1e-6: accepted", isinstance(oe, dict) and oe["bounds"]["cf_d"].iloc[0] < 1)
 HNA = pd.DataFrame({"gain_y": [np.nan, 0.3], "gain_d": [0.2, np.inf], "rho": [1.0, 1.0]}, index=["nan_g", "inf_g"])
