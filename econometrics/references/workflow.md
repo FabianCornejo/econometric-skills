@@ -149,7 +149,7 @@ A conclusion is reliable only if it survives reasonable variations. Do at least 
 - subsample (without the pandemic; separate periods);
 - another estimator (OLS vs. IV; FE vs. RE; 2SLS vs. LIML; alternative Cholesky ordering);
 - another variable definition or aggregation level;
-- for causal claims resting on observed controls: sensitivity to unobserved confounders (`specification.oster` and/or `sensitivity`, `ols-regression.md` §14; for double ML, `causal.dml_sensitivity` benchmarked with `causal.dml_benchmark`, `causal-inference.md` §4.1);
+- for causal claims resting on observed controls: sensitivity to unobserved confounders (`specification.oster` and/or `sensitivity`, `ols-regression.md` §14; for double ML, `causal.dml_sensitivity` benchmarked with `causal.dml_benchmark`, and `causal.dml_bounds` for "k times as strong", `causal-inference.md` §4.1);
 - for forecasting: rolling-origin evaluation against naive, seasonal naive and ETS, with a Diebold-Mariano test;
 - for strategies and risk models: out-of-sample period, realistic costs, number of variants tried, VaR backtests (see `forecasting-backtesting.md` §9 and `risk-var.md` §3).
 
