@@ -120,7 +120,7 @@ for i, (ly, gy, ld, gd) in enumerate(zip((1, 2, 3), (1.5, 0.01, 0.01), (1, 2, 3)
     (ul, vl), (us, vs) = split_pair(ly, gy, ld, gd, seed=i)
     (s2l, n2l), (s2s, n2s) = split_moments(ul, vl), split_moments(us, vs)
     got.append((s2s / s2l - 1, n2l / n2s - 1, (s2s - s2l) / s2s, (n2l - n2s) / n2l))
-check("each built split recovers its planted gains (G_Y, G_D) and has G > G/(1 + G) = its own partial R²",
+check("the built splits have the planted moments (a check of the test's own construction, not of the skill)",
       all(abs(a - gy) < 1e-9 and abs(b - gd) < 1e-9 and a > ry and b > rd and abs(ry - a / (1 + a)) < 1e-12
           for (a, b, ry, rd), gy, gd in zip(got, (1.5, 0.01, 0.01), (0.01, 0.01, 1.5))), got)
 check("the 'below' design gives no 'cannot be paired' warning (splits paired, as DoubleML)",
@@ -138,6 +138,26 @@ for g in (0.3, 1 - 1e-9, 1.0, 1 + 1e-9):
           and abs(b1["r2_d"] - g / (1 + g)) < 1e-9 and abs(b1["cf_d"] - min(g, 1.0)) < 1e-9
           and (b1["cf_y"] == 1.0) == (g >= 1.0 - 1e-12) and (b1["cf_d"] == 1.0) == (g >= 1.0 - 1e-12),
           b1[["cf_y", "r2_y", "cf_d", "r2_d"]].tolist())
+
+# fallback to ratios of medians (res without a seed): cf = min(r2 / (1 - r2), 1) up to rounding (review 2)
+_long = {"residuals": [split_pair(ly, gy, ld, gd, seed=i)[0] for i, (ly, gy, ld, gd) in
+                       enumerate(zip((1, 2, 3), (1.5, 0.01, 0.01), (1, 2, 3), (0.01, 0.01, 1.5)))],
+         "thetas": [0.0] * 3, "estimate": 0.0, "se": 0.05, "n_folds": 5}
+_short = {"residuals": [split_pair(ly, gy, ld, gd, seed=i)[1] for i, (ly, gy, ld, gd) in
+                        enumerate(zip((1, 2, 3), (1.5, 0.01, 0.01), (1, 2, 3), (0.01, 0.01, 1.5)))],
+          "thetas": [0.1] * 3, "estimate": 0.1, "se": 0.05, "seed": 0, "n_folds": 5}
+_orig = causal.dml_plr
+causal.dml_plr = lambda *a, **kw: _short
+try:
+    bfb, _, wfb = run(causal.dml_benchmark, None, "y", "d", ["x1"], ["x1"], res=_long)
+finally:
+    causal.dml_plr = _orig
+bfb = bfb.loc["x1"]
+check("fallback (res without a seed), same splits: cf_y = 0.25 = r2_y/(1 - r2_y) and cf_d = 2/3 = r2_d/(1 - r2_d), "
+      "up to rounding; not the paired 0.01",
+      any("cannot be paired" in s for s in wfb) and abs(bfb["cf_y"] - 0.25) < 1e-12 and abs(bfb["cf_d"] - 2 / 3) < 1e-12
+      and abs(bfb["cf_y"] - bfb["r2_y"] / (1 - bfb["r2_y"])) < 1e-12
+      and abs(bfb["cf_d"] - bfb["r2_d"] / (1 - bfb["r2_d"])) < 1e-12, bfb[["cf_y", "r2_y", "cf_d", "r2_d"]].tolist())
 
 # ------------------------------------------------------------------ 2. the docs
 SKILL = ROOT / "econometrics"
@@ -192,6 +212,10 @@ check("ovb_bounds labels as sensemakr's: '1/2x w', '3/0.5x w' (unchanged)",
       list(o2["bounds"]["bound_label"]) == ["1/2x w", "3/0.5x w"], list(o2["bounds"]["bound_label"]))
 NOTE = "A label 'kd/ky x' (sensemakr's) gives kd for the treatment and ky for the outcome; it is not a ratio."
 check("ovb_bounds with kd != ky: the 'not a ratio' note once", t2.count(NOTE) == 1)
+_, t6, _ = run(sp.ovb_bounds, M2, "d", "w", kd=[0.3], ky=[0.1 * 3], show=True)
+check("ovb_bounds kd = 0.3, ky = 0.1 * 3: the label stays sensemakr's ('0.3/0.3x w') and the sentence shows them "
+      "apart (review 2)", "0.3/0.3x w: a confounder 0.3x as strong as w in explaining d and 0.30000000000000004x in "
+      "explaining the outcome" in t6, [ln for ln in t6.splitlines() if "x w:" in ln])
 lines2 = [ln.strip() for ln in t2.splitlines() if re.match(r"^\s+[0-9.]+(/[0-9.]+)?x ", ln)]
 check("ovb_bounds lines still start with the label and ':' and name both multipliers",
       len(lines2) == 2 and lines2[0].startswith("1/2x w: a confounder 1x as strong as w in explaining d and 2x in "
@@ -201,6 +225,8 @@ _, t4, _ = run(sp.ovb_bounds, M2, "d", "w", kd=[2], ky=[2.0], show=True)
 _, t5, _ = run(sp.ovb_bounds, M2, "d", "w", kd=[1, 2], ky=[1, 3], show=True)
 check("no note when every line has kd = ky (default k, and kd = 2 with ky = 2.0); once with one line of kd != ky",
       NOTE not in t3 and NOTE not in t4 and t5.count(NOTE) == 1)
+check("…and kd = ky keeps ':g' ('2x as strong as w', never '2.0x')",
+      "2x w: a confounder 2x as strong as w (" in t4 and "2.0x" not in t4)
 
 rng = np.random.default_rng(5)
 n = 600
@@ -225,6 +251,7 @@ _, tb3, _ = run(causal.dml_bounds, RD, BH, kd=[0.3], ky=[0.1 * 3], rho=1.0, show
 check("dml_bounds kd = 0.3, ky = 0.1 * 3 (equal with :g, not as floats): the parenthesis shows them apart (review)",
       "(kd = 0.3 for the treatment, ky = 0.30000000000000004 for the outcome)" in tb3,
       [ln for ln in tb3.splitlines() if "x x1:" in ln])
+# not a repeat of the first dml_bounds check: this one fails if the code always used repr ("kd = 2.0")
 _, tb4, _ = run(causal.dml_bounds, RD, BH, kd=[2], ky=[5], rho=1.0, show=True)
 check("…and keeps the short format when :g already tells them apart ('kd = 2', 'ky = 5')",
       "(kd = 2 for the treatment, ky = 5 for the outcome)" in tb4)

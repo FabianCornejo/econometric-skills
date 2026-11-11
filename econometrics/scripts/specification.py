@@ -1112,8 +1112,10 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                   "ratio.")
         for r in rows:
             b = r["benchmark"]
-            who = (f"{r['kd']:g}x as strong as {b}" if r["kd"] == r["ky"] else
-                   f"{r['kd']:g}x as strong as {b} in explaining {treatment} and {r['ky']:g}x in explaining the outcome")
+            same = r["kd"] != r["ky"] and f"{r['kd']:g}" == f"{r['ky']:g}"   # v2.6.3 review: 0.3 vs 0.1 * 3
+            kd_s, ky_s = ((repr(float(r["kd"])), repr(float(r["ky"]))) if same else (f"{r['kd']:g}", f"{r['ky']:g}"))
+            who = (f"{kd_s}x as strong as {b}" if r["kd"] == r["ky"] else
+                   f"{kd_s}x as strong as {b} in explaining {treatment} and {ky_s}x in explaining the outcome")
             cap = ", capped at 100%" if r["r2yz_dx_capped"] else ""
             a = r["adjusted_estimate"]
             if a == est:
@@ -1160,7 +1162,7 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                       f"{br['kd_max']:.6g}).")
             elif br["k_needed_beyond_cap"]:
                 print(f"  A confounder {kn:.3g}x as strong as {lab} in explaining the treatment could, in the worst "
-                      f"case, {goal}, but only with the outcome fully explained: at k_cap = {br['k_cap']:.4g}x (with kd = "
+                      f"case, {goal}, but only with the outcome fully explained: at k_cap = {br['k_cap']:.4g} (with kd = "
                       f"ky) the implied partial R² with the outcome already reaches 100%, so beyond it only the "
                       f"treatment side grows.")
             else:

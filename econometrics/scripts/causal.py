@@ -424,7 +424,7 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
     G/(1 + G), so "a confounder as strong as X_j" gave a smaller (less conservative) bound than the paper's benchmark;
     cf_d was also cut at 0.999 silently. The returned columns are different aggregations, though (v2.6.3): cf_y is the
     median of the split gains, r2_y a ratio of medians, so with several paired splits cf_y can be below r2_y (and cf_d
-    below r2_d); with one split, or in the fallback to ratios of medians, cf = min(r2 / (1 - r2), 1) exactly.
+    below r2_d); with one split, or in the fallback to ratios of medians, cf = min(r2 / (1 - r2), 1) (up to rounding).
     For "a confounder k times as strong as X_j" use dml_bounds (the paper scales the gains by k). Benchmarks are
     informative only if the latent confounder is comparable to the observed ones; they also condition on the remaining
     covariates, and their own uncertainty is not propagated (as in the paper)."""

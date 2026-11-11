@@ -134,7 +134,7 @@ for seed, bms in ((29, ("x", "w")), (840, ("x",))):
         lines = [s for s in t.splitlines() if f"as strong as {b} in explaining the treatment" in s and BEYOND in s]
         check(f"beyond cap, seed {seed} {b}: the sentence says the outcome is fully explained, names k_cap, and never "
               f"'same k for treatment and outcome' for k_needed",
-              len(lines) == 1 and f"{kc:.4g}x" in lines[0] and f"{kn:.3g}x" in lines[0]
+              len(lines) == 1 and f"at k_cap = {kc:.4g} (with kd = ky)" in lines[0] and f"{kn:.3g}x" in lines[0]
               and not any(f"{kn:.3g}x as strong as {b} (same k for treatment and outcome) could, in the worst case, "
                           f"bring" in s for s in t.splitlines()), lines)
 m29 = smf.ols("y ~ d + x + w", design(29)).fit()
