@@ -7,6 +7,7 @@ documented origin. The scripts are not part of the skill package.
 | Script | Replicates | Panel | Used by |
 |---|---|---|---|
 | `did_v250_reference.R` | `causal.did_imputation` against R `didimputation`; `causal.twfe_weights` against R `TwoWayFEWeights` | `tests/data/did_v250_panel.csv` (built by `make_did_v250_panel.py`, seed fixed, MD5 `7498036256b9e987f01997bc34a57ea0`) | `tests/test_v250.py` |
+| `ovb_bounds_v26_reference.R` | `specification.ovb_bounds` against R `sensemakr` (Cinelli-Hazlett bounds "k times as strong") | Darfur (shipped with `sensemakr`, GPL-3: only summary statistics and bounds are written out, not the data) and `tests/data/ovb_v26.csv` (built by `make_ovb_v26_data.py`, seed fixed, MD5 `6f2c9fedb4c7013f2bda41593c8dc118`) | `tests/test_v26.py` |
 
 Run from the repository root:
 
