@@ -97,6 +97,18 @@ _, t_ob, _ = run(sp.ovb_bounds, fits["HC3"], "d", "x", show=True)
 line = [s for s in t_ob.splitlines() if REPORT in s]
 check("report sentence names the robust CI to show separately and the cov_type",
       len(line) == 1 and "HC3" in line[0] and "separately" in line[0], line)
+class _Unusable:                     # a robust fit whose SE is infinite (observations with leverage 1)
+    def __init__(self, base):
+        self.model, self.params, self.cov_type, self.df_resid = base.model, base.params, "HC3", base.df_resid
+        self.bse = base.bse * np.inf
+        self.tvalues = base.params / self.bse
+
+
+for fn, args in ((sp.sensitivity, ("d",)), (sp.ovb_bounds, ("d", "x"))):
+    _, tu, _ = run(fn, _Unusable(fits["nonrobust"]), *args, show=True)
+    lu = [s_ for s_ in tu.splitlines() if REPORT in s_]
+    check(f"report line, {fn.__name__} with an unusable robust SE: says so and never 'show your HC3 CI' (review)",
+          len(lu) == 1 and "not usable" in lu[0] and "show your" not in lu[0], lu)
 _, t_q, _ = run(sp.ovb_bounds, fits["HC3"], "d", "x", show=False)
 check("report sentence: nothing printed with show=False", t_q == "", repr(t_q[:80]))
 
@@ -212,16 +224,67 @@ for b in ("x1", "x2"):
     check(f"dml_benchmark {b}: cf_y = min(gain_y, 1), cf_d = min(gain_d, 1), k_d_max = 1/gain_d",
           BG.loc[b, "cf_y"] == min(BG.loc[b, "gain_y"], 1.0) and BG.loc[b, "cf_d"] == min(BG.loc[b, "gain_d"], 1.0)
           and abs(BG.loc[b, "k_d_max"] * BG.loc[b, "gain_d"] - 1) < 1e-12)
-    check(f"dml_benchmark {b}: the old partial R² kept as r2_y, r2_d = G/(1 + G) (smaller than the gains)",
-          abs(BG.loc[b, "r2_y"] - BG.loc[b, "gain_y"] / (1 + BG.loc[b, "gain_y"])) < 1e-12
-          and abs(BG.loc[b, "r2_d"] - BG.loc[b, "gain_d"] / (1 + BG.loc[b, "gain_d"])) < 1e-12
-          and BG.loc[b, "r2_y"] < BG.loc[b, "gain_y"])
+    check(f"dml_benchmark {b}: the old partial R² kept as r2_y, r2_d, smaller than the gains",
+          BG.loc[b, "r2_y"] < BG.loc[b, "gain_y"] and BG.loc[b, "r2_d"] < BG.loc[b, "gain_d"])
+RG1 = causal.dml_plr(DG, "y", "d", ["x1", "x2"], n_rep=1, **LIN)
+BG1, _, _ = run(causal.dml_benchmark, DG, "y", "d", ["x1", "x2"], ["x1"], res=RG1, n_rep=1, **LIN)
+check("one sample split: r2_y = G/(1 + G) and r2_d = G/(1 + G) exactly (the median is the value)",
+      abs(BG1.loc["x1", "r2_y"] - BG1.loc["x1", "gain_y"] / (1 + BG1.loc["x1", "gain_y"])) < 1e-12
+      and abs(BG1.loc["x1", "r2_d"] - BG1.loc["x1", "gain_d"] / (1 + BG1.loc["x1", "gain_d"])) < 1e-12)
 th_s = float(np.linalg.solve(S_[np.ix_([1, 2, 3], [1, 2, 3])], S_[[1, 2, 3], 0])[0])
 cfy_u = 1 - cvar(S_, "y", ["d", "x1", "x2", "u"]) / cvar(S_, "y", ["d", "x1", "x2"])
 cfd_u = 1 - cvar(S_, "d", ["x1", "x2", "u"]) / cvar(S_, "d", ["x1", "x2"])
 S_pop = np.sqrt(cvar(S_, "y", ["d", "x1", "x2"]) / cvar(S_, "d", ["x1", "x2"]))
 check("population route sanity: one linear confounder, |theta_s - theta| = sqrt(cf_y cf_d/(1 - cf_d))·S (sharp)",
       abs(abs(th_s - THETA) - np.sqrt(cfy_u * cfd_u / (1 - cfd_u)) * S_pop) < 1e-12, (th_s, cfy_u, cfd_u))
+
+# review round 1: DoubleML's aggregation (gains and rho per sample split, then the median) and an interior rho,
+# recomputed here from the residuals of dml_plr, as doubleml/utils/gain_statistics.py does (not with the skill's code)
+from sklearn.ensemble import RandomForestRegressor   # noqa: E402
+rng = np.random.default_rng(3)
+n = 1500
+x1n, x2n, x3n = rng.normal(size=(3, n))
+dn = np.sin(2 * x1n) + 0.5 * x2n + 0.3 * x1n * x2n + rng.normal(size=n)
+yn = 0.5 * dn + x1n ** 2 + 0.5 * x2n + 0.4 * np.abs(x3n) + rng.normal(size=n)
+DN = pd.DataFrame(dict(y=yn, d=dn, x1=x1n, x2=x2n, x3=x3n))
+RF = dict(learner_y=RandomForestRegressor(n_estimators=60, min_samples_leaf=10, random_state=0),
+          learner_d=RandomForestRegressor(n_estimators=60, min_samples_leaf=10, random_state=0))
+
+
+oe, _, _ = run(causal.dml_plr, DN, "y", "d", ["x1", "x2", "x3"], n_rep=1, n_folds=3, **RF)
+check("dml_plr accepts an unfitted RandomForestRegressor as learner (review: 'learner or default' raised AttributeError)",
+      isinstance(oe, dict) and np.isfinite(oe["estimate"]), repr(oe)[:120])
+
+
+def split_moments(res):
+    out = []
+    for (uy, vd), th in zip(res["residuals"], res["thetas"]):
+        out.append((np.mean((uy - th * vd) ** 2), 1 / np.mean(vd * vd), th))   # sigma2, nu2 = E[alpha^2], theta
+    return out
+
+
+for nrep in (1, 3):
+    kwn = dict(n_rep=nrep, n_folds=3, seed=0, **RF)
+    RN = causal.dml_plr(DN, "y", "d", ["x1", "x2", "x3"], **kwn)
+    BN, _, _ = run(causal.dml_benchmark, DN, "y", "d", ["x1", "x2", "x3"], ["x1", "x2"], res=RN, **kwn)
+    lm = split_moments(RN)
+    for b in ("x1", "x2"):
+        sm_ = split_moments(causal.dml_plr(DN, "y", "d", [v for v in ("x1", "x2", "x3") if v != b], **kwn))
+        gy_r = np.array([max(s[0] / l[0] - 1, 0) for s, l in zip(sm_, lm)])
+        gd_r = np.array([max(l[1] / s[1] - 1, 0) for s, l in zip(sm_, lm)])
+        dth = np.array([s[2] - l[2] for s, l in zip(sm_, lm)])
+        den = np.sqrt(np.array([(s[0] - l[0]) * (l[1] - s[1]) for s, l in zip(sm_, lm)]).clip(0))
+        rho_r = np.sign(dth) * np.where(den > 0, np.minimum(np.abs(dth) / np.where(den > 0, den, 1), 1), 1)
+        ok_ = (abs(BN.loc[b, "gain_y"] - np.median(gy_r)) < 1e-12 and abs(BN.loc[b, "gain_d"] - np.median(gd_r)) < 1e-12
+               and abs(BN.loc[b, "cf_y"] - np.median(np.minimum(gy_r, 1))) < 1e-12
+               and abs(BN.loc[b, "rho"] - np.median(rho_r)) < 1e-12)
+        check(f"DoubleML aggregation, random forests, n_rep = {nrep}, {b}: gains, cf_y and rho = medians of the split "
+              f"values", ok_, (BN.loc[b, ["gain_y", "gain_d", "cf_y", "rho"]].tolist(), np.median(gy_r),
+                               np.median(gd_r), np.median(rho_r)))
+        if nrep == 1 and b == "x1":
+            check("interior rho (forests, one split): 0 < |rho| < 1, equal to dth/sqrt(dsigma2·dnu2) of the paper",
+                  0 < abs(BN.loc[b, "rho"]) < 1 and abs(BN.loc[b, "rho"] - dth[0] / den[0]) < 1e-12,
+                  BN.loc[b, "rho"])
 
 ref = json.loads((HERE / "data" / "doubleml_benchmark_v262.json").read_text())
 rng = np.random.default_rng(20261111)
@@ -309,6 +372,34 @@ b_one = causal.dml_bounds(RG, HB, kd=1, rho=1.0, show=False)["bounds"].iloc[0]["
 b_neg = causal.dml_bounds(RG, HB, kd=1, rho=-1.0, show=False)["bounds"].iloc[0]["bias_bound"]
 check("rho: the benchmark's (0.5) by default gives half the bias bound of rho = 1; rho = -1 the same as 1",
       abs(b_half - b_one / 2) < 1e-12 and abs(b_neg - b_one) < 1e-12, (b_half, b_one, b_neg))
+oe, _, _ = run(causal.dml_bounds, RG, HB.assign(rho=[1.5]), show=False)
+check("a bench rho of 1.5 under rho='benchmark' is a ValueError naming the benchmark (review: it printed rho 1.50)",
+      isinstance(oe, ValueError) and "'b'" in str(oe) and "rho" in str(oe), repr(oe))
+oe, _, _ = run(causal.dml_bounds, RG, HB.assign(rho=[-1.0]), show=False)
+check("a bench rho of -1 is accepted (the boundary)", isinstance(oe, dict) and len(oe["bounds"]) == 3 - 1, repr(oe)[:80])
+for bad_ in (True, None, [1.0, 0.5]):
+    oe, _, _ = run(causal.dml_bounds, RG, HB, rho=bad_, show=False)
+    check(f"rho = {bad_!r} is a TypeError (review: True read as 1, None and lists gave numpy errors)",
+          isinstance(oe, TypeError), repr(oe))
+H3 = pd.DataFrame({"gain_y": [0.3], "gain_d": [0.3], "rho": [1.0]}, index=["b"])
+kd_edge = np.nextafter(1 / 0.3, 0)
+oe, _, _ = run(causal.dml_bounds, RG, H3, kd=kd_edge, show=False)
+check(f"kd = nextafter(1/0.3, 0): refused when kd·gain_d rounds to 1 or more, accepted only if below 1 "
+      f"(kd·gd = {kd_edge * 0.3!r}; review: a 7.8e7 bound)",
+      isinstance(oe, ValueError) if kd_edge * 0.3 >= 1 else (isinstance(oe, dict) and oe["bounds"]["cf_d"].iloc[0] < 1),
+      repr(oe)[:120])
+oe, _, _ = run(causal.dml_bounds, RG, H3, kd=1 / 0.3 * (1 - 1e-6), show=False)
+check("kd·gain_d = 1 − 1e-6: accepted", isinstance(oe, dict) and oe["bounds"]["cf_d"].iloc[0] < 1)
+HNA = pd.DataFrame({"gain_y": [np.nan, 0.3], "gain_d": [0.2, np.inf], "rho": [1.0, 1.0]}, index=["nan_g", "inf_g"])
+on_, _, wna = run(causal.dml_bounds, RG, HNA, kd=1, show=False)
+check("non-finite gains: skipped with 'not finite', never as 'no strength' (review)",
+      on_["bounds"].empty and sum("not finite" in s_ for s_ in wna) == 2 and not any("no strength" in s_ for s_ in wna),
+      wna)
+_, temp, _ = run(causal.dml_bounds, RG, HNA, kd=1, show=True)
+check("no rows: the text says that no bound was computed", "No bound computed" in temp, temp[-300:])
+_, tal, _ = run(causal.dml_bounds, RG, HB, kd=1, alpha=1e-12, show=True)
+check("alpha = 1e-12: the level is never printed as '100%' (review)", "100% confidence" not in tal
+      and "99.9999999999" in tal, [s_ for s_ in tal.splitlines() if "confidence" in s_][:1])
 oe, _, _ = run(causal.dml_bounds, RG, HB, rho=1.2, show=False)
 check("rho = 1.2 is a ValueError (a correlation)", isinstance(oe, ValueError) and "rho" in str(oe), repr(oe))
 HN = pd.DataFrame({"gain_y": [0.4, 0.0, 0.3], "gain_d": [0.4, 0.2, 0.3], "rho": [0.5, np.nan, np.nan]},
@@ -352,8 +443,8 @@ check("a row with bounds above zero and confidence bounds reaching below it: ver
       (rv_["theta_lower"], rv_["ci_low"]))
 check("verdict matches the confidence bounds on every row",
       all(r["ci_excludes_zero"] == (r["ci_low"] > 0 or r["ci_high"] < 0) for _, r in ot["bounds"].iterrows()))
-check("text says rho and that the gains are scaled by k as in Chernozhukov et al. (2022, Appendix F)",
-      "rho = 1" in tt and "Appendix F" in tt)
+check("text says rho and that the gains are scaled by k as in the paper's benchmarking appendix",
+      "rho = 1" in tt and "benchmarking appendix" in tt and "Appendix F" not in tt)
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
