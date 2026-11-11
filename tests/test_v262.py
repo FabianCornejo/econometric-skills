@@ -286,6 +286,46 @@ for nrep in (1, 3):
                   0 < abs(BN.loc[b, "rho"]) < 1 and abs(BN.loc[b, "rho"] - dth[0] / den[0]) < 1e-12,
                   BN.loc[b, "rho"])
 
+# a negative rho: omitting x1 pulls theta down (d rises with x1, y falls with it)
+rng = np.random.default_rng(8)
+n = 5000
+x1m, x2m = rng.normal(size=(2, n))
+dm = 0.8 * x1m + 0.4 * x2m + rng.normal(size=n)
+ym = 1.0 * dm - 1.5 * x1m + 0.5 * x2m + rng.normal(size=n)
+DM = pd.DataFrame(dict(y=ym, d=dm, x1=x1m, x2=x2m))
+RM = causal.dml_plr(DM, "y", "d", ["x1", "x2"], n_rep=1, **LIN)
+BM, _, _ = run(causal.dml_benchmark, DM, "y", "d", ["x1", "x2"], ["x1"], res=RM, n_rep=1, **LIN)
+check("a benchmark whose omission lowers theta: delta_theta < 0 and rho = -1 (the sign is kept; mutation)",
+      BM.loc["x1", "delta_theta"] < 0 and BM.loc["x1", "rho"] == -1.0, BM.loc["x1", ["delta_theta", "rho"]].tolist())
+# a split whose refit leaves the residual variances unchanged (denominator 0): DoubleML sets +-1 there
+rng = np.random.default_rng(9)
+n = 400
+splits_long = [(rng.normal(size=n), rng.normal(size=n)) for _ in range(3)]
+splits_short = [splits_long[0]] + [(uy + 0.3 * rng.normal(size=n), vd * 1.2) for uy, vd in splits_long[1:]]
+FAKE_LONG = {"residuals": splits_long, "thetas": [0.10, 0.12, 0.11], "estimate": 0.11, "se": 0.05}
+FAKE_SHORT = {"residuals": splits_short, "thetas": [0.30, 0.20, 0.25], "estimate": 0.25, "se": 0.05}
+_orig_plr = causal.dml_plr
+causal.dml_plr = lambda *a, **k: FAKE_SHORT
+try:
+    BF, _, _ = run(causal.dml_benchmark, None, "y", "d", ["x1", "x2"], ["x1"], res=FAKE_LONG)
+finally:
+    causal.dml_plr = _orig_plr
+
+
+def mom(uy, vd):
+    th = np.sum(vd * uy) / np.sum(vd * vd)
+    return np.mean((uy - th * vd) ** 2), 1 / np.mean(vd * vd)
+
+
+rr = []
+for (ul, vl), (us, vs), tl, ts in zip(splits_long, splits_short, FAKE_LONG["thetas"], FAKE_SHORT["thetas"]):
+    (s2l_, n2l_), (s2s_, n2s_) = mom(ul, vl), mom(us, vs)
+    den_ = np.sqrt(max(s2s_ - s2l_, 0) * max(n2l_ - n2s_, 0))
+    rr.append(np.sign(ts - tl) * (min(abs(ts - tl) / den_, 1) if den_ > 0 else 1.0))
+check("a split with denominator 0 counts as sign(dth)·1, as in DoubleML (the median stays finite; mutation)",
+      np.isfinite(BF.loc["x1", "rho"]) and abs(BF.loc["x1", "rho"] - np.median(rr)) < 1e-12 and rr[0] == 1.0,
+      (BF.loc["x1", "rho"], rr))
+
 ref = json.loads((HERE / "data" / "doubleml_benchmark_v262.json").read_text())
 rng = np.random.default_rng(20261111)
 n = 20000
@@ -401,7 +441,8 @@ _, tal, _ = run(causal.dml_bounds, RG, HB, kd=1, alpha=1e-12, show=True)
 check("alpha = 1e-12: the level is never printed as '100%' (review)", "100% confidence" not in tal
       and "99.9999999999" in tal, [s_ for s_ in tal.splitlines() if "confidence" in s_][:1])
 oe, _, _ = run(causal.dml_bounds, RG, HB, rho=1.2, show=False)
-check("rho = 1.2 is a ValueError (a correlation)", isinstance(oe, ValueError) and "rho" in str(oe), repr(oe))
+check("rho = 1.2 is a ValueError on the argument itself (a correlation), before any benchmark is read",
+      isinstance(oe, ValueError) and "must be finite and in [-1, 1]" in str(oe) and "benchmark" not in str(oe), repr(oe))
 HN = pd.DataFrame({"gain_y": [0.4, 0.0, 0.3], "gain_d": [0.4, 0.2, 0.3], "rho": [0.5, np.nan, np.nan]},
                   index=["b", "none", "nan_rho"])
 on, _, wn = run(causal.dml_bounds, RG, HN, kd=1, show=False)
