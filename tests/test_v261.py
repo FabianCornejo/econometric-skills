@@ -218,8 +218,6 @@ for b, kref in (("C(regiao)", 1.0472), ("log_pacientes", 1.2024)):
           f"(previous point < k <= first point with the CI reaching zero)",
           round(kf, 4) == kref and kb - step < kf <= kb and BR.loc[b, "k_not_significant_status"] == "found"
           and not BR.loc[b, "significance_returns"] and not retb, (kf, kb, step))
-    check(f"validation case, {b}: the old grid of 0.1 overstated it (k rounded up to the next tenth)",
-          np.ceil(kf * 10) / 10 > kf + 0.01, kf)
 
 # known parameter: refit with a confounder of exactly the implied R² at k, k(1 - 1e-6) and k(1 + 1e-6)
 def resid(v, A):
@@ -351,7 +349,7 @@ for nm, (tt, st, kexp) in cases.items():
     if st == "already":
         good &= "not significant at the 5% level even with no confounder" in txt
     if st == "at once":
-        good &= "only just significant at the 5% level" in txt and "however weak" in txt
+        good &= "only just significant at the 5% level" in txt and "vanishing strength" in txt
     check(f"status {nm}: {st}", good, (br["k_not_significant_status"], br["k_not_significant"], m.tvalues["d"]))
 m_neg = with_t(M0, D0, "y ~ d + x + w", -t_df * (1 - 1e-6))
 check("status already, negative estimate: also 'already'",
@@ -389,6 +387,123 @@ check("the validation text names both k with 3 significant digits and the 'dense
 check("k_not_significant <= k_needed whenever both are found (the CI reaches zero before the estimate does)",
       all(BR["k_not_significant"] <= BR["k_needed"]))
 
+# --- findings of the v2.6.1 review, round 1
+# k_significant_again: in the designs where significance returns, the first k after the loss with g > 0 (brute force)
+bad_a = []
+for s, bm in TWO:
+    m = smf.ols("y ~ d + x + w", design(s)).fit()
+    br = quiet(sp.ovb_bounds, m, "d", bm)["benchmark_r2"].loc[bm]
+    e_, s_, d_ = stats_of(m, "d")
+    tc = stats.t.ppf(0.975, d_)
+    hi = min(br["kd_max"], 1e7)
+    ks = np.linspace(0, hi, 1_000_001)[1:-1]
+    with np.errstate(all="ignore"):
+        g_, r2yz_ = g_brute(ks, br["r2dxj_x"], br["r2yxj_dx"], e_, s_, d_, tc)
+    keep = r2yz_ < 1
+    ks, g_ = ks[keep], g_[keep]
+    first_neg = np.flatnonzero(g_ <= 0)[0]
+    back = first_neg + np.flatnonzero(g_[first_neg:] > 0)[0]
+    ka = br["k_significant_again"]
+    if not (ks[back - 1] < ka <= ks[back] and br["k_not_significant"] < ka < br["k_cap"]):
+        bad_a.append((s, bm, ka, ks[back]))
+check("k_significant_again: on the brute-force grid (last k with g <= 0 < k_again <= first k with g > 0 again)",
+      not bad_a, bad_a)
+_, t29, _ = run(sp.ovb_bounds, smf.ols("y ~ d + x + w", design(29)).fit(), "d", "x", show=True)
+br29 = quiet(sp.ovb_bounds, smf.ols("y ~ d + x + w", design(29)).fit(), "d", "x")["benchmark_r2"].loc["x"]
+check("the returning sentence names k_significant_again ('From …x on') and 'not as a threshold'",
+      f"From {br29['k_significant_again']:.3g}x on" in t29 and "not as a threshold" in t29, br29["k_significant_again"])
+m_one = smf.ols("y ~ d + x + w", design(0)).fit()
+check("significance lost once: k_significant_again is NaN",
+      np.isnan(quiet(sp.ovb_bounds, m_one, "d", "x")["benchmark_r2"].loc["x", "k_significant_again"]))
+
+# R1 (review): a dip within 1e-6 of the cap — SciPy's bounded minimize had a relative floor on its tolerance and
+# stopped at once there; the reviewer's case, checked with the paper's formulas written here
+r2d_, r2y_, df_, se_ = 0.0004992435266852946, 6.2740517799191556e-06, 10.0, 1.0
+tc_ = stats.t.ppf(0.975, df_)
+est_ = 1376.996017
+kf, kret, kst, kcap, kby, kag = sp._k_not_significant(r2d_, r2y_, est_, se_, df_, tc_)
+g_at = g_brute(kf, r2d_, r2y_, est_, se_, df_, tc_)[0] if np.isfinite(kf) else np.nan
+g_lo = g_brute(kf * (1 - 1e-12), r2d_, r2y_, est_, se_, df_, tc_)[0] if np.isfinite(kf) else np.nan
+check("review R1: a dip within 1e-6 of the cap is found (k ≈ 2002.01573, g = 0 there and > 0 just before), and "
+      "significance returns before the cap",
+      kst == "found" and abs(kf - 2002.0157316) < 1e-6 and abs(g_at) < 1e-6 and g_lo > 0 and kret
+      and kf < kag < kcap and 1 - kf / kcap < 1e-6, (kst, kf, kag, kcap))
+
+# R2 (review): the benchmark predicts the outcome but hardly the treatment; t in the middle of the df vs df - 1 band:
+# "at once", but the CI excludes zero again from a tiny k on. The sentence must say so, not "however weak"
+rng = np.random.default_rng(5)
+n_ = 400
+x_ = rng.normal(size=n_)
+w_ = rng.normal(size=n_)
+d2 = 0.01 * x_ + 0.5 * w_ + rng.normal(size=n_)
+y2 = 2.0 * x_ + 0.3 * w_ + rng.normal(size=n_)
+XA = pd.DataFrame(dict(const=1.0, d=d2, x=x_, w=w_))
+mA0 = sm.OLS(y2, XA).fit()
+dfA = mA0.df_resid
+tcA = stats.t.ppf(0.975, dfA)
+bandA = tcA * np.sqrt(dfA / (dfA - 1))
+
+
+def at_t(tt):
+    return sm.OLS(y2 + (tt * mA0.bse["d"] - mA0.params["d"]) * d2, XA).fit()
+
+
+mA = at_t((tcA + bandA) / 2)
+oA, tA, _ = run(sp.ovb_bounds, mA, "d", ["x", "w"], kd=[0.001, 0.01, 0.1], show=True)
+brA = oA["benchmark_r2"]
+eA, sA, _ = stats_of(mA, "d")
+ks = np.geomspace(1e-12, 0.2, 400_000)
+gA, _ = g_brute(ks, brA.loc["x", "r2dxj_x"], brA.loc["x", "r2yxj_dx"], eA, sA, dfA, tcA)
+last_neg = ks[np.flatnonzero(gA <= 0)[-1]]
+nxt = ks[np.flatnonzero(gA <= 0)[-1] + 1]
+check("review R2: 'at once' for every benchmark of the call (decided at k -> 0, the same for all)",
+      set(brA["k_not_significant_status"]) == {"at once"}, brA["k_not_significant_status"].tolist())
+check("review R2: for x significance returns, k_significant_again on the brute-force grid, and the 0.01x and 0.1x lines "
+      "indeed say the CI excludes zero",
+      brA.loc["x", "significance_returns"] and last_neg < brA.loc["x", "k_significant_again"] <= nxt
+      and "0.01x x:" in tA and "0.1x x:" in tA and tA.count("which still excludes zero") >= 2,
+      (brA.loc["x", "k_significant_again"], last_neg))
+check("review R2: the text says only a confounder weaker than k_significant_again makes it insignificant, and no "
+      "'however weak'",
+      f"For x: from {brA.loc['x', 'k_significant_again']:.3g}x on" in tA and "weaker than that" in tA
+      and "however weak" not in tA and "vanishing strength" in tA, [l for l in tA.splitlines() if "For x" in l])
+
+# R3 (review): |t| a hair above the band's upper end: the k = 0 statuses are analytic, so the call never mixes
+# "at once" with another status; the tiny k is found from k = 0
+mB = at_t(bandA * (1 + 1e-12))
+oB, tB, _ = run(sp.ovb_bounds, mB, "d", ["x", "w"], show=True)
+stB = oB["benchmark_r2"]["k_not_significant_status"].tolist()
+check("review R3: just above the band: no 'at once' (the shared sentence is not printed); w found at a tiny k",
+      "at once" not in stB and "only just significant" not in tB
+      and oB["benchmark_r2"].loc["w", "k_not_significant_status"] == "found"
+      and 0 < oB["benchmark_r2"].loc["w", "k_not_significant"] < 1e-9, (stB, oB["benchmark_r2"]["k_not_significant"].tolist()))
+eB, sB, _ = stats_of(mB, "d")
+kw = oB["benchmark_r2"].loc["w", "k_not_significant"]
+# g(0+) is ~1e-12 of |est| here, so g is only resolved to a factor of k (cancellation in the test's own formula)
+gw = g_brute(np.array([kw / 2, kw * 2]), oB["benchmark_r2"].loc["w", "r2dxj_x"],
+             oB["benchmark_r2"].loc["w", "r2yxj_dx"], eB, sB, dfA, tcA)[0]
+check("review R3: at that tiny k the CI reaches zero (g > 0 at k/2, <= 0 at 2k)", gw[0] > 0 >= gw[1], gw)
+
+# R4 (review): a benchmark that explains nothing of either side: no "No k below inf"
+rng = np.random.default_rng(1)
+n_ = 200
+x_ = rng.normal(size=n_)
+d3 = 0.5 * x_ + rng.normal(size=n_)
+y3 = 1.0 * d3 + x_ + rng.normal(size=n_)
+A_ = np.column_stack([np.ones(n_), d3, x_, y3])
+z_ = rng.normal(size=n_)
+z_ = z_ - A_ @ np.linalg.lstsq(A_, z_, rcond=None)[0]
+oZ, tZ, _ = run(sp.ovb_bounds, sm.OLS(y3, pd.DataFrame(dict(const=1.0, d=d3, x=x_, z=z_))).fit(), "d", "z", show=True)
+check("review R4: a benchmark that explains nothing of either: 'explains nothing of the treatment or of the outcome', "
+      "never 'No k below inf'",
+      oZ["benchmark_r2"].loc["z", "k_not_significant_status"] == "not reached" and "below inf" not in tZ
+      and "No multiple of z makes the estimate not significant" in tZ)
+
+# docs review S1: after a robust fit the k sentence says the classical SE; not after a classical fit
+check("review S1: after a robust fit the k_not_significant sentence says '(classical SE)'; after a classical one, not",
+      "level (classical SE) (its CI reaches zero" in T_VAL
+      and "classical SE" not in run(sp.ovb_bounds, M_VAL, "triagem", "log_pacientes", show=True)[1])
+
 # ============================================================================== 4. grouped cap warnings
 SIM = pd.read_csv(HERE / "data" / "ovb_v26.csv")
 M_SIM = smf.ols("y ~ d + x_strong + x_weak + C(g)", SIM).fit()
@@ -411,6 +526,12 @@ o2, _, w2 = run(sp.ovb_bounds, M_VAL, "triagem", "log_pacientes", kd=[1, 3], ky=
 check("kd != ky: the warning lists kd and ky of the capped line only",
       o2["bounds"]["r2yz_dx_capped"].tolist() == [False, True] and len(w2) == 1
       and "log_pacientes, kd = 3 with ky = 2.95:" in w2[0], w2)
+_, _, w5 = run(sp.ovb_bounds, M_VAL, "triagem", "log_pacientes", kd=[2.9, 2.75, 3.0, 2.8, 2.95, 2.85, 2.78, 1.0])
+check("review R5: more than six capped k given unsorted: 'min to max (count)', not first to last",
+      len(w5) == 1 and "kd = ky = 2.75 to 3 (7 values)" in w5[0], w5)
+_, _, w6 = run(sp.ovb_bounds, M_VAL, "triagem", "log_pacientes", kd=[3, 3, 3, 1])
+check("review R5: a repeated (kd, ky) pair is named once ('kd = ky = 3:', one R², 'its CI is')",
+      len(w6) == 1 and "kd = ky = 3:" in w6[0] and "its CI is not informative" in w6[0] and "3, 3" not in w6[0], w6)
 _, _, w0 = run(sp.ovb_bounds, M_SIM, "d", "x_weak", kd=[1, 2])
 check("nothing capped: no warning", not w0, w0)
 
