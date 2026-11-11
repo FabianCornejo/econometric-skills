@@ -20,9 +20,10 @@ What is checked, each by a route other than the implementation's:
        copied from the output of the search, claude/plano-v2.6.1.md): k and significance_returns against brute force;
      - statuses on both sides: already (not significant), at once (inside the df vs df - 1 band), not reached;
        alpha moves k in the right direction; the sentences state the numbers (parsed back);
-  4. cap warnings grouped: one per benchmark and call, naming the first and last k;
+  4. cap warnings grouped: one per benchmark and call, each (kd, ky) pair once (min to max beyond six);
   5. header: "classical SE" only after a robust fit, the v2.6.0 bytes otherwise;
-  6. sensitivity with a robust SE that is not finite: "not usable", never "t = 0.00".
+  6. sensitivity with a robust SE that is not finite or zero: "not usable", never a t (it printed "t = -0.00", "nan"
+     or "-inf").
 
 Run from the repository root:  python3 tests/test_v261.py
 Needs: statsmodels, scipy, scikit-learn.
@@ -461,7 +462,8 @@ check("review R2: 'at once' for every benchmark of the call (decided at k -> 0, 
 check("review R2: for x significance returns, k_significant_again on the brute-force grid, and the 0.01x and 0.1x lines "
       "indeed say the CI excludes zero",
       brA.loc["x", "significance_returns"] and last_neg < brA.loc["x", "k_significant_again"] <= nxt
-      and "0.01x x:" in tA and "0.1x x:" in tA and tA.count("which still excludes zero") >= 2,
+      and re.search(r"^  0\.01x x:.*which still excludes zero\.$", tA, re.M)
+      and re.search(r"^  0\.1x x:.*which still excludes zero\.$", tA, re.M),
       (brA.loc["x", "k_significant_again"], last_neg))
 check("review R2: the text says only a confounder weaker than k_significant_again makes it insignificant, and no "
       "'however weak'",
@@ -499,6 +501,69 @@ check("review R4: a benchmark that explains nothing of either: 'explains nothing
       oZ["benchmark_r2"].loc["z", "k_not_significant_status"] == "not reached" and "below inf" not in tZ
       and "No multiple of z makes the estimate not significant" in tZ)
 
+# --- findings of the v2.6.1 review, round 2 (references computed with mpmath, 60 digits, by bisection on the paper's
+# formulas: claude/scripts/referencias_mpmath_v261.py in the dev repository; values copied from its output)
+# S1: "already" — the worst-case CI can exclude zero for a larger k (the R2 design at t = 0.9·t_crit)
+mS = at_t(0.9 * tcA)
+oS, tS, _ = run(sp.ovb_bounds, mS, "d", ["x", "w"], kd=[0.01, 0.1], show=True)
+brS = oS["benchmark_r2"]
+check("review 2 S1: 'already' for x, and significance appears from k_significant_again = 0.0845893 (mpmath "
+      "0.0845892550139) on, below the cap; the 0.1x line indeed excludes zero",
+      brS.loc["x", "k_not_significant_status"] == "already" and brS.loc["x", "significance_returns"]
+      and abs(brS.loc["x", "k_significant_again"] - 0.0845892550139) < 1e-9
+      and re.search(r"^  0\.1x x:.*which excludes zero \(the unadjusted CI did not\)\.$", tS, re.M),
+      (brS.loc["x", "k_significant_again"],))
+check("review 2 S1: the sentence says so, as a property of the worst-case bound, not evidence of an effect",
+      "For x: from 0.0846x on (same k for treatment and outcome) the worst-case CI excludes zero on the side of the "
+      "estimate, although the unadjusted CI does not" in tS and "not evidence of an effect" in tS
+      and "even with no confounder" in tS)
+oS2 = quiet(sp.ovb_bounds, at_t(0.5 * tcA), "d", "w")["benchmark_r2"].loc["w"]
+check("review 2 S1: 'already' without a return keeps returns False and k_significant_again NaN",
+      oS2["k_not_significant_status"] == "already" and not oS2["significance_returns"]
+      and np.isnan(oS2["k_significant_again"]))
+
+# N1: a return in the last 1e-12 of the cap, past the grid (seen from g at the cap itself)
+kN1 = sp._k_not_significant(0.00507629547095964, 2.8038893325026153e-07, 19689.391377403066, 4.222221019042881, 3.0,
+                            stats.t.ppf(1 - 0.5e-8, 3))
+check("review 2 N1: a return 5e-13 below the cap is seen: returns True, k_again = 195.99398647803696 (mpmath) to 1e-12",
+      kN1[2] == "found" and kN1[1] and abs(kN1[5] - 195.99398647803696) < 1e-12 * 196 and kN1[5] < kN1[3], kN1)
+
+# T2: "at once" with the return before the first grid point (span·1e-10)
+tc100 = stats.t.ppf(0.975, 100)
+band100 = tc100 * np.sqrt(100 / 99)
+kT2 = sp._k_not_significant(1e-6, 0.5, band100 * (1 - 1e-13), 1.0, 100, tc100)
+check("review 2 T2: at once, the return at k = 2.0203e-13 (mpmath 2.02034e-13; g0 is 2e-13, so 1e-3 relative is the "
+      "float resolution), before the first grid point",
+      kT2[2] == "at once" and kT2[1] and abs(kT2[5] - 2.02034049499e-13) < 1e-3 * 2.02e-13, kT2)
+
+# N2: |t| 1e-12 above the band edge: k at the float resolution of g0 (~ eps·|est|/g0 = 2e-4 relative)
+df_n2, se_n2 = 327212.0, 0.22396
+tc_n2 = stats.t.ppf(1 - 1e-4 / 2, df_n2)
+est_n2 = -tc_n2 * se_n2 * np.sqrt(df_n2 / (df_n2 - 1)) * (1 + 1e-12)
+kN2 = sp._k_not_significant(1.66e-08, 0.00119, est_n2, se_n2, df_n2, tc_n2)
+check("review 2 N2: k at the band edge within the float resolution of g0 (mpmath 1.71969228408e-08; 1e-3 relative)",
+      kN2[2] == "found" and abs(kN2[0] - 1.71969228408e-08) < 1e-3 * 1.72e-8, kN2[0])
+
+# N3: implied R² just above 1 never prints "1 > 1"; two k that print alike are one pair
+kc = BR.loc["log_pacientes", "k_cap"]
+_, _, w7 = run(sp.ovb_bounds, M_VAL, "triagem", "log_pacientes", kd=[kc * (1 + 1e-6), kc * (1 + 2e-6), 2.9])
+check("review 2 N3: 'just above 1' instead of '1 > 1', and two k printed alike named once",
+      len(w7) == 1 and "just above 1" in w7[0] and "1 > 1" not in w7[0] and f"kd = ky = {kc * (1 + 1e-6):g}, 2.9:" in w7[0],
+      w7)
+_, _, w8 = run(sp.ovb_bounds, M_VAL, "triagem", "log_pacientes", kd=[2.75, 2.8, 2.85, 2.9, 2.95, 3.0, 2.78],
+               ky=[2.9] * 7)
+check("review 2 N5: more than six pairs with one ky: 'kd = 2.75 to 3 with ky = 2.9 (7 (kd, ky) pairs)'",
+      len(w8) == 1 and "kd = 2.75 to 3 with ky = 2.9 (7 (kd, ky) pairs)" in w8[0], w8)
+
+# N4 (and docs review 2 S2): every k_not_significant sentence carries "(classical SE)" after a robust fit
+rob = sm.OLS(y2 + ((tcA + bandA) / 2 * mA0.bse["d"] - mA0.params["d"]) * d2, XA).fit(cov_type="HC3")
+_, tR, _ = run(sp.ovb_bounds, rob, "d", ["x", "w"], show=True)
+_, tR2, _ = run(sp.ovb_bounds, sm.OLS(y2 + (60 * mA0.bse["d"] - mA0.params["d"]) * d2, XA).fit(cov_type="HC3"),
+                "d", ["x", "w"], show=True)
+lines_k = [l for l in (tR + tR2).splitlines() if "not significant" in l]
+check("review 2 N4: after a robust fit every k_not_significant sentence (at once, its return line, not reached) says "
+      "'(classical SE)'", len(lines_k) >= 3 and all("(classical SE)" in l for l in lines_k), lines_k)
+
 # docs review S1: after a robust fit the k sentence says the classical SE; not after a classical fit
 check("review S1: after a robust fit the k_not_significant sentence says '(classical SE)'; after a classical one, not",
       "level (classical SE) (its CI reaches zero" in T_VAL
@@ -514,7 +579,7 @@ cap_por = o["bounds"].query("benchmark == 'log_pacientes' and r2yz_dx_capped")["
 check("grid of 30 k: many capped lines but exactly one warning per benchmark (warnings.warn and out['warnings'])",
       len(cap_reg) > 6 and len(cap_por) == 3 and len(w) == 2 and o["warnings"] == w, (len(cap_reg), len(cap_por), len(w)))
 check("the grouped warning names the benchmark, the first and the last capped k and the count",
-      w and f"C(regiao), kd = ky = {cap_reg[0]:g} to {cap_reg[-1]:g} ({len(cap_reg)} values)" in w[0]
+      w and f"C(regiao), kd = ky = {cap_reg[0]:g} to {cap_reg[-1]:g} ({len(cap_reg)} (kd, ky) pairs)" in w[0]
       and "the CIs of those lines are not informative" in w[0] and "capped at 1" in w[0]
       and "log_pacientes, kd = ky = 2.8, 2.9, 3:" in w[1], w)
 o1, _, w1 = run(sp.ovb_bounds, M_VAL, "triagem", "log_pacientes", kd=3)
@@ -528,7 +593,7 @@ check("kd != ky: the warning lists kd and ky of the capped line only",
       and "log_pacientes, kd = 3 with ky = 2.95:" in w2[0], w2)
 _, _, w5 = run(sp.ovb_bounds, M_VAL, "triagem", "log_pacientes", kd=[2.9, 2.75, 3.0, 2.8, 2.95, 2.85, 2.78, 1.0])
 check("review R5: more than six capped k given unsorted: 'min to max (count)', not first to last",
-      len(w5) == 1 and "kd = ky = 2.75 to 3 (7 values)" in w5[0], w5)
+      len(w5) == 1 and "kd = ky = 2.75 to 3 (7 (kd, ky) pairs)" in w5[0], w5)
 _, _, w6 = run(sp.ovb_bounds, M_VAL, "triagem", "log_pacientes", kd=[3, 3, 3, 1])
 check("review R5: a repeated (kd, ky) pair is named once ('kd = ky = 3:', one R², 'its CI is')",
       len(w6) == 1 and "kd = ky = 3:" in w6[0] and "its CI is not informative" in w6[0] and "3, 3" not in w6[0], w6)
@@ -555,8 +620,8 @@ class _Robust:
 
 for nm, fac in (("infinite", np.inf), ("NaN", np.nan), ("zero", 0.0)):
     _, t_, _ = run(sp.sensitivity, _Robust(M_SIM, fac), "d", show=True)
-    check(f"sensitivity, robust SE {nm}: 'its t is not usable', never 't = 0.00' or 't = nan'",
-          "so its t is not usable" in t_ and "t = 0.00;" not in t_ and "t = nan" not in t_ and "t = inf" not in t_,
+    check(f"sensitivity, robust SE {nm}: 'its t is not usable', never a robust t (it printed -0.00, nan or -inf)",
+          "so its t is not usable" in t_ and "fit gives t =" not in t_,
           [s for s in t_.splitlines() if "classical SE" in s])
 _, t_fin, _ = run(sp.sensitivity, smf.ols("y ~ d + x_strong + x_weak + C(g)", SIM).fit(cov_type="HC3"), "d", show=True)
 check("sensitivity, finite HC3: 'your HC3 fit gives t =' and nothing about 'not usable'",
