@@ -914,7 +914,9 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
     R² with the outcome above 1 is capped at 1 with a warning, as in sensemakr (the adjusted SE is then 0 and the
     CI is not informative). Needs a full-rank design (ValueError otherwise).
 
-    Returns {"bounds": DataFrame (one row per benchmark × (kd, ky); ci_verdict in {"same sign", "includes zero",
+    Returns {"bounds": DataFrame (one row per benchmark × (kd, ky); bound_label as sensemakr's, "2x x" when kd = ky
+    and "kd/ky x x" otherwise ("1/2x x": kd = 1 for the treatment, ky = 2 for the outcome; not a ratio); ci_verdict
+    in {"same sign", "includes zero",
     "opposite sign", "not informative"}; ci_excludes_zero is False on capped rows), "benchmark_r2": DataFrame (partial R² of each benchmark with D and with Y,
     the df used, the largest admissible kd, k_needed, and since v2.6.1 k_not_significant: the smallest k = kd = ky at
     which the worst-case CI reaches zero at alpha, with the classical SE like the bounds (0 when the estimate is not
@@ -1105,6 +1107,9 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
               "k times as much of the residual variance of the treatment, and of the outcome, as the benchmark does "
               "given the other covariates; the partial R² on each line are given all the covariates, so they can "
               "exceed k times the benchmark's. 'k times' is in explained variance, not in coefficient size.")
+        if any(r["kd"] != r["ky"] for r in rows):     # v2.6.3: "2/5x" is sensemakr's label, not a ratio
+            print("A label 'kd/ky x' (sensemakr's) gives kd for the treatment and ky for the outcome; it is not a "
+                  "ratio.")
         for r in rows:
             b = r["benchmark"]
             who = (f"{r['kd']:g}x as strong as {b}" if r["kd"] == r["ky"] else
@@ -1195,8 +1200,9 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                       f"treatment or of the outcome (given the other covariates).")
             elif st == "not reached":
                 print(f"  No k below {br['k_cap']:.4g} makes the estimate not significant{cls} for {lab} " + (
-                      f"(at that k a confounder as strong as {lab} would explain all of the outcome; beyond it the CI "
-                      f"of the bounds is not informative)." if br["k_cap_by"] == "outcome" else
+                      f"(at k = {br['k_cap']:.4g}x, a confounder {br['k_cap']:.4g}x as strong as {lab} would explain "
+                      f"all of the outcome's residual variance; beyond it the CI of the bounds is not informative)."
+                      if br["k_cap_by"] == "outcome" else
                       "(the largest admissible k; a larger one is impossible)."))
         if base is not res:
             t_cl, t_rb = float(base.tvalues[treatment]), float(res.tvalues[treatment])
