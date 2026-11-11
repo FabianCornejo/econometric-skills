@@ -299,6 +299,11 @@ for fac, capped in ((1 - 1e-9, False), (1 + 1e-9, True)):
     check(f"ky = 2.5·{fac!r}: cf_y {'= 1, capped, with a warning' if capped else '< 1, not capped, no cap warning'}",
           bool(r["cf_y_capped"]) == capped and ((r["cf_y"] == 1.0) == capped)
           and (any("capped" in s for s in wc) == capped), (r["cf_y"], wc))
+HE = pd.DataFrame({"gain_y": [0.5], "gain_d": [0.4], "rho": [1.0]}, index=["b"])      # ky * gain_y = 2 * 0.5 = 1 exactly
+oq, _, wq = run(causal.dml_bounds, RG, HE, kd=1, ky=2, show=False)
+check("ky * gain_y = 1 exactly: cf_y = 1 is admissible, not capped, no cap warning (mutation: '>=' survived)",
+      oq["bounds"].iloc[0]["cf_y"] == 1.0 and not oq["bounds"].iloc[0]["cf_y_capped"] and not any("capped" in s_ for s_ in wq),
+      wq)
 b_half = causal.dml_bounds(RG, HB, kd=1, rho="benchmark", show=False)["bounds"].iloc[0]["bias_bound"]
 b_one = causal.dml_bounds(RG, HB, kd=1, rho=1.0, show=False)["bounds"].iloc[0]["bias_bound"]
 b_neg = causal.dml_bounds(RG, HB, kd=1, rho=-1.0, show=False)["bounds"].iloc[0]["bias_bound"]
@@ -312,6 +317,10 @@ on, _, wn = run(causal.dml_bounds, RG, HN, kd=1, show=False)
 check("benchmark with no strength (gain 0) and with NaN rho under rho='benchmark': skipped, a warning each",
       on["bounds"]["benchmark"].tolist() == ["b"] and any("none" in s for s in wn)
       and any("nan_rho" in s and "rho" in s for s in wn), wn)
+onone, _, wnone = run(causal.dml_bounds, RG, HN.loc[["none"]], kd=1, rho=1.0, show=False)
+check("no strength (gain_y = 0) with rho = 1 given: still skipped, and the warning says why (mutation: the skip was "
+      "seen only through its NaN rho)", onone["bounds"].empty and any("none" in s_ and "no strength" in s_ for s_ in wnone),
+      wnone)
 on1 = causal.dml_bounds(RG, HN.loc[["b", "nan_rho"]], kd=1, rho=1.0, show=False)
 check("with rho = 1 given, the NaN-rho benchmark is used (its rho is not needed)",
       on1["bounds"]["benchmark"].tolist() == ["b", "nan_rho"])
@@ -329,6 +338,18 @@ check("text: one line per row, with its bounds, confidence bounds and the verdic
 check("verdicts on both sides in this design (some rows include zero, some exclude it)",
       ot["bounds"]["ci_excludes_zero"].any() and not ot["bounds"]["ci_excludes_zero"].all(),
       ot["bounds"][["bound_label", "ci_low", "ci_high"]].to_string())
+# a row whose bounds exclude zero while its confidence bounds include it (k found by bisection on the bounds)
+HV = pd.DataFrame({"gain_y": [0.3], "gain_d": [0.3], "rho": [1.0]}, index=["v"])
+lo_k, hi_k = 1e-6, 1 / 0.3 * (1 - 1e-9)
+for _ in range(200):
+    mid = (lo_k + hi_k) / 2
+    r_ = causal.dml_bounds(RG, HV, kd=mid, rho=1.0, show=False)["bounds"].iloc[0]
+    lo_k, hi_k = (mid, hi_k) if r_["theta_lower"] > 0 else (lo_k, mid)
+rv_ = causal.dml_bounds(RG, HV, kd=lo_k, rho=1.0, show=False)["bounds"].iloc[0]
+check("a row with bounds above zero and confidence bounds reaching below it: verdict 'includes zero' (judged on the "
+      "confidence bounds; mutation: the bounds survived)",
+      rv_["theta_lower"] > 0 > rv_["ci_low"] and rv_["ci_verdict"] == "includes zero" and not rv_["ci_excludes_zero"],
+      (rv_["theta_lower"], rv_["ci_low"]))
 check("verdict matches the confidence bounds on every row",
       all(r["ci_excludes_zero"] == (r["ci_low"] > 0 or r["ci_high"] < 0) for _, r in ot["bounds"].iterrows()))
 check("text says rho and that the gains are scaled by k as in Chernozhukov et al. (2022, Appendix F)",
