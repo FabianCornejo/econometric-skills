@@ -229,8 +229,11 @@ def dml_plr(df: pd.DataFrame, y: str, d: str, X: list[str], learner_y=None, lear
     Xm = df[X].astype(float).to_numpy()
     Y = df[y].astype(float).to_numpy()
     D = df[d].astype(float).to_numpy()
-    ly = learner_y or RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1, random_state=seed)
-    ld = learner_d or RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1, random_state=seed)
+    # v2.6.2 review: "learner or default" called len() on an unfitted sklearn ensemble (AttributeError)
+    ly = learner_y if learner_y is not None else RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1,
+                                                                       random_state=seed)
+    ld = learner_d if learner_d is not None else RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1,
+                                                                       random_state=seed)
     thetas, ses, resid = [], [], []
     for rep in range(n_rep):
         uy, vd = np.zeros_like(Y), np.zeros_like(D)
@@ -243,7 +246,7 @@ def dml_plr(df: pd.DataFrame, y: str, d: str, X: list[str], learner_y=None, lear
         thetas.append(th); ses.append(se); resid.append((uy, vd))
     th = float(np.median(thetas))
     se = float(np.median(np.sqrt(np.array(ses) ** 2 + (np.array(thetas) - th) ** 2)))
-    return _out("theta (DML-PLR)", th, se, len(Y), n_folds=n_folds, n_rep=n_rep,
+    return _out("theta (DML-PLR)", th, se, len(Y), n_folds=n_folds, n_rep=n_rep, seed=seed,
                 residuals=resid, var_y=float(np.var(Y)), thetas=thetas)
 
 
@@ -384,17 +387,44 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
     return out
 
 
+def _split_mismatch(res: dict, rs: dict, n_long: int, n_short: int) -> str:
+    """Why the sample splits of res and of a refit cannot be paired by position ('' if they can): v2.6.2 review."""
+    if n_long != n_short:
+        return f"res has {n_long} sample splits and the refit {n_short}"
+    if len(res.get("thetas", ())) != n_long or len(rs.get("thetas", ())) != n_short:
+        return "res has no per-split thetas"
+    if "seed" not in res:
+        return "res does not record its seed (a dml_plr result from before v2.6.2)"
+    for key in ("seed", "n_folds"):
+        if res.get(key) != rs.get(key):
+            return f"res has {key} = {res.get(key)!r} and the refit {rs.get(key)!r}"
+    return ""
+
+
 def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: list[str],
                   res: dict | None = None, **dml_kwargs) -> pd.DataFrame:
-    """Implied sensitivity parameters of observed covariates (Chernozhukov et al. 2022, sec. 6):
-    refit dml_plr without each benchmark covariate X_j and measure what it contributes.
-      cf_y   = (sigma2_short - sigma2_long) / sigma2_short   (gain in the outcome's explained residual variance)
-      cf_d   = (nu2_long - nu2_short) / nu2_long              (= R^2 of X_j with D residual, given the rest)
-      rho    = (theta_short - theta_long) / (S_short sqrt(cf_y cf_d / (1 - cf_d)))
-      delta_theta = theta_short - theta_long
-    Pass k * cf_y and k * cf_d to dml_sensitivity for "a confounder k times as strong as X_j".
-    Benchmarks are informative only if the latent confounder is comparable to the observed
-    ones; they also condition on the remaining covariates, so they are not exact."""
+    """Implied sensitivity parameters of observed covariates (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022;
+    Appendix F, eq. 22-23, of arXiv 2112.13398v5, Appendix E in v6). cf_y, cf_d and rho are those of DoubleML's
+    sensitivity_benchmark; delta_theta and the NaN rho of a benchmark with no strength are the skill's (below).
+    Refit dml_plr without each benchmark covariate X_j and measure the gains it brings, relative to the full model
+    (subscript l, with X_j; s, without it), in each sample split r and then as the median over the splits:
+      gain_y = median_r (sigma2_s,r - sigma2_l,r) / sigma2_l,r   (G_Y: added explained variance of the outcome over
+                                                                  what the full model leaves unexplained)
+      gain_d = median_r (nu2_l,r - nu2_s,r) / nu2_s,r            (G_D, nu2 = E[alpha^2] = 1/E[(D - m(X))^2])
+      cf_y, cf_d = median_r of the split gains cut to [0, 1]     (DoubleML's cut; cf_d = 1 gives an infinite bound)
+      rho  = median_r sign(dth_r) min(|dth_r| / sqrt((sigma2_s,r - sigma2_l,r)(nu2_l,r - nu2_s,r)), 1), with
+             dth_r = theta_s,r - theta_l,r and +-1 where that denominator is 0 (DoubleML); NaN when gain_y or gain_d
+             is 0 (no strength: the skill's rule since v2.5.3)
+      delta_theta = theta_s - theta_l (medians over the splits, as before);  k_d_max = 1/gain_d
+      r2_y, r2_d = the partial R² that cf_y and cf_d were before v2.6.2, computed as before (ratios of medians).
+    The splits are paired by position, which is valid when res and the refits use the same seed, n_folds and n_rep
+    (KFold depends only on the rows and the seed); dml_plr stores its seed since v2.6.2. When they differ, or when res
+    has no per-split thetas or no seed, the gains fall back to ratios of medians, with a warning that says why.
+    v2.6.2: cf_y and cf_d were the partial R² r2_y, r2_d, always below the paper's gains, so "a confounder as strong as
+    X_j" gave a smaller (less conservative) bound than the paper's benchmark; cf_d was also cut at 0.999 silently.
+    For "a confounder k times as strong as X_j" use dml_bounds (the paper scales the gains by k). Benchmarks are
+    informative only if the latent confounder is comparable to the observed ones; they also condition on the remaining
+    covariates, and their own uncertainty is not propagated (as in the paper)."""
     res = res or dml_plr(df, y, d, X, **dml_kwargs)
     long = [_dml_sens_rep(uy, vd, 0, 0, 1) for uy, vd in res["residuals"]]
     s2l = np.median([r_["sigma2"] for r_ in long]); n2l = np.median([r_["nu2"] for r_ in long])
@@ -403,24 +433,191 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
         rs = dml_plr(df, y, d, [x for x in X if x != b], **dml_kwargs)
         sh = [_dml_sens_rep(uy, vd, 0, 0, 1) for uy, vd in rs["residuals"]]
         s2s = np.median([r_["sigma2"] for r_ in sh]); n2s = np.median([r_["nu2"] for r_ in sh])
-        Ss = np.median([r_["S"] for r_ in sh])
-        cy = max((s2s - s2l) / s2s, 0.0)
-        cd = float(np.clip((n2l - n2s) / n2l, 0.0, 0.999))
+        ry = max((s2s - s2l) / s2s, 0.0)            # partial R² forms (cf_y, cf_d before v2.6.2), as before
+        rd = max((n2l - n2s) / n2l, 0.0)
         dth = rs["estimate"] - res["estimate"]
-        denom = Ss * np.sqrt(cy * cd / (1 - cd)) if cy > 0 and cd > 0 else np.nan
-        rows.append({"benchmark": b, "cf_y": cy, "cf_d": cd,
-                     "rho": float(np.clip(dth / denom, -1, 1)) if np.isfinite(denom) and denom > 0 else np.nan,
-                     "theta_without": rs["estimate"], "delta_theta": dth})
-        if cy == 0 or cd == 0:                    # v2.5.3: this used to come back silently with rho = NaN
-            side = ("of the outcome's and of the treatment's residual variance are" if cy == 0 and cd == 0
-                    else "of the outcome's residual variance is" if cy == 0
+        why = _split_mismatch(res, rs, len(long), len(sh))
+        if not why:
+            gys = np.array([max(s_["sigma2"] / l_["sigma2"] - 1, 0.0) for s_, l_ in zip(sh, long)])
+            gds = np.array([max(l_["nu2"] / s_["nu2"] - 1, 0.0) for s_, l_ in zip(sh, long)])
+            dths = np.array(rs["thetas"]) - np.array(res["thetas"])
+            den = np.array([np.sqrt(max(s_["sigma2"] - l_["sigma2"], 0.0) * max(l_["nu2"] - s_["nu2"], 0.0))
+                            for s_, l_ in zip(sh, long)])
+            with np.errstate(divide="ignore", invalid="ignore"):
+                mag = np.where(den > 0, np.minimum(np.abs(dths) / den, 1.0), 1.0)
+            rho_b = float(np.median(np.sign(dths) * mag))
+        else:
+            warnings.warn(f"Benchmark {b}: {why}, so the splits cannot be paired; the gains are ratios of the medians "
+                          "over the splits, not medians of the split gains as in DoubleML (pass dml_benchmark the same "
+                          "seed, n_folds and n_rep as dml_plr)", stacklevel=2)
+            gys = np.array([max(s2s / s2l - 1, 0.0)]); gds = np.array([max(n2l / n2s - 1, 0.0)])
+            Ss = np.median([r_["S"] for r_ in sh])
+            denom = Ss * np.sqrt(ry * rd / (1 - rd)) if ry > 0 and 0 < rd < 1 else np.nan   # = sqrt(dsigma2 * dnu2)
+            rho_b = float(np.clip(dth / denom, -1, 1)) if np.isfinite(denom) and denom > 0 else np.nan
+        gy, gd = float(np.median(gys)), float(np.median(gds))
+        if gy == 0 or gd == 0:
+            rho_b = np.nan
+        rows.append({"benchmark": b, "cf_y": float(np.median(np.minimum(gys, 1.0))),
+                     "cf_d": float(np.median(np.minimum(gds, 1.0))), "rho": rho_b,
+                     "theta_without": rs["estimate"], "delta_theta": dth, "gain_y": gy, "gain_d": gd,
+                     "k_d_max": 1 / gd if gd > 0 else np.inf, "r2_y": ry, "r2_d": rd})
+        if gy == 0 or gd == 0:                    # v2.5.3: this used to come back silently with rho = NaN
+            side = ("of the outcome's and of the treatment's residual variance are" if gy == 0 and gd == 0
+                    else "of the outcome's residual variance is" if gy == 0
                     else "of the treatment's residual variance is")
-            warnings.warn(f"Benchmark {b}: cf_y = {cy:.3g}, cf_d = {cd:.3g}, rho undefined. Given the other "
+            warnings.warn(f"Benchmark {b}: cf_y = {min(gy, 1.0):.3g}, cf_d = {min(gd, 1.0):.3g}, rho undefined. Given the other "
                           f"covariates, its estimated share {side} zero or below (clipped to 0), so it is no reference "
                           "for how strong a confounder could be: its cf_y and cf_d give dml_sensitivity a bias bound "
                           "of zero, not a robustness result, and its NaN rho is refused. Use covariates that matter "
                           "for both D and Y as benchmarks.", stacklevel=2)
+        cfy_, cfd_ = rows[-1]["cf_y"], rows[-1]["cf_d"]
+        parts = []                                # v2.6.2 review: state the returned cf, not the uncut median
+        if gy > 1:
+            parts.append(f"gain_y = {gy:.3g} is above 1 (cf_y, the median of the split gains cut to 1, is {cfy_:.3g}); "
+                         "dml_bounds holds ky * gain_y at 1")
+        if gd >= 1:
+            parts.append(f"gain_d = {gd:.3g} is 1 or more (cf_d = {cfd_:.3g}"
+                         + (": the bound of dml_sensitivity is infinite" if cfd_ >= 1 else "") + "); dml_bounds refuses "
+                         f"every kd at or above k_d_max = {1 / gd:.3g}")
+        if parts:
+            warnings.warn(f"Benchmark {b}: " + "; ".join(parts) + ".", stacklevel=2)
     return pd.DataFrame(rows).set_index("benchmark")
+
+
+def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark", alpha: float = ALPHA,
+               show: bool = True) -> dict:
+    """Bounds for DML-PLR under a confounder k times as strong as an observed covariate (v2.6.2): the analogue of
+    specification.ovb_bounds, following Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis (2022; Appendix F, eq. 22-23,
+    of arXiv 2112.13398v5, Appendix E in v6):
+    the benchmark's gains are scaled by k, cf_y = ky * gain_y and cf_d = kd * gain_d.
+
+    res    the dict of dml_plr (with its residuals); bench  the DataFrame of dml_benchmark (or any with columns
+           gain_y, gain_d and rho, one row per benchmark).
+    kd, ky how many times the benchmark's gain in the treatment (kd) and in the outcome (ky); a number or a sequence,
+           paired as in ovb_bounds; ky = None means ky = kd; kd = None means (1, 2, 3) and skips, per benchmark,
+           the values at or above k_d_max = 1/gain_d with a warning (a kd you give there stops the call).
+    rho    "benchmark" (default): each benchmark's observed rho (the paper's benchmark for rho; a NaN rho is
+           skipped, one outside [-1, 1] is a ValueError); or a number in [-1, 1] for every line (1: the worst case,
+           the paper's conservative default).
+
+    It scales gain_y and gain_d (the medians of the split gains), not cf_y and cf_d: at k = 1 the two agree unless the
+    split gains straddle 1 with an even number of splits. Conventions of the skill (the paper states none): cf_y =
+    ky * gain_y above 1 is held at 1 (the confounder would
+    explain all of the outcome's residual variance), with one warning per benchmark; kd * gain_d >= 1 is impossible
+    (cf_d = 1 gives an infinite bound). The bounds and confidence bounds are those of dml_sensitivity with that cf_y,
+    cf_d and rho (influence functions, median over the sample splits); the gains and rho are estimates whose own
+    uncertainty is not propagated (as in the paper). Read each line as a worst case under "k times as strong", not as
+    a likely value.
+
+    Returns {"bounds": DataFrame (bound_label, benchmark, kd, ky, cf_y, cf_d, cf_y_capped, rho, bias_bound,
+    theta_lower, theta_upper, ci_low, ci_high, ci_excludes_zero, ci_verdict in {"excludes zero", "includes zero"}),
+    "estimate", "se", "alpha", "rho", "warnings"}."""
+    import numbers
+    from specification import _check_k, _KD_DEFAULT, _level_pct
+    if "residuals" not in res:
+        raise ValueError("pass the dict returned by causal.dml_plr")
+    if not isinstance(bench, pd.DataFrame) or not {"gain_y", "gain_d", "rho"} <= set(bench.columns):
+        raise TypeError("bench must be the DataFrame of causal.dml_benchmark (columns gain_y, gain_d, rho)")
+    if not (0 < alpha < 1):
+        raise ValueError(f"alpha must be in (0, 1), got {alpha!r}")
+    if isinstance(rho, str):
+        if rho != "benchmark":
+            raise ValueError(f"rho is 'benchmark' or a number in [-1, 1], got {rho!r}")
+    elif isinstance(rho, (bool, np.bool_)) or not isinstance(rho, numbers.Real):
+        raise TypeError(f"rho is 'benchmark' or one number in [-1, 1], got {rho!r}")
+    elif not np.isfinite(float(rho)) or abs(float(rho)) > 1:
+        raise ValueError(f"rho is a correlation and must be finite and in [-1, 1], got {rho!r} (1 is the worst case)")
+    default_kd = kd is None
+    kd_arr = _check_k(_KD_DEFAULT if default_kd else kd, "kd")
+    ky_arr = kd_arr.copy() if ky is None else _check_k(ky, "ky")
+    if ky is not None and len(ky_arr) != len(kd_arr):
+        if len(ky_arr) == 1:
+            ky_arr = np.repeat(ky_arr, len(kd_arr))
+        elif len(kd_arr) == 1:
+            kd_arr = np.repeat(kd_arr, len(ky_arr))
+        else:
+            raise ValueError(f"kd and ky are paired: give them the same length (or one number), got {len(kd_arr)} "
+                             f"and {len(ky_arr)}")
+    warns: list[str] = []
+
+    def note(msg):
+        warns.append(msg)
+        warnings.warn(msg, stacklevel=3)
+
+    z = stats.norm.ppf(1 - alpha / 2)
+    th, se = float(res["estimate"]), float(res["se"])
+    rows = []
+    for lab, b in bench.iterrows():
+        gy, gd = float(b["gain_y"]), float(b["gain_d"])
+        if not (np.isfinite(gy) and np.isfinite(gd)):
+            note(f"{lab}: skipped, its gains are not finite (gain_y = {gy:.3g}, gain_d = {gd:.3g}): missing or broken "
+                 "benchmark values, not a strength")
+            continue
+        if not (gy > 0 and gd > 0):
+            note(f"{lab}: skipped, no strength (gain_y = {gy:.3g}, gain_d = {gd:.3g}): no multiple of it biases theta")
+            continue
+        rb = float(b["rho"]) if rho == "benchmark" else float(rho)
+        if not np.isfinite(rb):
+            note(f"{lab}: skipped, its rho is undefined (NaN); pass rho=1 (the worst case) to use it")
+            continue
+        if abs(rb) > 1:
+            raise ValueError(f"benchmark {lab!r} has rho = {rb!r}, outside [-1, 1]: rho is a correlation (dml_benchmark "
+                             "clips it); fix the bench table or pass a number")
+        kmax = 1 / gd
+        bad = (kd_arr >= kmax) | (kd_arr * gd >= 1)   # both: kd = fl(1/gd) can give a product just below 1
+        kd_b, ky_b = kd_arr, ky_arr
+        if bad.any():
+            if not default_kd:
+                raise ValueError(f"impossible kd = {kd_arr[bad][0]:g} for benchmark {lab!r}: its gain in the treatment "
+                                 f"is {gd:.4g}, so kd * gain_d would reach 1 (no residual variation left in the "
+                                 f"treatment); kd must be below k_d_max = {kmax:.6g}")
+            note(f"{lab}: kd = {', '.join(f'{v:g}' for v in kd_arr[bad])} skipped (impossible: kd must be below "
+                 f"k_d_max = {kmax:.6g})")
+            kd_b, ky_b = kd_arr[~bad], ky_arr[~bad]
+        capped_k = []
+        for kdi, kyi in zip(kd_b, ky_b):
+            cfy_raw, cfd = kyi * gy, kdi * gd
+            cap = cfy_raw > 1
+            cfy = 1.0 if cap else cfy_raw
+            if cap:
+                capped_k.append(f"{kyi:g}")
+            reps = [_dml_sens_rep(uy, vd, cfy, cfd, rb) for uy, vd in res["residuals"]]
+            med = {k_: float(np.median([r_[k_] for r_ in reps])) for k_ in ("bound", "se_lo", "se_hi")}
+            lo, hi = th - med["bound"], th + med["bound"]
+            ci_lo, ci_hi = lo - z * med["se_lo"], hi + z * med["se_hi"]
+            excl = bool(ci_lo > 0 or ci_hi < 0)
+            rows.append({"bound_label": (f"{kdi:g}x {lab}" if kdi == kyi else f"{kdi:g}/{kyi:g}x {lab}"),
+                         "benchmark": lab, "kd": kdi, "ky": kyi, "cf_y": cfy, "cf_d": cfd, "cf_y_capped": bool(cap),
+                         "rho": rb, "bias_bound": med["bound"], "theta_lower": lo, "theta_upper": hi,
+                         "ci_low": ci_lo, "ci_high": ci_hi, "ci_excludes_zero": excl,
+                         "ci_verdict": "excludes zero" if excl else "includes zero"})
+        if capped_k:
+            note(f"{lab}, ky = {', '.join(dict.fromkeys(capped_k))}: ky * gain_y above 1, capped at 1 (the confounder "
+                 f"would explain all of the outcome's residual variance)")
+    cols = ["bound_label", "benchmark", "kd", "ky", "cf_y", "cf_d", "cf_y_capped", "rho", "bias_bound", "theta_lower",
+            "theta_upper", "ci_low", "ci_high", "ci_excludes_zero", "ci_verdict"]
+    out = {"bounds": pd.DataFrame(rows, columns=cols), "estimate": th, "se": se, "alpha": alpha, "rho": rho,
+           "warnings": warns}
+    if show:
+        level = _level_pct(alpha)
+        print(f"\nDML-PLR bounds for a confounder k times as strong as observed covariates (Chernozhukov et al. 2022, "
+              f"benchmarking appendix: the benchmark's gains in explaining the outcome and the treatment, scaled by "
+              f"k): theta = {th:.4f} (SE {se:.4f}).")
+        print("  rho = the benchmark's observed correlation of the omitted pieces" if rho == "benchmark" else
+              f"  rho = {float(rho):g}" + (" (the worst case)" if abs(float(rho)) == 1 else "") + " for every line")
+        for _, r in out["bounds"].iterrows():
+            cap = " (capped)" if r["cf_y_capped"] else ""
+            print(f"  {r['bound_label']}: cf_y {r['cf_y']:.1%}{cap}, cf_d {r['cf_d']:.1%}, rho {r['rho']:.2f}: theta "
+                  f"between {r['theta_lower']:.4f} and {r['theta_upper']:.4f}; {level} confidence bounds "
+                  f"[{r['ci_low']:.4f}, {r['ci_high']:.4f}], which "
+                  f"{'exclude zero' if r['ci_excludes_zero'] else 'include zero'}.")
+        if out["bounds"].empty:
+            print("  No bound computed: every benchmark or k was skipped (see the warnings).")
+        print("  Worst cases under 'k times as strong', not likely values; the gains and rho are estimates whose own "
+              "uncertainty is not propagated.")
+        for w in warns:
+            print("  WARNING: " + w)
+    return out
 
 
 # =============================================================================

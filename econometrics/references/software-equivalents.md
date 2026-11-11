@@ -217,7 +217,7 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 |---|---|
 | R `dagitty::adjustmentSets`, `dseparated`, `impliedConditionalIndependencies`, `localTests`; DAGitty web | `dag.adjustment_sets`, `d_separated`, `implied_independencies`, `test_implications`, `adjustment_report` |
 | R `pcalg::optAdjSet` | `dag.optimal_adjustment_set` |
-| R/Python `DoubleML` `sensitivity_analysis`, `sensitivity_benchmark`; R `dml.sensemakr` | `causal.dml_sensitivity`, `causal.dml_benchmark` |
+| R/Python `DoubleML` `sensitivity_analysis`, `sensitivity_benchmark`; R `dml.sensemakr` | `causal.dml_sensitivity`, `causal.dml_benchmark` (same gains as `sensitivity_benchmark` since v2.6.2, replicated against DoubleML 0.11.4); "k times as strong": `causal.dml_bounds` (gains scaled by k, as in the paper's benchmarking appendix; DoubleML 0.11.4 has no k argument) |
 | Stata `pc_simulate` (Burlig et al.), `power` with repeated measures; R `pwr`/simulation | `simulation.mde_did`, `power_did_sim`, `mde_did_sim` |
 | R `evir`, `POT`, `extRemes::fevd(type="GP")`, `ismev::gpd.fit`; MATLAB `gpfit` | `risk.mean_excess`, `risk.gpd_fit`, `risk.var_evt` |
 | R `esback::esr_backtest`, `cc_backtest`; `GAS`/`esreg` FZ loss | `risk.es_backtest`, `risk.fz_loss`, `risk.compare_es_models` |

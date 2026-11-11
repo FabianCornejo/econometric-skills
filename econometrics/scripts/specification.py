@@ -521,6 +521,16 @@ def _pct(x, digits=1) -> str:
     return f"{x:.{digits}%}"
 
 
+def _report_label(cov_type: str, usable: bool = True) -> str:
+    """v2.6.2: printed after a robust fit by sensitivity and ovb_bounds. In the v2.6.1 validation the chat said which SE
+    each number used and the memo did not: the HC3 CI sat next to classical-SE thresholds with no label."""
+    if not usable:
+        return (f"In a report, label these numbers as classical-SE; your {cov_type} SE is not usable here, so report no "
+                f"{cov_type} CI next to them.")
+    return (f"In a report, label these numbers as classical-SE and show your {cov_type} CI separately: the two use "
+            f"different SEs and can disagree.")
+
+
 def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA) -> dict:
     """Cinelli and Hazlett (2020) sensitivity statistics from a classical OLS t-statistic.
 
@@ -620,6 +630,7 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
                   f"not usable")
             print(f"These statistics and verdicts use the classical SE, as the formulas require (t = {t_cl:.2f}); "
                   f"{rb}.")
+            print(_report_label(res.cov_type, bool(np.isfinite(t_rb) and np.isfinite(se_rb) and se_rb > 0)))   # v2.6.2
         if len(out["benchmarks"]):
             print("Observed covariates (partial R² with outcome), for comparison:")
             print(out["benchmarks"].to_string(float_format=lambda v: f"{v:.2%}"))
@@ -1067,9 +1078,13 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                          "share_of_estimate": adj[i] / est if est != 0 else np.nan,
                          "ci_excludes_zero": excl, "ci_verdict": verdict})
         kns, kret, kstat, kcap, kcap_by, kagain = _k_not_significant(r2d, r2y, est, se, df, tcrit)
+        kneed = _k_needed(r2d, r2y, est, se, df, q)
+        # v2.6.2: past k_cap the implied R² with the outcome is held at 1 and only kd keeps growing, so k_needed is
+        # then the kd that suffices with the outcome fully explained, not "the same k for both"
+        beyond = bool(np.isfinite(kneed) and kcap_by == "outcome" and kneed > kcap)
         brows.append({"benchmark": lab, "terms": list(terms), "r2dxj_x": r2d, "r2yxj_dx": r2y,
                       "df_treatment": float(tmod.df_resid), "df_outcome": df, "kd_max": kmax,
-                      "k_needed": _k_needed(r2d, r2y, est, se, df, q), "k_not_significant": kns,
+                      "k_needed": kneed, "k_needed_beyond_cap": beyond, "k_not_significant": kns,
                       "significance_returns": kret, "k_significant_again": kagain,
                       "k_not_significant_status": kstat, "k_cap": kcap, "k_cap_by": kcap_by})
     cols = ["bound_label", "benchmark", "kd", "ky", "r2dz_x", "r2yz_dx", "r2yz_dx_capped", "adjusted_estimate",
@@ -1138,6 +1153,11 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
             elif np.isinf(kn):
                 print(f"  No admissible multiple of {lab} could {goal} (it would take k at the largest admissible, "
                       f"{br['kd_max']:.6g}).")
+            elif br["k_needed_beyond_cap"]:
+                print(f"  A confounder {kn:.3g}x as strong as {lab} in explaining the treatment could, in the worst "
+                      f"case, {goal}, but only with the outcome fully explained: at k_cap = {br['k_cap']:.4g}x (with kd = "
+                      f"ky) the implied partial R² with the outcome already reaches 100%, so beyond it only the "
+                      f"treatment side grows.")
             else:
                 print(f"  A confounder {kn:.3g}x as strong as {lab} (same k for treatment and outcome) could, in the "
                       f"worst case, {goal}.")
@@ -1185,6 +1205,8 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                   f"your {res.cov_type} SE is not finite or zero (often observations with leverage 1), so its t is "
                   f"not usable")
             print(f"These bounds use the classical SE, as the formulas require (t = {t_cl:.2f}); {rb}.")
+            print(_report_label(res.cov_type, bool(np.isfinite(t_rb) and np.isfinite(float(res.bse[treatment]))
+                                                   and float(res.bse[treatment]) > 0)))   # v2.6.2
         for w in warns:
             print("  WARNING: " + w)
     return out

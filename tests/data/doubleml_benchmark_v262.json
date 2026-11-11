@@ -1,0 +1,22 @@
+{
+ "_origin": "DoubleML 0.11.4, scikit-learn 1.9.1, numpy 2.5.3: DoubleMLPLR(LinearRegression x2, n_folds=5, n_rep=3), np.random.seed(0), sensitivity_benchmark([b]); design: default_rng(20261111), n = 20000, d = 0.8 x1 + 0.5 x2 + e, y = d + 1.5 x1 + 0.7 x2 + 0.5 x3 + e (claude/scripts/ref_doubleml_v262.py in the dev repository)",
+ "x1": {
+  "cf_y": 1.0,
+  "cf_d": 0.6541843509133675,
+  "rho": 1.0,
+  "delta_theta": 0.7371654826961653
+ },
+ "x2": {
+  "cf_y": 0.4055393412893158,
+  "cf_d": 0.24125402081748656,
+  "rho": 1.0,
+  "delta_theta": 0.2802165942770378
+ },
+ "x3": {
+  "cf_y": 0.23422627073040223,
+  "cf_d": 0.00014992035108939896,
+  "rho": 1.0,
+  "delta_theta": 0.0075918778334436166
+ },
+ "theta": 0.995740293807085
+}

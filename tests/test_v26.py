@@ -430,8 +430,11 @@ for name, res, tr_, benches, ks in cases + [("sim, alpha 0.001", M_SIM, "d", ["x
           txt.count("worst case for a confounder orthogonal to the covariates") == 1
           and "not in coefficient size" in txt and "can exceed k times the benchmark's" in txt)
     # v2.6.1: the k_not_significant sentence starts the same way; this check is about the k_needed sentence only
-    kn = re.findall(rf"A confounder {NUM}x as strong as (\S+) \(same k for treatment and outcome\) could, in the "
-                    rf"worst case, (?:bring|reduce)", txt)
+    # v2.6.2: past k_cap the sentence says "in explaining the treatment … only with the outcome fully explained"
+    kn = re.findall(rf"A confounder {NUM}x as strong as (\S+) (?:\(same k for treatment and outcome\)|in explaining "
+                    rf"the treatment) could, in the worst case, (?:bring|reduce)", txt)
+    check(f"text ({name}): a k_needed line beyond the cap exactly where benchmark_r2 says so (v2.6.2)",
+          txt.count("only with the outcome fully explained") == int(out["benchmark_r2"]["k_needed_beyond_cap"].sum()))
     check(f"text ({name}): the k_needed lines restate benchmark_r2['k_needed']",
           len(kn) == len(out["benchmark_r2"]) and all(
               rel(float(k), out["benchmark_r2"].loc[lab, "k_needed"]) < 5e-3 for k, lab in kn), kn)

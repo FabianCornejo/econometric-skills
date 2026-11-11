@@ -71,9 +71,16 @@ check("bound table decreases in both cf_y and cf_d (positive theta)",
 bm = causal.dml_benchmark(df, "y", "d", ["x1", "x2"], ["x2"], res=res, **LIN)
 ols_cy = 1 - smf.ols("y ~ d + x1 + x2", df).fit().ssr / smf.ols("y ~ d + x1", df).fit().ssr
 ols_cd = 1 - smf.ols("d ~ x1 + x2", df).fit().ssr / smf.ols("d ~ x1", df).fit().ssr
-check("benchmark x2: cf_y and cf_d equal the OLS partial R2 (within 0.01)",
-      abs(bm.loc["x2", "cf_y"] - ols_cy) < 0.01 and abs(bm.loc["x2", "cf_d"] - ols_cd) < 0.01,
-      f"cf_y {bm.loc['x2', 'cf_y']:.4f}/{ols_cy:.4f}, cf_d {bm.loc['x2', 'cf_d']:.4f}/{ols_cd:.4f}")
+# v2.6.2: cf_y and cf_d are the paper's gains (Chernozhukov et al. 2022, App. F); the partial R² this check fixed
+# before v2.6.2 are now r2_y and r2_d (the check moved with them, unchanged)
+check("benchmark x2: r2_y and r2_d (cf_y and cf_d before v2.6.2) equal the OLS partial R2 (within 0.01)",
+      abs(bm.loc["x2", "r2_y"] - ols_cy) < 0.01 and abs(bm.loc["x2", "r2_d"] - ols_cd) < 0.01,
+      f"r2_y {bm.loc['x2', 'r2_y']:.4f}/{ols_cy:.4f}, r2_d {bm.loc['x2', 'r2_d']:.4f}/{ols_cd:.4f}")
+ols_gy = smf.ols("y ~ d + x1", df).fit().ssr / smf.ols("y ~ d + x1 + x2", df).fit().ssr - 1
+ols_gd = smf.ols("d ~ x1", df).fit().ssr / smf.ols("d ~ x1 + x2", df).fit().ssr - 1
+check("benchmark x2: cf_y and cf_d equal the OLS gains SSR_short/SSR_long - 1 (within 0.01; v2.6.2)",
+      abs(bm.loc["x2", "cf_y"] - ols_gy) < 0.01 and abs(bm.loc["x2", "cf_d"] - ols_gd) < 0.01,
+      f"cf_y {bm.loc['x2', 'cf_y']:.4f}/{ols_gy:.4f}, cf_d {bm.loc['x2', 'cf_d']:.4f}/{ols_gd:.4f}")
 ols_dth = smf.ols("y ~ d + x1", df).fit().params["d"] - ls.params["d"]
 check("benchmark x2: delta theta equals the OLS change from dropping x2 (within 0.01)",
       abs(bm.loc["x2", "delta_theta"] - ols_dth) < 0.01, f"{bm.loc['x2', 'delta_theta']:.4f} vs {ols_dth:.4f}")
