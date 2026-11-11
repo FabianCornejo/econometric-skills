@@ -146,7 +146,9 @@ for nm in NREP:
                     rb[b][c]) for b in rb for c in rb[b]))
     # v2.6.3: this check said "cf_y and cf_d above the reference partial R²", which does not hold in general (cf is
     # the median of the split gains, r2 a ratio of medians; tests/test_v263.py builds a case with cf 0.01 < r2 0.2);
-    # it now recomputes cf from the residuals, split by split (paired by position: same seed, n_folds, n_rep)
+    # it now recomputes cf from the residuals, split by split (paired by position: same seed, n_folds, n_rep). The
+    # moments below follow the same definitions as causal._dml_sens_rep; what is checked independently here is the
+    # aggregation and the pairing (tests/test_v263.py checks the moments on splits built with known values)
     def split_gains(r_l, r_s):
         def m_(u, v):
             th = np.sum(v * u) / np.sum(v * v)

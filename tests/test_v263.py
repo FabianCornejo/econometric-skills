@@ -13,12 +13,12 @@ What is checked, each by a route other than the implementation's:
      cf = min(r2/(1 - r2), 1) exactly, on both sides of the cut (G = 1 -+ 1e-9 and G = 1), for Y and for D;
   2. the docs no longer say "always smaller/below" and say that the two are different aggregations;
   3. ovb_bounds "not reached" (design seed 1 of claude/scripts/sonda_v263.py, t = 58): the sentence carries the
-     multiplier ("1.108x as strong as w"), its start is unchanged (tests/test_v261.py), and no printed sentence in
+     multiplier ("at k = 1.108, a confounder 1.108x as strong as w"), its start is unchanged (tests/test_v261.py), and no printed sentence in
      any call of this file says "a confounder as strong as" without a multiplier;
   4. the kd/ky label: sensemakr's "1/2x w" and "3/0.5x w" unchanged; ovb_bounds prints the "not a ratio" note once
      when some line has kd != ky and never when all have kd = ky (also kd = 2 with ky = 2.0); dml_bounds prints
-     "(kd = 2 for the treatment, ky = 5 for the outcome)" on that line only, and every line still starts with its
-     label and ":";
+     "(kd = 2 for the treatment, ky = 5 for the outcome)" on that line only (in full, repr, when kd and ky print
+     alike with :g, as kd = 0.3, ky = 0.1 * 3), and every line still starts with its label and ":";
   5. the rule of v2.6.3 in interpretation-rules.md and the evaluation case review-memo-k-threshold-paraphrase.
 
 Run from the repository root:  python3 tests/test_v263.py
@@ -109,8 +109,20 @@ b_hi, _ = bench_of((1, 2, 3), (0.05, 0.05, 0.05), (1, 2, 3), (0.05, 0.05, 0.05))
 check("3 splits, equal gains 0.05: cf_y = 0.05 above r2_y = 0.05/1.05 (the other side)",
       abs(b_hi["cf_y"] - 0.05) < 1e-9 and abs(b_hi["r2_y"] - 0.05 / 1.05) < 1e-9 and b_hi["cf_y"] > b_hi["r2_y"],
       b_hi[["cf_y", "r2_y"]].tolist())
-check("in every split of both designs G > G/(1 + G) (the per-split statement the docs now make)",
-      all(g > g / (1 + g) for g in (1.5, 0.01, 0.05)))
+# the per-split statement of the docs, from the built residuals (moments recomputed here, not by the function)
+def split_moments(u, v):
+    th = np.sum(v * u) / np.sum(v * v)
+    return np.mean((u - th * v) ** 2), 1 / np.mean(v * v)
+
+
+got = []
+for i, (ly, gy, ld, gd) in enumerate(zip((1, 2, 3), (1.5, 0.01, 0.01), (1, 2, 3), (0.01, 0.01, 1.5))):
+    (ul, vl), (us, vs) = split_pair(ly, gy, ld, gd, seed=i)
+    (s2l, n2l), (s2s, n2s) = split_moments(ul, vl), split_moments(us, vs)
+    got.append((s2s / s2l - 1, n2l / n2s - 1, (s2s - s2l) / s2s, (n2l - n2s) / n2l))
+check("each built split recovers its planted gains (G_Y, G_D) and has G > G/(1 + G) = its own partial R²",
+      all(abs(a - gy) < 1e-9 and abs(b - gd) < 1e-9 and a > ry and b > rd and abs(ry - a / (1 + a)) < 1e-12
+          for (a, b, ry, rd), gy, gd in zip(got, (1.5, 0.01, 0.01), (0.01, 0.01, 1.5))), got)
 check("the 'below' design gives no 'cannot be paired' warning (splits paired, as DoubleML)",
       not any("cannot be paired" in s for s in w_lo), w_lo)
 
@@ -123,7 +135,8 @@ for g in (0.3, 1 - 1e-9, 1.0, 1 + 1e-9):
           f"r2 = G/(1 + G); cf = min(G, 1)",
           abs(b1["cf_y"] - exp_y) < 1e-9 and abs(b1["cf_d"] - exp_d) < 1e-9
           and abs(b1["r2_y"] - g / (1 + g)) < 1e-9 and abs(b1["cf_y"] - min(g, 1.0)) < 1e-9
-          and (b1["cf_y"] == 1.0) == (g >= 1.0 - 1e-12),
+          and abs(b1["r2_d"] - g / (1 + g)) < 1e-9 and abs(b1["cf_d"] - min(g, 1.0)) < 1e-9
+          and (b1["cf_y"] == 1.0) == (g >= 1.0 - 1e-12) and (b1["cf_d"] == 1.0) == (g >= 1.0 - 1e-12),
           b1[["cf_y", "r2_y", "cf_d", "r2_d"]].tolist())
 
 # ------------------------------------------------------------------ 2. the docs
@@ -159,9 +172,10 @@ kc = f"{br['k_cap']:.4g}"
 check("design seed 1: status 'not reached', cap from the outcome, t about 58",
       br["k_not_significant_status"] == "not reached" and br["k_cap_by"] == "outcome" and M_NR.tvalues["d"] > 50,
       (br["k_not_significant_status"], br["k_cap_by"], kc))
-check(f"'not reached' names the multiplier: 'at k = {kc}x, a confounder {kc}x as strong as w would explain all of "
+check(f"'not reached' names the multiplier: 'at k = {kc}, a confounder {kc}x as strong as w would explain all of "
       "the outcome's residual variance'",
-      f"at k = {kc}x, a confounder {kc}x as strong as w would explain all of the outcome's residual variance" in t_nr,
+      f"at k = {kc}, a confounder {kc}x as strong as w would explain all of the outcome's residual variance" in t_nr
+      and f"at k = {kc}x" not in t_nr,
       [ln for ln in t_nr.splitlines() if "No k below" in ln])
 check("its start is unchanged ('No k below … makes the estimate not significant', tests/test_v261.py)",
       f"No k below {kc} makes the estimate not significant for w" in t_nr)
@@ -169,7 +183,7 @@ check("the v2.6.2 wording is gone ('at that k a confounder as strong as')", "at 
 # robust fit: the same sentence with "(classical SE)"
 o_r, t_r, _ = run(sp.ovb_bounds, M_NR.model.fit(cov_type="HC3"), "d", "w", show=True)
 check("after HC3 the 'not reached' sentence says '(classical SE)' and carries the multiplier",
-      f"not significant (classical SE) for w (at k = {kc}x, a confounder {kc}x as strong as w" in t_r)
+      f"not significant (classical SE) for w (at k = {kc}, a confounder {kc}x as strong as w" in t_r)
 
 # ------------------------------------------------------------------ 4. the kd/ky label
 M2 = fit(3, 0.3, 0.8, 0.3)
@@ -199,7 +213,7 @@ RD = causal.dml_plr(DD, "y", "d", ["x1", "x2"], n_rep=1, **LIN)
 BH = pd.DataFrame({"gain_y": [0.05], "gain_d": [0.1], "rho": [0.5]}, index=["x1"])
 ob, tb, _ = run(causal.dml_bounds, RD, BH, kd=[2, 3], ky=[5, 3], rho=1.0, show=True)
 lb = [ln.strip() for ln in tb.splitlines() if re.match(r"^\s+[0-9.]+(/[0-9.]+)?x x1:", ln)]
-check("dml_bounds labels '2/5x x1' and '3x x1' (the same format as ovb_bounds)",
+check("dml_bounds labels '2/5x x1' and '3x x1' (the pattern of ovb_bounds)",
       list(ob["bounds"]["bound_label"]) == ["2/5x x1", "3x x1"], list(ob["bounds"]["bound_label"]))
 check("dml_bounds spells out kd and ky on the kd != ky line, right after 'label:'",
       len(lb) == 2 and lb[0].startswith("2/5x x1: (kd = 2 for the treatment, ky = 5 for the outcome) cf_y 25.0%"), lb)
@@ -207,6 +221,13 @@ check("…and not on the kd = ky line", len(lb) == 2 and lb[1].startswith("3x x1
       lb)
 _, tb2, _ = run(causal.dml_bounds, RD, BH, kd=[2], ky=[2.0], rho=1.0, show=True)
 check("dml_bounds kd = 2, ky = 2.0: label '2x x1', no '(kd ='", "2x x1: cf_y" in tb2 and "(kd =" not in tb2)
+_, tb3, _ = run(causal.dml_bounds, RD, BH, kd=[0.3], ky=[0.1 * 3], rho=1.0, show=True)
+check("dml_bounds kd = 0.3, ky = 0.1 * 3 (equal with :g, not as floats): the parenthesis shows them apart (review)",
+      "(kd = 0.3 for the treatment, ky = 0.30000000000000004 for the outcome)" in tb3,
+      [ln for ln in tb3.splitlines() if "x x1:" in ln])
+_, tb4, _ = run(causal.dml_bounds, RD, BH, kd=[2], ky=[5], rho=1.0, show=True)
+check("…and keeps the short format when :g already tells them apart ('kd = 2', 'ky = 5')",
+      "(kd = 2 for the treatment, ky = 5 for the outcome)" in tb4)
 check("the docstrings say the label is not a ratio",
       "not a ratio" in causal.dml_bounds.__doc__ and "not a ratio" in sp.ovb_bounds.__doc__)
 

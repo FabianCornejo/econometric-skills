@@ -420,11 +420,11 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
     The splits are paired by position, which is valid when res and the refits use the same seed, n_folds and n_rep
     (KFold depends only on the rows and the seed); dml_plr stores its seed since v2.6.2. When they differ, or when res
     has no per-split thetas or no seed, the gains fall back to ratios of medians, with a warning that says why.
-    v2.6.2: cf_y and cf_d were the partial R² r2_y, r2_d. In each sample split the gain G is above the partial R²
+    v2.6.2: cf_y and cf_d were the partial R² r2_y, r2_d. In each sample split a gain G > 0 is above the partial R²
     G/(1 + G), so "a confounder as strong as X_j" gave a smaller (less conservative) bound than the paper's benchmark;
     cf_d was also cut at 0.999 silently. The returned columns are different aggregations, though (v2.6.3): cf_y is the
-    median of the split gains, r2_y a ratio of medians, so with several splits cf_y can be below r2_y (and cf_d below
-    r2_d); with one split cf = min(r2 / (1 - r2), 1) exactly.
+    median of the split gains, r2_y a ratio of medians, so with several paired splits cf_y can be below r2_y (and cf_d
+    below r2_d); with one split, or in the fallback to ratios of medians, cf = min(r2 / (1 - r2), 1) exactly.
     For "a confounder k times as strong as X_j" use dml_bounds (the paper scales the gains by k). Benchmarks are
     informative only if the latent confounder is comparable to the observed ones; they also condition on the remaining
     covariates, and their own uncertainty is not propagated (as in the paper)."""
@@ -498,7 +498,8 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
            gain_y, gain_d and rho, one row per benchmark).
     kd, ky how many times the benchmark's gain in the treatment (kd) and in the outcome (ky); a number or a sequence,
            paired as in ovb_bounds; ky = None means ky = kd; bound_label is "kx X" when kd = ky and "kd/ky x X"
-           otherwise, as in ovb_bounds ("2/5x X": kd = 2, ky = 5; not a ratio), and the printed line spells it out;
+           otherwise, the pattern of ovb_bounds ("2/5x X": kd = 2, ky = 5; not a ratio; ovb_bounds rounds the numbers
+           to 2 decimals, as sensemakr, and dml_bounds does not), and the printed line spells it out;
            kd = None means (1, 2, 3) and skips, per benchmark,
            the values at or above k_d_max = 1/gain_d with a warning (a kd you give there stops the call).
     rho    "benchmark" (default): each benchmark's observed rho (the paper's benchmark for rho; a NaN rho is
@@ -612,8 +613,10 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
               f"  rho = {float(rho):g}" + (" (the worst case)" if abs(float(rho)) == 1 else "") + " for every line")
         for _, r in out["bounds"].iterrows():
             cap = " (capped)" if r["cf_y_capped"] else ""
+            same = f"{r['kd']:g}" == f"{r['ky']:g}"   # review: kd 0.3, ky 0.1 * 3 print alike with :g
+            kd_s, ky_s = ((repr(float(r["kd"])), repr(float(r["ky"]))) if same else (f"{r['kd']:g}", f"{r['ky']:g}"))
             kk = ("" if r["kd"] == r["ky"] else      # v2.6.3: "2/5x" could read as 0.4x
-                  f"(kd = {r['kd']:g} for the treatment, ky = {r['ky']:g} for the outcome) ")
+                  f"(kd = {kd_s} for the treatment, ky = {ky_s} for the outcome) ")
             print(f"  {r['bound_label']}: {kk}cf_y {r['cf_y']:.1%}{cap}, cf_d {r['cf_d']:.1%}, rho {r['rho']:.2f}: "
                   f"theta "
                   f"between {r['theta_lower']:.4f} and {r['theta_upper']:.4f}; {level} confidence bounds "

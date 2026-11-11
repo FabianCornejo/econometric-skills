@@ -914,8 +914,8 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
     R² with the outcome above 1 is capped at 1 with a warning, as in sensemakr (the adjusted SE is then 0 and the
     CI is not informative). Needs a full-rank design (ValueError otherwise).
 
-    Returns {"bounds": DataFrame (one row per benchmark × (kd, ky); bound_label as sensemakr's, "2x x" when kd = ky
-    and "kd/ky x x" otherwise ("1/2x x": kd = 1 for the treatment, ky = 2 for the outcome; not a ratio); ci_verdict
+    Returns {"bounds": DataFrame (one row per benchmark × (kd, ky); bound_label as sensemakr's, "2x X" when kd = ky
+    and "kd/ky x X" otherwise ("1/2x X": kd = 1 for the treatment, ky = 2 for the outcome; not a ratio); ci_verdict
     in {"same sign", "includes zero",
     "opposite sign", "not informative"}; ci_excludes_zero is False on capped rows), "benchmark_r2": DataFrame (partial R² of each benchmark with D and with Y,
     the df used, the largest admissible kd, k_needed, and since v2.6.1 k_not_significant: the smallest k = kd = ky at
@@ -1200,7 +1200,7 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                       f"treatment or of the outcome (given the other covariates).")
             elif st == "not reached":
                 print(f"  No k below {br['k_cap']:.4g} makes the estimate not significant{cls} for {lab} " + (
-                      f"(at k = {br['k_cap']:.4g}x, a confounder {br['k_cap']:.4g}x as strong as {lab} would explain "
+                      f"(at k = {br['k_cap']:.4g}, a confounder {br['k_cap']:.4g}x as strong as {lab} would explain "
                       f"all of the outcome's residual variance; beyond it the CI of the bounds is not informative)."
                       if br["k_cap_by"] == "outcome" else
                       "(the largest admissible k; a larger one is impossible)."))
