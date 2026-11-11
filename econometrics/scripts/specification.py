@@ -765,7 +765,8 @@ def _k_not_significant(r2dxj: float, r2yxj: float, est: float, se: float, df: fl
     the benchmark predicts the outcome much better than the treatment), so the CI can exclude zero again, on the same
     side, for a larger k before the cap. `returns` says so and `k_again` is the first such k (NaN otherwise).
     g(k) = sign(est)·adj(k) − t·SE_adj(k); g(0+) = |est| − t·SE·√(df/(df − 1)) is the same for every benchmark.
-    status: "already" (the unadjusted CI includes zero; k = 0), "at once" (g(0+) <= 0: only significant within the
+    status: "already" (the unadjusted CI includes zero; k = 0; `returns` then says that the worst-case CI excludes
+    zero from `k_again` on, although the unadjusted one does not), "at once" (g(0+) <= 0: only significant within the
     df vs df − 1 band, so a confounder of vanishing strength, which costs one degree of freedom, removes it; k = 0),
     "found", "not reached" (k = inf: no k below the cap). Both statuses of k = 0 are decided analytically, so they are
     the same for every benchmark of a call. Otherwise g is evaluated on a dense grid on (0, k_cap) — linear, geometric
@@ -774,16 +775,17 @@ def _k_not_significant(r2dxj: float, r2yxj: float, est: float, se: float, df: fl
     the cap), and the first sign change is refined with brentq (from k = 0, where g = g(0+) > 0, if needed)."""
     from scipy.optimize import brentq, minimize_scalar
     cap, cap_by = _k_cap(r2dxj, r2yxj)            # treats a partial R² <= _R2_ZERO as zero
-    if not abs(est) > tcrit * se:
-        return 0.0, False, "already", cap, cap_by, np.nan
-    sign = -1.0 if est < 0 else 1.0
-    g0 = abs(est) - tcrit * se * np.sqrt(df / (df - 1))
+    already = not abs(est) > tcrit * se
+    c_ = tcrit * se * np.sqrt(df / (df - 1))
+    g0 = abs(est) - c_
 
     def g(k):
         k = np.asarray(k, dtype=float)
         r2dz, r2yz = _ovb_partial_r2_bound(r2dxj, r2yxj, k, k)
-        adj, adj_se, _ = _ovb_adjust(est, se, df, r2dz, np.minimum(r2yz, 1.0))
-        return sign * adj - tcrit * adj_se
+        r2yz = np.minimum(r2yz, 1.0)
+        S = np.sqrt((1 - r2yz) / (1 - r2dz))
+        bias = np.sqrt(r2yz * r2dz / (1 - r2dz)) * se * np.sqrt(df)
+        return abs(est) - bias - c_ * S           # sign(est)·adj − t·SE_adj (eq. 12–13 of the paper)
 
     def gs(x):
         if x == 0:
@@ -805,13 +807,19 @@ def _k_not_significant(r2dxj: float, r2yxj: float, est: float, se: float, df: fl
     vals = np.where(np.isfinite(vals), vals, -np.inf)   # an infinite adjusted SE (r2dz -> 1) includes zero
 
     def again(m):
-        """First k after m (where g <= 0) at which g > 0 again, refined; NaN if none on the grid."""
+        """First k after m (where g <= 0) at which g > 0 again, refined; NaN if none below the cap. A return in the
+        last 1e-12 of the cap, past the grid, is seen from g at the cap itself (R²_Y = 1: g = |est| − bias)."""
         pos = np.flatnonzero((grid > m) & (vals > 0))
-        if not len(pos):
-            return np.nan
-        j = int(pos[0])
-        return root(max(m, grid[j - 1]) if j > 0 else m, grid[j])
+        if len(pos):
+            j = int(pos[0])
+            return root(max(m, grid[j - 1]) if j > 0 else m, grid[j])
+        if cap_by == "outcome" and np.isfinite(cap) and gs(cap) > 0:
+            return root(max(m, grid[-1]), cap)
+        return np.nan
 
+    if already:                                   # v2.6.1 review 2: the CI can exclude zero for a larger k
+        ka = again(0.0)
+        return 0.0, bool(np.isfinite(ka)), "already", cap, cap_by, ka
     if g0 <= 0:
         ka = again(0.0)
         return 0.0, bool(np.isfinite(ka)), "at once", cap, cap_by, ka
@@ -838,11 +846,19 @@ def _k_not_significant(r2dxj: float, r2yxj: float, est: float, se: float, df: fl
 
 
 def _k_list(vals) -> str:
-    """kd, ky or R² values for a warning, in the order given: all of them up to six, else min to max and the count."""
-    vals = list(vals)
-    if len(vals) <= 6:
-        return ", ".join(f"{v:g}" for v in vals)
-    return f"{min(vals):g} to {max(vals):g} ({len(vals)} values)"
+    """kd or ky values for a warning, in the order given (at most six of them)."""
+    return ", ".join(f"{v:g}" for v in vals)
+
+
+def _k_range(vals) -> str:
+    """min to max of kd or ky values (one value when they are all equal)."""
+    lo, hi = min(vals), max(vals)
+    return f"{lo:g}" if f"{lo:g}" == f"{hi:g}" else f"{lo:g} to {hi:g}"
+
+
+def _r2_above1(v: float) -> str:
+    """An implied R² above 1, never printed as "1" (3 significant digits would round 1.000001 to 1)."""
+    return f"{v:.3g}" if f"{v:.3g}" != "1" else "just above 1"
 
 
 def _level_pct(alpha: float) -> str:
@@ -1014,15 +1030,22 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
         r2yz = np.where(capped, 1.0, r2yz_raw)
         ci_ = np.flatnonzero(capped)
         if len(ci_):                              # v2.6.1: one warning per benchmark and call (was one per line)
-            pairs = {}                            # (kd, ky) -> implied R², each pair once, in the order given
+            pairs = {}                            # (kd, ky) as printed -> implied R², each once, in the order given
             for i_ in ci_:
-                pairs.setdefault((float(kd_b[i_]), float(ky_b[i_])), float(r2yz_raw[i_]))
-            kds, kys = [p_[0] for p_ in pairs], [p_[1] for p_ in pairs]
-            same = kds == kys
-            ks_txt = f"kd = ky = {_k_list(kds)}" if same else f"kd = {_k_list(kds)} with ky = {_k_list(kys)}"
-            r2_txt = _k_list([float(f"{v:.3g}") for v in pairs.values()])
+                pairs.setdefault((f"{kd_b[i_]:g}", f"{ky_b[i_]:g}"), float(r2yz_raw[i_]))
+            kds, kys = [float(p_[0]) for p_ in pairs], [float(p_[1]) for p_ in pairs]
+            same = [p_[0] for p_ in pairs] == [p_[1] for p_ in pairs]
+            if len(pairs) <= 6:
+                ks_txt = f"kd = ky = {_k_list(kds)}" if same else f"kd = {_k_list(kds)} with ky = {_k_list(kys)}"
+            else:                                 # many lines: ranges, and the count of (kd, ky) pairs
+                ks_txt = (f"kd = ky = {_k_range(kds)}" if same else
+                          f"kd = {_k_range(kds)} with ky = {_k_range(kys)}") + f" ({len(pairs)} (kd, ky) pairs)"
+            r2v = list(pairs.values())
+            r2_txt = (", ".join(_r2_above1(v) for v in r2v) if len(r2v) <= 6 else
+                      f"{_r2_above1(min(r2v))} to {_r2_above1(max(r2v))}")
             one_ = len(pairs) == 1
-            note(f"{lab}, {ks_txt}: the implied partial R² of the confounder with the outcome is {r2_txt} > 1; "
+            note(f"{lab}, {ks_txt}: the implied partial R² of the confounder with the outcome is {r2_txt}"
+                 f"{'' if r2_txt == 'just above 1' else ' > 1'}; "
                  f"capped at 1 (try a lower kd and/or ky); {'its CI is' if one_ else 'the CIs of those lines are'} "
                  f"not informative")
         adj, adj_se, adj_t = _ovb_adjust(est, se, df, r2dz, r2yz)
@@ -1140,13 +1163,18 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                             f"lost, not as a threshold.")
                 print(txt)
             elif st == "at once" and br["significance_returns"]:
-                print(f"  For {lab}: from {ka:.3g}x on (same k for treatment and outcome) the worst-case CI excludes "
-                      f"zero again, {why}; only a confounder weaker than that makes the estimate not significant.")
+                print(f"  For {lab}: from {ka:.3g}x on (same k for treatment and outcome) the worst-case CI{cls} "
+                      f"excludes zero again, {why}; only a confounder weaker than that makes the estimate not "
+                      f"significant.")
+            elif st == "already" and br["significance_returns"]:
+                print(f"  For {lab}: from {ka:.3g}x on (same k for treatment and outcome) the worst-case CI{cls} "
+                      f"excludes zero on the side of the estimate, although the unadjusted CI does not, {why}; this "
+                      f"is a property of the worst-case bound, not evidence of an effect.")
             elif st == "not reached" and not np.isfinite(br["k_cap"]):
-                print(f"  No multiple of {lab} makes the estimate not significant: {lab} explains nothing of the "
+                print(f"  No multiple of {lab} makes the estimate not significant{cls}: {lab} explains nothing of the "
                       f"treatment or of the outcome (given the other covariates).")
             elif st == "not reached":
-                print(f"  No k below {br['k_cap']:.4g} makes the estimate not significant for {lab} " + (
+                print(f"  No k below {br['k_cap']:.4g} makes the estimate not significant{cls} for {lab} " + (
                       f"(at that k a confounder as strong as {lab} would explain all of the outcome; beyond it the CI "
                       f"of the bounds is not informative)." if br["k_cap_by"] == "outcome" else
                       "(the largest admissible k; a larger one is impossible)."))
