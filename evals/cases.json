@@ -214,6 +214,22 @@
         "Accepts the TWFE-with-controls estimate as causal without these checks.",
         "Recommends clustering by municipality when the law varies by state."
       ]
+    },
+    {
+      "id": "review-memo-mixed-se-sensitivity",
+      "language": "pt-BR",
+      "prompt": "Revise este trecho do memorando antes de eu mandar para a diretoria: \"O tempo de espera caiu 6,5 minutos com o novo sistema (IC 95% de 4,6 a 8,4 min, erros-padrão HC3, n = 480). A conclusão é robusta: um fator omitido precisaria ser 1,05 vez tão forte quanto a região para deixar o efeito não significativo e 1,28 vez para zerá-lo; o valor de robustez é 23% (30% para zerar). No modelo de double ML, um confundidor duas vezes tão forte quanto o porte da clínica mantém o efeito negativo.\" Rodei sensitivity e ovb_bounds no OLS com HC3 e dml_benchmark no DML.",
+      "must": [
+        "Points out that RV, the 1.05x / 1.28x thresholds and the ovb_bounds lines use the classical SE while the CI is HC3, and asks for each number in the memo to carry its SE label, with one line on why they differ (interpretation-rules v2.6.2).",
+        "Says that 1.05x and 1.28x are worst cases under a confounder orthogonal to the covariates, not likely values, and that 'robust' needs that qualification.",
+        "For the DML sentence, asks how 'twice as strong' was computed and points to causal.dml_bounds (gains scaled by k, the rho used stated), not cf_y and cf_d multiplied by hand.",
+        "Rewrites the passage (or gives the corrected sentences) with the labels and the worst-case wording."
+      ],
+      "must_not": [
+        "Approves the passage as it is.",
+        "Recomputes the thresholds with the HC3 SE by hand or presents HC3-based bounds from formulas written in the answer.",
+        "Multiplies cf_y and cf_d by 2 in the answer's own code."
+      ]
     }
   ]
 }
