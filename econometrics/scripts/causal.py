@@ -269,6 +269,13 @@ def _dml_sens_rep(uy, vd, cf_y, cf_d, rho):
             "se_lo": np.sqrt(np.mean(psi_lo ** 2) / n), "se_hi": np.sqrt(np.mean(psi_hi ** 2) / n)}
 
 
+def _dml_pct(x: float, d: int) -> str:
+    """A share as dml_sensitivity prints it with d decimals: a positive share that would print as zero says so
+    ("< 0.01%"). Module-level since v2.6.1 so its thresholds are tested directly: with |rho| <= 1 they are out of
+    reach of real data (an RV below 0.005% that is significant needs n of the order of 1e9)."""
+    return f"< {10 ** -d:.{d}f}%" if 0 < x < 0.5 * 10 ** -(d + 2) else f"{x:.{d}%}"
+
+
 def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: float = 1.0,
                     alpha: float = ALPHA, q: float = 1.0, show: bool = True) -> dict:
     """Omitted-variable sensitivity for DML-PLR (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022,
@@ -280,7 +287,8 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
       cf_y = partial R^2 of A with the outcome residual, given D and X (share of the residual
              variance of Y that A would explain),
       cf_d = partial R^2 of A with the treatment residual, given X (1 - R^2 of alpha_s on alpha),
-      rho  = correlation of the two omitted pieces (1 = worst case, conservative).
+      rho  = correlation of the two omitted pieces, in [-1, 1] (1 = worst case, conservative; v2.6.1:
+             a value outside is a ValueError).
     Bounds [theta - B, theta + B] and confidence bounds that add sampling error (influence
     functions of theta and S, median over the sample splits of dml_plr). Robustness values:
     rv = strength (cf_y = cf_d) that drives theta to (1 - q) theta; rva = strength at which the
@@ -296,6 +304,9 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
         raise ValueError(f"rho must be finite (got {rho!r})" + (
             "; a benchmark with cf_y = 0 or cf_d = 0 has an undefined rho and is no reference (see the warning of "
             "dml_benchmark)" if np.isnan(rho) else ""))
+    if abs(rho) > 1:                          # v2.6.1: a correlation; |rho| > 1 printed bounds no confounder can reach
+        raise ValueError(f"rho is a correlation and must be in [-1, 1], got {rho!r} (rho = 1 is the worst case; "
+                         "dml_benchmark reports rho already clipped to [-1, 1])")
     if "residuals" not in res:
         raise ValueError("pass the dict returned by causal.dml_plr")
     z = stats.norm.ppf(1 - alpha / 2)
@@ -334,7 +345,7 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
            "bound_table": tab, "warnings": []}
     if show:
         one = _q_is_one(q)                        # q a rounding error from 1 reads as q = 1 (text only)
-        target = (1 - (1.0 if one else q)) * th   # 0.0 * th keeps the v2.5.2.1 bytes ("-0.0000" for th < 0)
+        target = 0.0 if one else (1 - q) * th   # v2.6.1: was 0.0 * th, printed "-0.0000" for th < 0
         level = f"{round(100 * (1 - alpha), 6):g}%"   # v2.5.3: was :.0f, which printed "100%" for alpha = 0.001
         print(f"\nDML-PLR sensitivity: theta = {th:.4f} (SE {res['se']:.4f}), S = {S:.4f}")
         print(f"  confounder with cf_y = {cf_y:.1%}, cf_d = {cf_d:.1%}, rho = {rho}: bias <= {B:.4f}")
@@ -342,8 +353,7 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
             print("  The bias bound is zero: a confounder with cf_y = 0, cf_d = 0 or rho = 0 changes nothing, so these "
                   "bounds say nothing about confounding (a benchmark with no strength is no reference).")
         print(f"  bounds [{lo:.4f}, {hi:.4f}]; {level} confidence bounds [{ci_lo:.4f}, {ci_hi:.4f}]")
-        def pct(x, d):                            # a positive share that would print as zero says so
-            return f"< {10 ** -d:.{d}f}%" if 0 < x < 0.5 * 10 ** -(d + 2) else f"{x:.{d}%}"
+        pct = _dml_pct
         if rv >= 1.0:                             # the ceiling of the search, cf up to 1 − 1e-9
             rv_txt = (f"RV = 100% (ceiling): no confounder with cf_y = cf_d short of 100% and rho = {rho} moves "
                       f"theta to {target:.4f}")
