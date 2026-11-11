@@ -6,7 +6,7 @@ Origin: the v2.6.1 validation on notebook 1 (a memo mixed the HC3 CI with classi
 reviewer A1 of v2.6.1 (k_needed can exceed k_cap: seed 29, x: 7965 > 7936), and the research of v2.6.2
 (claude/fonte-dml-benchmark-k.md in the dev repository): Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis (2022,
 Appendix F) and DoubleML 0.11.4 benchmark with *gains*, G = R/(1 - R), and scale them by k; dml_benchmark returned the
-partial R² R = G/(1 + G), which made "as strong as X" less conservative than the paper.
+partial R² R = G/(1 + G), smaller in each sample split, which made "as strong as X" less conservative than the paper.
 
 What is checked, each by a route other than the implementation's:
   1. ovb_bounds and sensitivity after a robust fit print one report sentence (label the classical-SE numbers, show
