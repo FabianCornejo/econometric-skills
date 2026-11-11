@@ -394,10 +394,21 @@ for name, res, tr_, benches, ks in cases + [("sim, alpha 0.001", M_SIM, "d", ["x
     est = out["estimate"]
     for ln, (_, r) in zip(lines, out["bounds"].iterrows()):
         good &= ln.startswith(r["bound_label"] + ":")
-        m = re.search(rf"CI \[{NUM}, {NUM}\], which (still excludes zero|includes zero)", ln)
+        m = re.search(rf"CI \[{NUM}, {NUM}\], which (still excludes zero|excludes zero \(the unadjusted CI did not\)|"
+                      rf"includes zero|excludes zero on the other side \(the sign would flip\))", ln)
+        if r["r2yz_dx_capped"]:
+            good &= m is None and "its CI is not informative" in ln
+            continue
         lo_, hi_ = float(m.group(1)), float(m.group(2))
         good &= rel(lo_, r["adjusted_lower_ci"]) < 1e-3 and rel(hi_, r["adjusted_upper_ci"]) < 1e-3
-        good &= (m.group(3) == "still excludes zero") == (lo_ > 0 or hi_ < 0)
+        same_side = (lo_ > 0 and est > 0) or (hi_ < 0 and est < 0)
+        other_side = (lo_ > 0 and est < 0) or (hi_ < 0 and est > 0)
+        tc0 = stats.t.ppf(1 - alpha / 2, res.df_resid)
+        orig_excl = abs(est) > tc0 * res.bse[tr_]
+        expect = ("includes zero" if not (same_side or other_side) else
+                  "excludes zero on the other side (the sign would flip)" if other_side else
+                  "still excludes zero" if orig_excl else "excludes zero (the unadjusted CI did not)")
+        good &= m.group(3) == expect
         a = float(re.search(rf"(?:to|, to) {NUM}(?: \(|;)", ln).group(1))
         good &= rel(a, r["adjusted_estimate"]) < 1e-3
         crossed = (a < 0) != (est < 0)
@@ -412,10 +423,10 @@ for name, res, tr_, benches, ks in cases + [("sim, alpha 0.001", M_SIM, "d", ["x
     check(f"text ({name}): each line restates its row (label, estimate, share, R², CI, verdict on zero)", good,
           f"{len(lines)} lines")
     check(f"text ({name}): the level is '{level} CI' (never '100%')",
-          txt.count(f"{level} CI") == len(out["bounds"]) and "100% CI" not in txt)
+          txt.count(f"{level} CI") == 1 + int((~out["bounds"]["r2yz_dx_capped"]).sum()) and "100% CI" not in txt)
     check(f"text ({name}): the caution (orthogonal confounder, worst case, explained variance) is printed once",
           txt.count("worst case for a confounder orthogonal to the covariates") == 1
-          and "not in coefficient size" in txt)
+          and "not in coefficient size" in txt and "can exceed k times the benchmark's" in txt)
     kn = re.findall(rf"A confounder {NUM}x as strong as (\S+) \(same k", txt)
     check(f"text ({name}): the k_needed lines restate benchmark_r2['k_needed']",
           len(kn) == len(out["benchmark_r2"]) and all(
@@ -423,8 +434,10 @@ for name, res, tr_, benches, ks in cases + [("sim, alpha 0.001", M_SIM, "d", ["x
 _, t_q, _ = run(sp.ovb_bounds, M_SIM, "d", "x_strong", kd=1, q=0.5, show=True)
 _, t_q1, _ = run(sp.ovb_bounds, M_SIM, "d", "x_strong", kd=1, q=1.0, show=True)
 check("k_needed text: q = 0.5 says 'reduce the estimate by 50% (to 0.5 times its value)'; q = 1 'bring the estimate "
-      "to zero'", "would reduce the estimate by 50% (to 0.5 times its value)" in t_q
-      and "would bring the estimate to zero" in t_q1 and "reduce the estimate by" not in t_q1)
+      "to zero'; both as a worst case ('could, in the worst case'), never 'would'",
+      "could, in the worst case, reduce the estimate by 50% (to 0.5 times its value)" in t_q
+      and "could, in the worst case, bring the estimate to zero" in t_q1 and "reduce the estimate by" not in t_q1
+      and "would bring" not in t_q1)
 _, t_kdky, _ = run(sp.ovb_bounds, M_SIM, "d", "x_weak", kd=[1, 3], ky=[2, 0.5], show=True)
 check("kd ≠ ky: label '1/2x x_weak' and the sentence names both multipliers",
       "1/2x x_weak: a confounder 1x as strong as x_weak in explaining d and 2x in explaining the outcome" in t_kdky
@@ -492,6 +505,159 @@ _, t_lone, _ = run(sp.sensitivity, lone, "d", show=True)
 check("sensitivity without covariates prints no pointer (there is nothing to benchmark)", "ovb_bounds" not in t_lone)
 check("sensitivity's docstring points to ovb_bounds and no longer sends to R", "ovb_bounds" in sp.sensitivity.__doc__
       and "sensemakr (R" not in sp.sensitivity.__doc__)
+
+
+# ------------------------------------------------------------------------------ 9. findings of the v2.6 review
+rg9 = np.random.default_rng(900)
+n9 = 600
+x9, w9 = rg9.normal(size=(2, n9))
+d9 = 0.5 * x9 + rg9.normal(size=n9)                          # true effect 0; design found by search (seed 900)
+null_df = pd.DataFrame({"y": 0.0 * d9 + 0.3 * x9 + 0.3 * w9 + rg9.normal(size=n9), "d": d9, "x": x9, "w": w9})
+m_null = smf.ols("y ~ d + x + w", null_df).fit()
+lo0, hi0 = m_null.conf_int().loc["d"]
+o9, t9, _ = run(sp.ovb_bounds, m_null, "d", "x", kd=[1, 2], show=True)
+crossed_rows = o9["bounds"][np.sign(o9["bounds"]["adjusted_estimate"]) != np.sign(o9["estimate"])]
+assert not o9["bounds"]["r2yz_dx_capped"].any()
+check("BLOCKER of round 1: original CI includes zero -> no line says 'still excludes zero'; a CI on the other side of "
+      "zero says so ('the sign would flip')",
+      lo0 < 0 < hi0 and "still excludes" not in t9 and len(crossed_rows) > 0
+      and all((v == "opposite sign") == (r_lo > 0 or r_hi < 0) for v, r_lo, r_hi in
+              zip(crossed_rows["ci_verdict"], crossed_rows["adjusted_lower_ci"], crossed_rows["adjusted_upper_ci"]))
+      and ("the sign would flip" in t9) == (crossed_rows["ci_verdict"] == "opposite sign").any(),
+      (round(lo0, 3), round(hi0, 3), list(o9["bounds"]["ci_verdict"])))
+# original CI includes zero, adjusted CI excludes it on the same side (the adjusted SE shrinks: large R² with Y, tiny
+# with D): the text must not say "still"
+osm, tsm, _ = run(sp.ovb_bounds, m_null, "d", "w", kd=0.001, ky=11, show=True)
+rsm = osm["bounds"].iloc[0]
+check("unadjusted CI includes zero, adjusted CI excludes it on the same side: 'excludes zero (the unadjusted CI did "
+      "not)', never 'still'", lo0 < 0 < hi0 and rsm["ci_verdict"] == "same sign" and not rsm["r2yz_dx_capped"]
+      and "excludes zero (the unadjusted CI did not)" in tsm and "still" not in tsm,
+      (rsm["adjusted_lower_ci"], rsm["adjusted_upper_ci"]))
+# a significant estimate whose bound crosses zero with a CI wholly on the other side
+o9b = sp.ovb_bounds(M_SIM, "d", "x_strong", kd=[1, 2, 3, 3.6])
+r36 = o9b["bounds"].iloc[3]
+_, t9b, _ = run(sp.ovb_bounds, M_SIM, "d", "x_strong", kd=[3.6], show=True)
+check("crossed and the CI wholly on the other side: verdict 'opposite sign', text 'on the other side', no 'still'",
+      r36["adjusted_lower_ci"] > 0 > o9b["estimate"] and r36["ci_verdict"] == "opposite sign"
+      and "excludes zero on the other side (the sign would flip)" in t9b and "still" not in t9b, r36["ci_verdict"])
+check("ci_verdict column: 'same sign' / 'includes zero' / 'opposite sign' as the CI and the estimate say (x_strong 1-3)",
+      list(o9b["bounds"]["ci_verdict"]) == ["same sign", "same sign", "includes zero", "opposite sign"],
+      list(o9b["bounds"]["ci_verdict"]))
+# capped rows: CI not informative, no verdict
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    oc = sp.ovb_bounds(M_SIM, "d", "x_strong", kd=1, ky=30)
+_, tc9, _ = run(sp.ovb_bounds, M_SIM, "d", "x_strong", kd=1, ky=30, show=True)
+check("capped row: ci_verdict 'not informative', the line says the CI is not informative and gives no verdict on zero",
+      oc["bounds"]["ci_verdict"].iloc[0] == "not informative" and "its CI is not informative" in tc9
+      and "excludes zero" not in tc9.split("\n  1/30x")[1].split("\n")[0]
+      and "includes zero" not in tc9.split("\n  1/30x")[1].split("\n")[0])
+# the header: "k times" given the other covariates; the printed R² given all of them can exceed k times
+br9 = o9b["benchmark_r2"].loc["x_strong"]
+r1 = o9b["bounds"].iloc[0]
+check("header is true of the numbers: at kd = 1 the printed R² with D exceeds the benchmark's (given all covariates), "
+      "and the header says it can", r1["r2dz_x"] > br9["r2dxj_x"] and "can exceed k times the benchmark's" in t9b,
+      (r1["r2dz_x"], br9["r2dxj_x"]))
+# default kd skips impossible values; explicit kd stops, naming the way out
+xs = np.random.default_rng(5).normal(size=400)
+dds = xs + 1.2 * np.random.default_rng(6).normal(size=400)
+ds = pd.DataFrame({"y": dds + xs + np.random.default_rng(7).normal(size=400), "d": dds, "x": xs,
+                   "z": np.random.default_rng(8).normal(size=400)})
+ms = smf.ols("y ~ d + x + z", ds).fit()
+od, td, wd = run(sp.ovb_bounds, ms, "d", ["x", "z"], show=True)
+kmx = od["benchmark_r2"].loc["x", "kd_max"]
+check("default kd = (1, 2, 3): the impossible kd of a strong benchmark are skipped with a warning, the other benchmark "
+      "keeps all three", 1 < kmx < 2 and list(od["bounds"].query("benchmark == 'x'")["kd"]) == [1.0]
+      and list(od["bounds"].query("benchmark == 'z'")["kd"]) == [1.0, 2.0, 3.0]
+      and any("skipped" in w and "x" in w for w in od["warnings"]) and "WARNING: x: kd = 2, 3 skipped" in td, kmx)
+e9 = raises(ValueError, sp.ovb_bounds, ms, "d", ["x", "z"], kd=[1, 2])
+check("explicit impossible kd stops the call and says how to go on", isinstance(e9, str) and "drop that benchmark" in e9
+      and "lower kd" in e9, e9)
+check("kd exactly at the largest admissible value is impossible (>=, as sensemakr's r2dz.x >= 1)",
+      raises(ValueError, sp.ovb_bounds, ms, "d", "x", kd=kmx))
+# rank-deficient design
+rd = SIM.assign(x3=2 * SIM.x_strong + SIM.x_weak)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")                 # statsmodels warns about the singular design when fitting it
+    m_rd = smf.ols("y ~ d + x_strong + x_weak + x3", rd).fit()
+check("a rank-deficient design is a ValueError (partial R² not defined), not minimum-norm numbers",
+      "full rank" in str(raises(ValueError, sp.ovb_bounds, m_rd, "d", "x3")))
+# grouping: interactions stay apart, whatever the formula's order; string categoricals; Treatment(reference)
+ga = sp.ovb_bounds(smf.ols("y ~ d + C(g)*x_weak", SIM).fit(), "d", "g", kd=1)["benchmark_r2"].loc["g", "terms"]
+gb = sp.ovb_bounds(smf.ols("y ~ d + x_weak*C(g)", SIM).fit(), "d", "g", kd=1)["benchmark_r2"].loc["g", "terms"]
+sa = sp.sensitivity(smf.ols("y ~ d + C(g)*x_weak", SIM).fit(), "d")["benchmarks"]
+sb_ = sp.sensitivity(smf.ols("y ~ d + x_weak*C(g)", SIM).fit(), "d")["benchmarks"]
+check("grouping: C(g)*x and x*C(g) give the same 3-dummy group (interactions apart, one regressor each), in "
+      "ovb_bounds and sensitivity, with the same joint R²",
+      ga == gb == ["C(g)[T.b]", "C(g)[T.c]", "C(g)[T.d]"] and "C(g) (3 dummies, jointly)" in sa.index
+      and "C(g) (3 dummies, jointly)" in sb_.index and len(sa) == len(sb_) == 5
+      and abs(sa["C(g) (3 dummies, jointly)"] - sb_["C(g) (3 dummies, jointly)"]) < 1e-12, (ga, list(sa.index)))
+m_str = smf.ols("y ~ d + x_strong + x_weak + g", SIM).fit()
+gs = sp.ovb_bounds(m_str, "d", "g", kd=[1, 2])
+check("a string categorical without C() (g[T.b]) groups the same way and gives the same bounds as C(g)",
+      gs["benchmark_r2"].loc["g", "terms"] == ["g[T.b]", "g[T.c]", "g[T.d]"]
+      and np.allclose(num(gs), num(g1), rtol=1e-10)
+      and "g (3 dummies, jointly)" in sp.sensitivity(m_str, "d")["benchmarks"].index)
+m_ref = smf.ols("y ~ d + x_strong + x_weak + C(g, Treatment(reference='c'))", SIM).fit()
+gr = sp.ovb_bounds(m_ref, "d", "g", kd=[1, 2])
+check("C(g, Treatment(reference='c')) is reachable as 'g', and the group's R² does not depend on the reference level",
+      len(gr["benchmark_r2"].loc["g", "terms"]) == 3 and np.allclose(num(gr), num(g1), rtol=1e-9))
+mix = sp.ovb_bounds(M_SIM, "d", ["x_weak", {"G": "C(g)"}, {"both": ["x_weak", "g"]}], kd=1)
+check("benchmarks: a list mixing names and dicts; a dict value may be a categorical's name",
+      list(mix["benchmark_r2"].index) == ["x_weak", "G", "both"]
+      and mix["benchmark_r2"].loc["G", "terms"] == ["C(g)[T.b]", "C(g)[T.c]", "C(g)[T.d]"]
+      and len(mix["benchmark_r2"].loc["both", "terms"]) == 4)
+# k_needed: a small but real R² gives a finite k; tiny roots are not returned as 0
+k_small = sp._k_needed(1e-8, 1e-8, -0.33, 0.037, 793, 1.0)
+k_tiny = sp._k_needed(0.2, 0.2, 1e-9, 0.037, 793, 1.0)
+check("k_needed: R² = 1e-8 (real, above the zero threshold) gives a finite k; a tiny target gives a tiny k > 0",
+      np.isfinite(k_small) and k_small > 0 and 0 < k_tiny < 1e-6, (k_small, k_tiny))
+# explains nothing of only one side: the sentence names the right side
+basis = np.column_stack([np.ones(len(SIM)), SIM.d, SIM.x_strong])
+only_y = resid(SIM.y.to_numpy(), basis)                       # orthogonal to d (and x): R²_D = 0, R²_Y > 0
+e_ = resid(np.random.default_rng(11).normal(size=len(SIM)), np.column_stack([basis, SIM.y]))
+dt_ = resid(SIM.d.to_numpy(), np.column_stack([np.ones(len(SIM)), SIM.x_strong]))
+only_d = dt_ / np.linalg.norm(dt_) + e_ / np.linalg.norm(e_)  # R²_D > 0; given d and x, only e_, which is ⊥ y
+side_df = SIM.assign(only_y=only_y, only_d=only_d)
+_, t_oy, _ = run(sp.ovb_bounds, smf.ols("y ~ d + x_strong + only_y", side_df).fit(), "d", "only_y", kd=1, show=True)
+_, t_od, _ = run(sp.ovb_bounds, smf.ols("y ~ d + x_strong + only_d", side_df).fit(), "d", "only_d", kd=0.5, show=True)
+check("'explains nothing of the treatment' / '… of the outcome' name the side that is zero",
+      "only_y explains nothing of the treatment" in t_oy and "only_d explains nothing of the outcome" in t_od,
+      (t_oy[-200:], t_od[-200:]))
+# kd one number with ky a list; labels rounded to 2 decimals as sensemakr's label_maker
+bc = sp.ovb_bounds(M_SIM, "d", "x_weak", kd=1, ky=[1, 2, 3])["bounds"]
+check("kd one number pairs with every ky", list(bc["kd"]) == [1.0, 1.0, 1.0] and list(bc["ky"]) == [1.0, 2.0, 3.0]
+      and list(bc["bound_label"]) == ["1x x_weak", "1/2x x_weak", "1/3x x_weak"])
+check("labels round k to 2 decimals (sensemakr's label_maker)",
+      sp.ovb_bounds(M_SIM, "d", "x_weak", kd=1.234)["bounds"]["bound_label"].iloc[0] == "1.23x x_weak")
+# an estimate of exactly 0 counts as positive (sensemakr: ifelse(estimate < 0, -1, 1)); zero-bias and tiny shares
+a0, _, _ = sp._ovb_adjust(0.0, 0.05, 100, 0.1, 0.1)
+check("estimate exactly 0: the bias is subtracted (adjusted < 0), as in sensemakr", float(a0) < 0, a0)
+_, t_nb, _ = run(sp.ovb_bounds, m_orth, "d", "orth", kd=1, show=True)
+check("a benchmark that explains nothing: the line says the estimate is left where it is (no bias), not 'toward zero'",
+      "(no bias)" in t_nb and "toward zero" not in t_nb)
+check("shares never print as a misleading 0% or 100%", sp._share_pct(0.001) == "less than 1%"
+      and sp._share_pct(0.999) == "more than 99%" and sp._share_pct(0.54) == "54%")
+_, t_al, _ = run(sp.ovb_bounds, M_SIM, "d", "x_weak", kd=1, alpha=1e-9, show=True)
+check("alpha = 1e-9: the level is not printed as 100%", "100% CI" not in t_al and "99.9999999% CI" in t_al)
+# treatment in an interaction; intercept as treatment
+oi, ti, wi = run(sp.ovb_bounds, smf.ols("y ~ d*x_weak + x_strong", SIM).fit(), "d", "x_strong", kd=1)
+check("treatment also in an interaction: warned (bounds are for its coefficient alone)",
+      any("interaction" in w for w in oi["warnings"]) and any("interaction" in w for w in wi))
+check("the intercept as treatment is a ValueError", raises(ValueError, sp.ovb_bounds, M_SIM, "Intercept", "x_weak"))
+# robust fit whose SE is not finite (as statsmodels gives with HC3 and observations of leverage 1, e.g. the singleton
+# villages of Darfur): a stand-in result with the same model and an infinite robust SE, so the branch is exercised
+class _InfRobust:
+    model, cov_type = M_SIM.model, "HC3"
+    params = M_SIM.params
+    bse = M_SIM.bse.mul(np.inf)
+    tvalues = M_SIM.params / bse
+
+
+_, t_inf, _ = run(sp.ovb_bounds, _InfRobust(), "d", "x_weak", kd=1, show=True)
+_, t_fin, _ = run(sp.ovb_bounds, smf.ols(F_SIM, SIM).fit(cov_type="HC3"), "d", "x_weak", kd=1, show=True)
+check("robust fit with a non-finite SE: the line says its t is not usable (not 't = 0.00'); a finite one prints its t",
+      "not usable" in t_inf and "t = 0.00" not in t_inf and "HC3 fit gives t =" in t_fin and "not usable" not in t_fin)
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

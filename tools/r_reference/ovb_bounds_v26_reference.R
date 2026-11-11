@@ -1,7 +1,7 @@
 # Reference numbers for specification.ovb_bounds (v2.6), from R's sensemakr (Cinelli and Hazlett 2020).
 #
-# Runs once, on a machine with R; the numbers it writes are fixed in tests/test_v26.py with this file as their
-# origin. Two parts:
+# Runs once, on a machine with R; tests/test_v26.py reads the .json it writes (committed in output/, with the .txt
+# that records the R and sensemakr versions; the test checks that the version is 0.1.6). Two parts:
 #   1. Darfur, the package's own example (data shipped with sensemakr). The data are NOT written out: sensemakr is
 #      GPL-3 and this repository is MIT, so only summary statistics and the bounds go to the output (the Python
 #      test feeds those statistics through the numeric core of ovb_bounds).
