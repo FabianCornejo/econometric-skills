@@ -92,7 +92,7 @@ Use it when there are many controls or nonlinear confounding. It does **not** so
 
 ### 4.1 Sensitivity to omitted confounders
 
-DML removes functional-form bias, not omitted-variable bias. `dml_sensitivity(res, cf_y, cf_d, rho=1)` (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022, "Long Story Short") bounds what a latent confounder A would do:
+DML removes functional-form bias, not omitted-variable bias. `dml_sensitivity(res, cf_y, cf_d, rho=1)` (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022, "Long Story Short"; `rho` is a correlation in [−1, 1], anything else is a `ValueError` since v2.6.1) bounds what a latent confounder A would do:
 
 |θ_short − θ_long| ≤ |ρ| · S · √(cf_y · cf_d / (1 − cf_d)),  S² = E[(Y − θD − ℓ(X))²] · E[α²],  α = (D − m(X)) / E[(D − m(X))²]
 

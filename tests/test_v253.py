@@ -160,9 +160,13 @@ check("numbers: sensitivity on an insignificant estimate unchanged (q = 0.5, 1, 
               for q in (0.5, 1.0, 2.0) for o in [sp.sensitivity(R_INS, "d", q=q)]))
 
 # --- 2. q = 1, significant: DML text byte-identical to 7c25644 ------------------------------------------
+# v2.6.1 (decision 2 of the user): the q = 1 target prints "0.0000" for theta < 0 (D3), not "-0.0000"; that one
+# substitution is the only change allowed, so the rest of the text is still byte-identical to v2.5.2.1
 for nm in ("D1", "D3"):
     _, txt, _ = run(causal.dml_sensitivity, RES[nm], show=True)
-    check(f"text: dml_sensitivity {nm}, q = 1, significant, byte-identical to v2.5.2.1", txt == REF["texts"][nm],
+    ref_ = REF["texts"][nm].replace("theta to -0.0000", "theta to 0.0000")
+    check(f"text: dml_sensitivity {nm}, q = 1, significant, byte-identical to v2.5.2.1 (D3: '-0.0000' -> '0.0000' "
+          f"only, v2.6.1)", txt == ref_ and (nm == "D1") == (ref_ == REF["texts"][nm]),
           "" if txt == REF["texts"][nm] else repr(txt))
 
 # --- 3. the sentences state the definitions --------------------------------------------------------------
@@ -376,17 +380,17 @@ for bad_rho in (float("nan"), float("inf"), -float("inf")):
     except ValueError as e:
         a3 = bool("rho" in str(e) and "finite" in str(e)) and (("benchmark" in str(e)) == bool(np.isnan(bad_rho)))
     check(f"A3: rho = {bad_rho} is a ValueError naming rho (the benchmark hint only for nan)", a3 is True, str(a3))
-# DML strengths that would print as zero: a large rho (accepted; |rho| > 1 is not validated) makes RV tiny
-o, txt, _ = run(causal.dml_sensitivity, res1, rho=30000.0, show=True)
-check("DML: 0 < RV, RVa < 0.005% print '< 0.01%' and 'explaining < 0.1%', never 0.00%",
-      0 < o["rva"] <= o["rv"] < 5e-5 and rv_line(txt).startswith("  RV = < 0.01%: a confounder explaining < 0.1% ")
-      and "RVa = < 0.01% makes it no longer significant." in rv_line(txt) and "0.00%" not in txt, rv_line(txt))
-o, txt, _ = run(causal.dml_sensitivity, res1, rho=6000.0, show=True)
-check("DML: the '< 0.01%' threshold is 0.005%: RV in [0.005%, 0.01%) prints 'RV = 0.01%', not '< 0.01%'",
-      5e-5 <= o["rv"] < 1e-4 and rv_line(txt).startswith("  RV = 0.01%: "), f"{o['rv']:.2e} {rv_line(txt)[:40]}")
-o, txt, _ = run(causal.dml_sensitivity, res1, rho=3000.0, show=True)
-check("DML: 0.005% <= RV < 0.05%: 'RV = 0.0x%' with 'explaining < 0.1%' (not 'explaining 0.0%')",
-      5e-5 <= o["rv"] < 5e-4 and "explaining < 0.1%" in rv_line(txt) and "explaining 0.0%" not in txt, rv_line(txt))
+# DML strengths that would print as zero: until v2.6.1 a large rho (30000, 6000, 3000) reached the "< 0.01%" branches
+# end to end. rho is a correlation and |rho| > 1 is now refused, which makes those branches unreachable with real data
+# (a significant RV below 0.005% needs n of the order of 1e9); the formatter's thresholds are tested directly on
+# causal._dml_pct in test_v261.py, and here the old inputs must be refused.
+for big in (30000.0, 6000.0, 3000.0):
+    try:
+        causal.dml_sensitivity(res1, rho=big, show=False)
+        e_ = "accepted"
+    except ValueError as ex:
+        e_ = str(ex)
+    check(f"DML: rho = {big:g} (the old way to reach '< 0.01%') is refused since v2.6.1", "[-1, 1]" in e_, e_)
 # A5: alpha set at the p-value (the reported CI ends at 0 up to rounding): RVa = 0 never prints as a strength
 bad = []
 for s_ in range(100, 130):
