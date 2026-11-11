@@ -138,9 +138,15 @@ for nm in NREP:
           str(bad[:5]))
     bm, _, _ = run(causal.dml_benchmark, DF[nm], "y", "d", X, ["x1", "junk"], res=RES[nm], n_rep=NREP[nm], **LIN)
     rb = REF["dml_bench"][nm]
-    check(f"numbers: dml_benchmark {nm} unchanged",
-          all(close(None if not np.isfinite(bm.loc[b, c]) else float(bm.loc[b, c]), rb[b][c])
-              for b in rb for c in rb[b]))
+    # v2.6.2: cf_y and cf_d became the paper's gains; the partial R² this check fixed are now r2_y and r2_d, and the
+    # check still proves that no number moved under its new name (rho, theta_without, delta_theta unchanged)
+    old_name = {"cf_y": "r2_y", "cf_d": "r2_d"}
+    check(f"numbers: dml_benchmark {nm} unchanged (old cf_y, cf_d as r2_y, r2_d since v2.6.2)",
+          all(close(None if not np.isfinite(bm.loc[b, old_name.get(c, c)]) else float(bm.loc[b, old_name.get(c, c)]),
+                    rb[b][c]) for b in rb for c in rb[b]))
+    check(f"numbers: dml_benchmark {nm}, cf_y and cf_d = min(R/(1 - R), 1) of the reference partial R² (v2.6.2)",
+          all(abs(bm.loc[b, c] - min(rb[b][c] / (1 - rb[b][c]), 1.0)) < 1e-9 * max(1.0, bm.loc[b, c])
+              for b in rb for c in ("cf_y", "cf_d")))
 for key, ref in REF["oster"].items():
     nm, delta = key.split("|")
     o, _, _ = run(sp.oster, *oster_design(nm), "x", delta=float(delta))
