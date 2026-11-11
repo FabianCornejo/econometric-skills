@@ -429,7 +429,9 @@ for name, res, tr_, benches, ks in cases + [("sim, alpha 0.001", M_SIM, "d", ["x
     check(f"text ({name}): the caution (orthogonal confounder, worst case, explained variance) is printed once",
           txt.count("worst case for a confounder orthogonal to the covariates") == 1
           and "not in coefficient size" in txt and "can exceed k times the benchmark's" in txt)
-    kn = re.findall(rf"A confounder {NUM}x as strong as (\S+) \(same k", txt)
+    # v2.6.1: the k_not_significant sentence starts the same way; this check is about the k_needed sentence only
+    kn = re.findall(rf"A confounder {NUM}x as strong as (\S+) \(same k for treatment and outcome\) could, in the "
+                    rf"worst case, (?:bring|reduce)", txt)
     check(f"text ({name}): the k_needed lines restate benchmark_r2['k_needed']",
           len(kn) == len(out["benchmark_r2"]) and all(
               rel(float(k), out["benchmark_r2"].loc[lab, "k_needed"]) < 5e-3 for k, lab in kn), kn)
