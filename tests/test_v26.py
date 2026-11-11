@@ -397,25 +397,27 @@ for name, res, tr_, benches, ks in cases + [("sim, alpha 0.001", M_SIM, "d", ["x
         m = re.search(rf"CI \[{NUM}, {NUM}\], which (still excludes zero|excludes zero \(the unadjusted CI did not\)|"
                       rf"includes zero|excludes zero on the other side \(the sign would flip\))", ln)
         if r["r2yz_dx_capped"]:
-            good &= m is None and "its CI is not informative" in ln
-            continue
-        lo_, hi_ = float(m.group(1)), float(m.group(2))
-        good &= rel(lo_, r["adjusted_lower_ci"]) < 1e-3 and rel(hi_, r["adjusted_upper_ci"]) < 1e-3
-        same_side = (lo_ > 0 and est > 0) or (hi_ < 0 and est < 0)
-        other_side = (lo_ > 0 and est < 0) or (hi_ < 0 and est > 0)
-        tc0 = stats.t.ppf(1 - alpha / 2, res.df_resid)
-        orig_excl = abs(est) > tc0 * res.bse[tr_]
-        expect = ("includes zero" if not (same_side or other_side) else
-                  "excludes zero on the other side (the sign would flip)" if other_side else
-                  "still excludes zero" if orig_excl else "excludes zero (the unadjusted CI did not)")
-        good &= m.group(3) == expect
+            good &= m is None and "its CI is not informative" in ln and "capped at 100%" in ln
+        else:
+            lo_, hi_ = float(m.group(1)), float(m.group(2))
+            good &= rel(lo_, r["adjusted_lower_ci"]) < 1e-3 and rel(hi_, r["adjusted_upper_ci"]) < 1e-3
+            same_side = (lo_ > 0 and est > 0) or (hi_ < 0 and est < 0)
+            other_side = (lo_ > 0 and est < 0) or (hi_ < 0 and est > 0)
+            tc0 = stats.t.ppf(1 - alpha / 2, res.df_resid)
+            orig_excl = abs(est) > tc0 * res.bse[tr_]
+            expect = ("includes zero" if not (same_side or other_side) else
+                      "excludes zero on the other side (the sign would flip)" if other_side else
+                      "still excludes zero" if orig_excl else "excludes zero (the unadjusted CI did not)")
+            good &= m.group(3) == expect
         a = float(re.search(rf"(?:to|, to) {NUM}(?: \(|;)", ln).group(1))
         good &= rel(a, r["adjusted_estimate"]) < 1e-3
         crossed = (a < 0) != (est < 0)
         good &= ("past zero" in ln) == crossed and ("toward zero" in ln) == (not crossed)
         if not crossed:
-            share = float(re.search(r"\((\d+)% of it\)", ln).group(1))
-            good &= abs(share - 100 * a / est) <= 0.5 + 1e-9
+            sh = re.search(r"\((less than 1|more than 99|\d+)% of it\)", ln).group(1)
+            v = 100 * r["adjusted_estimate"] / est
+            good &= (0 < v < 0.5 if sh == "less than 1" else 99.5 <= v < 100 if sh == "more than 99"
+                     else abs(float(sh) - v) <= 0.5 + 1e-9)
         pr = re.search(rf"partial R² up to {NUM}% with {tr_} and {NUM}% with the outcome", ln)
         good &= abs(float(pr.group(1)) - 100 * r["r2dz_x"]) <= 0.05 + 1e-9
         good &= abs(float(pr.group(2)) - 100 * r["r2yz_dx"]) <= 0.05 + 1e-9
@@ -548,8 +550,10 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     oc = sp.ovb_bounds(M_SIM, "d", "x_strong", kd=1, ky=30)
 _, tc9, _ = run(sp.ovb_bounds, M_SIM, "d", "x_strong", kd=1, ky=30, show=True)
-check("capped row: ci_verdict 'not informative', the line says the CI is not informative and gives no verdict on zero",
-      oc["bounds"]["ci_verdict"].iloc[0] == "not informative" and "its CI is not informative" in tc9
+check("capped row: ci_verdict 'not informative', ci_excludes_zero False, the line says the CI is not informative and "
+      "gives no verdict on zero",
+      oc["bounds"]["ci_verdict"].iloc[0] == "not informative" and not oc["bounds"]["ci_excludes_zero"].iloc[0]
+      and "its CI is not informative" in tc9
       and "excludes zero" not in tc9.split("\n  1/30x")[1].split("\n")[0]
       and "includes zero" not in tc9.split("\n  1/30x")[1].split("\n")[0])
 # the header: "k times" given the other covariates; the printed R² given all of them can exceed k times
@@ -587,11 +591,20 @@ ga = sp.ovb_bounds(smf.ols("y ~ d + C(g)*x_weak", SIM).fit(), "d", "g", kd=1)["b
 gb = sp.ovb_bounds(smf.ols("y ~ d + x_weak*C(g)", SIM).fit(), "d", "g", kd=1)["benchmark_r2"].loc["g", "terms"]
 sa = sp.sensitivity(smf.ols("y ~ d + C(g)*x_weak", SIM).fit(), "d")["benchmarks"]
 sb_ = sp.sensitivity(smf.ols("y ~ d + x_weak*C(g)", SIM).fit(), "d")["benchmarks"]
-check("grouping: C(g)*x and x*C(g) give the same 3-dummy group (interactions apart, one regressor each), in "
-      "ovb_bounds and sensitivity, with the same joint R²",
+ia = [k for k in sa.index if ":" in k]
+ib = [k for k in sb_.index if ":" in k]
+check("grouping: C(g)*x and x*C(g) give the same 3-dummy group of C(g) and one 3-dummy group for the interaction term "
+      "(same joint R² in both orders), in ovb_bounds and sensitivity",
       ga == gb == ["C(g)[T.b]", "C(g)[T.c]", "C(g)[T.d]"] and "C(g) (3 dummies, jointly)" in sa.index
-      and "C(g) (3 dummies, jointly)" in sb_.index and len(sa) == len(sb_) == 5
-      and abs(sa["C(g) (3 dummies, jointly)"] - sb_["C(g) (3 dummies, jointly)"]) < 1e-12, (ga, list(sa.index)))
+      and "C(g) (3 dummies, jointly)" in sb_.index and len(sa) == len(sb_) == 3
+      and ia == ["C(g):x_weak (3 dummies, jointly)"] and ib == ["x_weak:C(g) (3 dummies, jointly)"]
+      and abs(sa[ia[0]] - sb_[ib[0]]) < 1e-10
+      and abs(sa["C(g) (3 dummies, jointly)"] - sb_["C(g) (3 dummies, jointly)"]) < 1e-12, (list(sa.index), list(sb_.index)))
+m_int_c = smf.ols("y ~ d + x_weak*C(g, Treatment(reference='c'))", SIM).fit()
+s_int_c = sp.sensitivity(m_int_c, "d")["benchmarks"]
+ic = [k for k in s_int_c.index if ":" in k]
+check("the interaction group's joint R² does not depend on the reference level of the categorical",
+      len(ic) == 1 and abs(s_int_c[ic[0]] - sb_[ib[0]]) < 1e-10, (ic, list(s_int_c.index)))
 m_str = smf.ols("y ~ d + x_strong + x_weak + g", SIM).fit()
 gs = sp.ovb_bounds(m_str, "d", "g", kd=[1, 2])
 check("a string categorical without C() (g[T.b]) groups the same way and gives the same bounds as C(g)",
@@ -609,9 +622,19 @@ check("benchmarks: a list mixing names and dicts; a dict value may be a categori
       and len(mix["benchmark_r2"].loc["both", "terms"]) == 4)
 # k_needed: a small but real R² gives a finite k; tiny roots are not returned as 0
 k_small = sp._k_needed(1e-8, 1e-8, -0.33, 0.037, 793, 1.0)
-k_tiny = sp._k_needed(0.2, 0.2, 1e-9, 0.037, 793, 1.0)
-check("k_needed: R² = 1e-8 (real, above the zero threshold) gives a finite k; a tiny target gives a tiny k > 0",
-      np.isfinite(k_small) and k_small > 0 and 0 < k_tiny < 1e-6, (k_small, k_tiny))
+k_tiny = sp._k_needed(0.2, 0.2, 1e-18, 0.037, 793, 1.0)
+check("k_needed: R² = 1e-8 (real, above the zero threshold) gives a finite k; a target of 1e-18 gives a tiny k > 0 "
+      "(an absolute xtol of 1e-14 returned 0)", np.isfinite(k_small) and k_small > 0 and 0 < k_tiny < 1e-15,
+      (k_small, k_tiny))
+check("the R²-zero threshold (64 eps ≈ 1.4e-14) on both sides: R² = 3e-14 gives a finite k, 1e-14 gives inf",
+      np.isfinite(sp._k_needed(3e-14, 0.5, 1e-12, 0.037, 793, 1.0))
+      and np.isinf(sp._k_needed(1e-14, 0.5, 1e-12, 0.037, 793, 1.0)))
+check("k_needed: a target reachable only at kd_max in floating point (estimate 1e12, SE 0.037) gives inf, never "
+      "kd_max itself; 1e6 is still reachable just below kd_max",
+      np.isinf(sp._k_needed(0.2, 0.2, 1e12, 0.037, 793, 1.0))
+      and 3.99 < sp._k_needed(0.2, 0.2, 1e6, 0.037, 793, 1.0) < sp._kd_max(0.2))
+check("k_needed: q = 1e-300 converges (more iterations) and lands near 0",
+      0 <= sp._k_needed(0.2, 0.2, -0.33, 0.037, 793, 1e-300) < 1e-100)
 # explains nothing of only one side: the sentence names the right side
 basis = np.column_stack([np.ones(len(SIM)), SIM.d, SIM.x_strong])
 only_y = resid(SIM.y.to_numpy(), basis)                       # orthogonal to d (and x): R²_D = 0, R²_Y > 0
@@ -636,8 +659,10 @@ check("estimate exactly 0: the bias is subtracted (adjusted < 0), as in sensemak
 _, t_nb, _ = run(sp.ovb_bounds, m_orth, "d", "orth", kd=1, show=True)
 check("a benchmark that explains nothing: the line says the estimate is left where it is (no bias), not 'toward zero'",
       "(no bias)" in t_nb and "toward zero" not in t_nb)
-check("shares never print as a misleading 0% or 100%", sp._share_pct(0.001) == "less than 1%"
-      and sp._share_pct(0.999) == "more than 99%" and sp._share_pct(0.54) == "54%")
+check("shares never print as a misleading 0% or 100%, each threshold on both sides", sp._share_pct(0.001) == "less than 1%"
+      and sp._share_pct(0.0049) == "less than 1%" and sp._share_pct(0.0051) == "1%"
+      and sp._share_pct(0.9949) == "99%" and sp._share_pct(0.9951) == "more than 99%"
+      and sp._share_pct(0.999) == "more than 99%" and sp._share_pct(0.54) == "54%" and sp._share_pct(1.0) == "100%")
 _, t_al, _ = run(sp.ovb_bounds, M_SIM, "d", "x_weak", kd=1, alpha=1e-9, show=True)
 check("alpha = 1e-9: the level is not printed as 100%", "100% CI" not in t_al and "99.9999999% CI" in t_al)
 # treatment in an interaction; intercept as treatment
@@ -658,6 +683,54 @@ _, t_inf, _ = run(sp.ovb_bounds, _InfRobust(), "d", "x_weak", kd=1, show=True)
 _, t_fin, _ = run(sp.ovb_bounds, smf.ols(F_SIM, SIM).fit(cov_type="HC3"), "d", "x_weak", kd=1, show=True)
 check("robust fit with a non-finite SE: the line says its t is not usable (not 't = 0.00'); a finite one prints its t",
       "not usable" in t_inf and "t = 0.00" not in t_inf and "HC3 fit gives t =" in t_fin and "not usable" not in t_fin)
+
+# ------------------------------------------------------------------------------ 10. findings of review round 2
+# a regressor in units of 1e12 is not collinear (rank on the column-scaled design)
+big = SIM.assign(big=(SIM.x_weak + 5) * 1e12)
+check("full rank judged on scaled columns: a regressor in units of 1e12 runs (as statsmodels fits it)",
+      raises(ValueError, sp.ovb_bounds, smf.ols("y ~ d + x_strong + big", big).fit(), "d", "x_strong", kd=1) is False)
+# a benchmark with no admissible default k: one printed line says so
+xa = np.random.default_rng(3).normal(size=300)
+da = xa + 0.3 * np.random.default_rng(4).normal(size=300)
+dfa = pd.DataFrame({"y": da + xa + np.random.default_rng(5).normal(size=300), "d": da, "x": xa,
+                    "z": np.random.default_rng(6).normal(size=300)})
+oa, ta, _ = run(sp.ovb_bounds, smf.ols("y ~ d + x + z", dfa).fit(), "d", ["x", "z"], show=True)
+check("default kd with every k impossible for a benchmark: no row for it, and a line says why and what to pass",
+      not (oa["bounds"]["benchmark"] == "x").any() and (oa["bounds"]["benchmark"] == "z").sum() == 3
+      and "x: no line, because no default k (1, 2, 3) is admissible" in ta and "pass a smaller kd" in ta)
+check("alpha below 1e-12 is a ValueError (the CI would print as 100% or infinite)",
+      raises(ValueError, sp.ovb_bounds, M_SIM, "d", "x_weak", kd=1, alpha=1e-13)
+      and raises(ValueError, sp.ovb_bounds, M_SIM, "d", "x_weak", kd=1, alpha=2e-16))
+check("df_resid = 1 is a ValueError, not a ZeroDivisionError",
+      "degrees of freedom" in str(raises(ValueError, sp.ovb_bounds, smf.ols("y ~ d + x_strong + x_weak", SIM.iloc[:5]).fit(),
+                                         "d", "x_strong", kd=0.1)))
+dup = sp.ovb_bounds(M_SIM, "d", {"both": ["x_weak", "x_weak", "g", "C(g)[T.b]"]}, kd=1)
+check("a term listed twice in a group counts once (it made the Wald matrix singular)",
+      dup["benchmark_r2"].loc["both", "terms"] == ["x_weak", "C(g)[T.b]", "C(g)[T.c]", "C(g)[T.d]"])
+check("a nested list is a TypeError that shows the dict to write", "label" in str(
+      raises(TypeError, sp.ovb_bounds, M_SIM, "d", [["x_weak", "x_strong"]], kd=1)))
+cg_plain = sp.ovb_bounds(m_str, "d", "C(g)", kd=[1, 2])
+cg_ref = sp.ovb_bounds(m_ref, "d", "C(g)", kd=[1, 2])
+check("'C(g)' also reaches a string factor g[T.b] and C(g, Treatment('c')), with the same bounds as 'g'",
+      np.allclose(num(cg_plain), num(g1), rtol=1e-10) and np.allclose(num(cg_ref), num(g1), rtol=1e-9))
+# an estimate of exactly 0 (a stand-in result: the same model, the treatment's coefficient set to 0)
+
+
+class _ZeroEst:
+    model, cov_type, df_resid = M_SIM.model, "nonrobust", M_SIM.df_resid
+    params = M_SIM.params.copy()
+    params["d"] = 0.0
+    bse = M_SIM.bse
+    tvalues = params / bse
+
+    def cov_params(self):
+        return M_SIM.cov_params()
+
+
+oz, tz, _ = run(sp.ovb_bounds, _ZeroEst(), "d", "x_weak", kd=1, show=True)
+check("estimate exactly 0: 'from 0 to …' (bias subtracted, as sensemakr), k_needed 0 and its sentence",
+      "could move the estimate from 0 to -" in tz and oz["benchmark_r2"].loc["x_weak", "k_needed"] == 0
+      and "The estimate is exactly 0: no confounder is needed" in tz)
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

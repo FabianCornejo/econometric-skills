@@ -625,15 +625,19 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
 
 def _covariate_groups(base, treatment: str) -> dict[str, list[str]]:
     """Regressors other than the intercept and the treatment, the dummies of one categorical grouped under its name
-    ("C(g)" for C(g)[T.b], "C(g, Treatment('c'))" for its dummies, "g" for g[T.b]). Interactions (names with ":")
-    stay one regressor each: until v2.6 "C(g)[T.b]:x1" joined the C(g) group when C(g) came first in the formula,
-    so the group depended on the formula's order (review of v2.6). Shared by sensitivity and ovb_bounds."""
+    ("C(g)" for C(g)[T.b], "C(g, Treatment('c'))" for its dummies, "g" for g[T.b]), and the dummies of one
+    interaction term grouped under the term ("C(g):x1" for C(g)[T.b]:x1, C(g)[T.c]:x1, …), so a joint R² never
+    depends on the reference level. Until v2.6 "C(g)[T.b]:x1" joined the C(g) group when C(g) came first in the
+    formula but formed its own "x1:C(g)" group the other way round (review of v2.6). Shared by sensitivity and
+    ovb_bounds."""
+    def factor(part):
+        m = re.match(r"^(C\(.*\))\[[^\[\]]*\]$", part) or re.match(r"^(.+?)\[T\.[^\[\]]*\]$", part)
+        return m.group(1) if m else part
     groups: dict[str, list[str]] = {}
     for c in base.params.index:
         if c in _INTERCEPT or c == treatment:
             continue
-        m = None if ":" in c else (re.match(r"^(C\(.*\))\[", c) or re.match(r"^(.+?)\[T\.", c))
-        groups.setdefault(m.group(1) if m else c, []).append(c)
+        groups.setdefault(":".join(factor(p) for p in c.split(":")), []).append(c)
     return groups
 
 
@@ -722,7 +726,7 @@ def _k_needed(r2dxj: float, r2yxj: float, est: float, se: float, df: float, q) -
         if nxt >= hi or nxt == top:
             return np.inf                         # not reachable below kd_max in floating point
         top = nxt
-    return float(brentq(gap, 0.0, top, xtol=np.finfo(float).tiny, rtol=4 * np.finfo(float).eps, maxiter=500))
+    return float(brentq(gap, 0.0, top, xtol=np.finfo(float).tiny, rtol=4 * np.finfo(float).eps, maxiter=5000))
 
 
 def _level_pct(alpha: float) -> str:
@@ -756,8 +760,8 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
     kd, ky      how many times the benchmark's explained variance of the treatment (kd) and of the outcome (ky)
                 the confounder has, given the other covariates; a number or a sequence; ky = None means ky = kd;
                 sequences are paired (one number pairs with every element of the other). kd = None (default)
-                means (1, 2, 3) and silently skips, per benchmark, the values that are impossible for it (listed in
-                out["warnings"]); a kd you give that is impossible stops the call, as in sensemakr.
+                means (1, 2, 3) and skips, per benchmark, the values that are impossible for it (with a warning, also in
+                out["warnings"], and a line in the printed text); a kd you give that is impossible stops the call, as in sensemakr.
     q           for `k_needed`: the share of the estimate the confounder would remove (1: to zero).
 
     Assumes a confounder orthogonal to the covariates in the model ("or the part of it they do not explain"):
@@ -768,7 +772,7 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
     CI is not informative). Needs a full-rank design (ValueError otherwise).
 
     Returns {"bounds": DataFrame (one row per benchmark × (kd, ky); ci_verdict in {"same sign", "includes zero",
-    "opposite sign", "not informative"}), "benchmark_r2": DataFrame (partial R² of each benchmark with D and with Y,
+    "opposite sign", "not informative"}; ci_excludes_zero is False on capped rows), "benchmark_r2": DataFrame (partial R² of each benchmark with D and with Y,
     the df used, the largest admissible kd and k_needed), "estimate", "se", "df", "q", "alpha", "warnings",
     "classical_refit"}.
     """
@@ -776,16 +780,21 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
         raise TypeError("ovb_bounds needs an OLS fit from statsmodels (smf.ols(...).fit() or sm.OLS(...).fit()); "
                         f"got {type(getattr(res, 'model', res)).__name__}")
     q = _check_q(q)
-    if not (0 < alpha < 1):
-        raise ValueError(f"alpha must be in (0, 1), got {alpha!r}")
+    if not (1e-12 <= alpha < 1):
+        raise ValueError(f"alpha must be in [1e-12, 1), got {alpha!r}")
     base = res if getattr(res, "cov_type", "nonrobust") == "nonrobust" else res.model.fit()
     names = list(base.params.index)
     if treatment not in names:
         raise KeyError(f"treatment {treatment!r} is not a regressor of the model; regressors: {names}")
     if treatment in _INTERCEPT:
         raise ValueError("the intercept cannot be the treatment")
+    if base.df_resid < 2:
+        raise ValueError(f"ovb_bounds needs at least 2 residual degrees of freedom (the confounder costs one); got "
+                         f"{base.df_resid:g}")
     exog_np = np.asarray(base.model.exog, dtype=float)
-    if np.linalg.matrix_rank(exog_np) < exog_np.shape[1]:
+    norms = np.linalg.norm(exog_np, axis=0)
+    # rank of the column-scaled design: a regressor in units of 1e12 next to O(1) columns is not collinear
+    if (norms == 0).any() or np.linalg.matrix_rank(exog_np / norms) < exog_np.shape[1]:
         raise ValueError("the design matrix is not of full rank (a regressor is a linear combination of others): "
                          "the partial R² are not defined; drop the redundant regressor and refit")
     default_kd = kd is None
@@ -798,7 +807,7 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
             kd_arr = np.repeat(kd_arr, len(ky_arr))
         else:
             raise ValueError(f"kd and ky are paired: give them the same length (or one number), got {len(kd_arr)} "
-                             f"and {len(ky_arr)}")
+                             f"and {len(ky_arr)}" + (" (kd not given: its default is 1, 2, 3)" if default_kd else ""))
 
     # benchmarks -> {label: [regressors]}
     groups = _covariate_groups(base, treatment)
@@ -813,17 +822,27 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
         hits = [g for g in groups if re.match(r"^C\(\s*" + re.escape(str(b)) + r"\s*[,)]", g)]
         if len(hits) == 1:                        # C(g, Treatment('c')) by "g"
             return groups[hits[0]]
+        inner = re.match(r"^C\(\s*([^,()]+?)\s*\)$", str(b))
+        if inner and inner.group(1) != b:         # "C(g)" for a string factor g[T.b] or for C(g, Treatment(...))
+            try:
+                return resolve(inner.group(1))
+            except KeyError:
+                pass
         raise KeyError(f"benchmark {b!r} is neither a regressor nor a categorical of the model; regressors: {names}")
 
     items = [benchmarks] if isinstance(benchmarks, (str, dict)) else list(benchmarks)
     spec: dict[str, list[str]] = {}
     for it in items:
+        if not isinstance(it, (str, dict)):
+            raise TypeError(f"each benchmark is a name or a dict {{label: [terms]}} for a group; got {it!r} (for a group "
+                            f"of your own, write {{'label': {list(it) if isinstance(it, (list, tuple)) else it!r}}})")
         if isinstance(it, dict):
             for lab, terms in it.items():
                 terms = [terms] if isinstance(terms, str) else list(terms)
                 if not terms:
                     raise ValueError(f"benchmark group {lab!r} is empty")
-                spec[str(lab)] = [t for b in terms for t in (resolve(b) if b != treatment else [b])]
+                flat = [t for b in terms for t in (resolve(b) if b != treatment else [b])]
+                spec[str(lab)] = list(dict.fromkeys(flat))       # a term listed twice would make V singular
         else:
             spec[str(it)] = resolve(it)
     if not spec:
@@ -879,7 +898,7 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
             kdi, kyi = kd_b[i], ky_b[i]
             mult = f"{round(kdi, 2):g}" if kdi == kyi else f"{round(kdi, 2):g}/{round(kyi, 2):g}"
             lo, hi = adj[i] - tcrit * adj_se[i], adj[i] + tcrit * adj_se[i]
-            excl = bool(lo > 0 or hi < 0)
+            excl = bool((lo > 0 or hi < 0) and not capped[i])   # a capped row's CI has width 0: no verdict
             if capped[i]:
                 verdict = "not informative"
             elif not excl:
@@ -916,7 +935,7 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
             b = r["benchmark"]
             who = (f"{r['kd']:g}x as strong as {b}" if r["kd"] == r["ky"] else
                    f"{r['kd']:g}x as strong as {b} in explaining {treatment} and {r['ky']:g}x in explaining the outcome")
-            cap = " (its R² with the outcome capped at 100%)" if r["r2yz_dx_capped"] else ""
+            cap = ", capped at 100%" if r["r2yz_dx_capped"] else ""
             a = r["adjusted_estimate"]
             if a == est:
                 move = f"would leave the estimate at {est:.4g} (no bias)"
@@ -940,6 +959,11 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                     "opposite sign": "excludes zero on the other side (the sign would flip)"}[v]
             print(f"  {r['bound_label']}: a confounder {who} (partial R² up to {r['r2dz_x']:.1%} with {treatment} and "
                   f"{r['r2yz_dx']:.1%} with the outcome{cap}) {move}; {ci}.")
+        for lab, br in out["benchmark_r2"].iterrows():
+            if not (out["bounds"]["benchmark"] == lab).any():
+                print(f"  {lab}: no line, because no default k (1, 2, 3) is admissible: {lab} explains "
+                      f"{br['r2dxj_x']:.1%} of the residual variance of {treatment}, so k must be below "
+                      f"{br['kd_max']:.4g}; pass a smaller kd to see bounds for it.")
         qq = out["q"]
         one = _q_is_one(qq)
         goal = "bring the estimate to zero" if one else (
