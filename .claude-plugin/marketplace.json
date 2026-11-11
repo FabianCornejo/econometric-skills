@@ -16,7 +16,7 @@
         "./modes/teacher",
         "./modes/reviewer"
       ],
-      "version": "2.6.2",
+      "version": "2.6.3",
       "description": "Econometric agent (consultant, teacher, reviewer): statistics foundations (tests of means, variances, proportions and tables, normality, power), regression diagnostics and restriction tests, logit/probit with marginal effects, Heckman, IV with weak-instrument checks, causal inference with DAGs, double ML sensitivity and DiD with design classification, one treated unit (calibrated gap-series inference) and a falsification matrix, covariates (doubly robust, CCC test, cluster bootstrap), imputation estimator, Goodman-Bacon and TWFE weights, heterogeneous effects, power analysis, MLE and wild bootstrap, WACC betas and event studies, time series, VaR/ES with EVT and backtests (FRTB), univariate and multivariate time series (unit roots, breaks, long memory, VAR/SVAR with bootstrap bands, VECM), GARCH with regressors in the variance, SUR/3SLS, dynamic panel GMM, Fama-MacBeth; checks the setup (Python, packages, updates) before the first analysis. 1993 tested checks.",
       "author": {
         "name": "Fabian Cornejo",

@@ -230,6 +230,22 @@
         "Recomputes the thresholds with the HC3 SE by hand or presents HC3-based bounds from formulas written in the answer.",
         "Multiplies cf_y and cf_d by 2 in the answer's own code."
       ]
+    },
+    {
+      "id": "review-memo-k-threshold-paraphrase",
+      "language": "pt-BR",
+      "prompt": "Revise esta conclusão do memorando antes de eu mandar para a diretoria: \"O tempo de espera caiu 6,5 minutos com o novo sistema. O resultado não resiste a um fator omitido tão importante quanto a região ou o porte da clínica, então a evidência é frágil.\" A saída do ovb_bounds (OLS, erros-padrão HC3 no modelo principal) foi: \"1x C(regiao): a confounder 1x as strong as C(regiao) ... could move the estimate toward zero, from -6.52 to -2.31 (35% of it); 95% CI [-4.36, -0.26], which still excludes zero.\" e \"A confounder 1.05x as strong as C(regiao) (same k for treatment and outcome) could, in the worst case, make the estimate not significant at the 5% level (classical SE)\"; para o porte, k_not_significant = 1,2.",
+      "must": [
+        "Points out that at 1x the worst-case CI still excludes zero (the 1x line's ci_verdict), so 'does not survive 1x region or size' contradicts the output (interpretation-rules v2.6.3).",
+        "States the boundary with the numbers: significance is lost from about 1.05x region and 1.2x size, in the worst case, with the classical SE (and k_needed, if given, for removing the effect).",
+        "Says these are worst cases under a confounder orthogonal to the covariates, not likely values, so 'fragile' or 'robust' needs that qualification, and labels the numbers as classical SE next to the HC3 estimate.",
+        "Rewrites the conclusion (or gives the corrected sentence) without rounding 1.05x to 1x or to 1.1x."
+      ],
+      "must_not": [
+        "Approves the conclusion as it is or repeats that the result does not survive 1x.",
+        "Rounds the boundary to 1x or to 1.1x.",
+        "Recomputes the thresholds with the HC3 SE or a grid of k written in the answer's own code."
+      ]
     }
   ]
 }
