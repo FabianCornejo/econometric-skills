@@ -137,8 +137,13 @@ OUT_C_Q1 = ("\nSensitivity of d (Cinelli-Hazlett): partial R² = 7.419%, RV(q=1.
             "A confounder explaining 24.6% of the residual variance of both d and the outcome would remove the "
             "estimate; 15.5% would make it insignificant.\nObserved covariates (partial R² with outcome), for "
             "comparison:\nx1   5.63%\nx2   4.54%\n")
+# v2.6 adds exactly one line at the end of the block (the pointer to ovb_bounds, user's decision 4 of
+# claude/plano-v2.6.md); everything before it stays byte-identical to v2.5.2.
+OUT_C_Q1_V26 = OUT_C_Q1 + ('For formal bounds (a confounder k times as strong as one of these, with the adjusted '
+                           'estimate and CI), run specification.ovb_bounds(res, "d", benchmarks=[...]).\n')
 _, txt_c = printed(fits["C"], 1.0)
-check("q=1, no categorical: output byte-identical to v2.5.2", txt_c == OUT_C_Q1, repr(txt_c))
+check("q=1, no categorical: output byte-identical to v2.5.2, plus only the v2.6 line pointing to ovb_bounds",
+      txt_c == OUT_C_Q1_V26, repr(txt_c))
 _, txt_a1 = printed(fits["A"], 1.0)
 check("q=1 keeps the 'remove the estimate … insignificant' sentence",
       "would remove the estimate" in txt_a1 and "would make it insignificant" in txt_a1)
