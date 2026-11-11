@@ -245,8 +245,11 @@ for name, res, tr_, benches, ks in cases:
     check(f"known parameter ({name}): Z of the other sign pushes the estimate away by the same bias", worst_away < 1e-8,
           f"{worst_away:.1e}")
     check(f"known parameter ({name}): refit SE (df − 1, Z costs one df) equals adjusted_se, and CI = est ± t(df)·SE",
-          worst_s < 1e-8 and np.allclose(b["adjusted_lower_ci"], b["adjusted_estimate"] - tc * b["adjusted_se"])
-          and np.allclose(b["adjusted_t"], b["adjusted_estimate"] / b["adjusted_se"]), f"{worst_s:.1e}")
+          worst_s < 1e-8
+          and np.allclose(b["adjusted_lower_ci"], b["adjusted_estimate"] - tc * b["adjusted_se"], rtol=1e-12, atol=0)
+          and np.allclose(b["adjusted_upper_ci"], b["adjusted_estimate"] + tc * b["adjusted_se"], rtol=1e-12, atol=0)
+          and np.allclose(b["adjusted_t"], b["adjusted_estimate"] / b["adjusted_se"], rtol=1e-12, atol=0),
+          f"{worst_s:.1e}")
     # the built Z really has the partial R² claimed (the construction, checked by refits)
     r = b.iloc[0]
     z = build_z(res, tr_, r["r2dz_x"], r["r2yz_dx"])
@@ -276,6 +279,15 @@ check("benchmark R² (group of 3 dummies): both regressions equal the refit SSR 
 check("benchmark_r2 reports df_treatment = df_outcome + 1 and the largest kd = (1 − R²_D)/R²_D",
       (br["df_treatment"] == br["df_outcome"] + 1).all()
       and np.allclose(br["kd_max"], (1 - br["r2dxj_x"]) / br["r2dxj_x"]))
+
+# Cinelli-Hazlett eq. (22): R²_{D~Z|X} = kD·f²_{D~Xj|X−j}, with f² = R²/(1 − R²) — the bound with D depends on kd
+# only (never on ky), and grows with ky the bound with Y only; R² from the refit above, not from the function.
+kk = sp.ovb_bounds(M_SIM, "d", "x_strong", kd=[1, 1, 2, 0.5], ky=[1, 3, 0.5, 2])["bounds"]
+f2d = r2d_x / (1 - r2d_x)
+check("eq. (22): r2dz_x = kd·f²_D from the refit R² (kd = 1, 1, 2, 0.5 with ky = 1, 3, 0.5, 2), whatever ky is",
+      np.allclose(kk["r2dz_x"], np.array([1, 1, 2, 0.5]) * f2d, rtol=1e-10, atol=0), list(kk["r2dz_x"]))
+check("for the same kd, a larger ky gives a larger bound with the outcome, and the same bound with the treatment",
+      kk["r2yz_dx"].iloc[1] > kk["r2yz_dx"].iloc[0] and kk["r2dz_x"].iloc[1] == kk["r2dz_x"].iloc[0])
 
 # ------------------------------------------------------------------------------ 5. k_needed
 warnings.simplefilter("ignore", UserWarning)     # many k_needed land where R²_Y is capped; the cap is tested in §6
