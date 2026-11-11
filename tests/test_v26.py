@@ -136,6 +136,21 @@ check("Cinelli-Hazlett Figure 2: adjusted t 3.44 / 2.6 / 1.63; §5.2: 77%, 55%, 
 
 # ------------------------------------------------------------------------------ 2. R's sensemakr
 REFP = ROOT / "tools" / "r_reference" / "output" / "ovb_bounds_v26_reference.json"
+def rnum(v):
+    """A number from R's JSON: jsonlite writes Inf/-Inf/NaN as null or as strings, depending on its options."""
+    v = v[0] if isinstance(v, list) else v
+    if v is None:
+        return np.nan
+    return float({"Inf": "inf", "-Inf": "-inf", "NaN": "nan", "NA": "nan"}.get(v, v)) if isinstance(v, str) else float(v)
+
+
+def same(mine, theirs, tol=1e-8):
+    """Equal to R: both non-finite (R's null stands for any of inf/nan), or within tol (relative, absolute near 0)."""
+    if not np.isfinite(theirs) or not np.isfinite(mine):
+        return (not np.isfinite(mine)) and (not np.isfinite(theirs) or np.isnan(theirs))
+    return (rel(mine, theirs) if abs(theirs) > 1e-12 else abs(mine - theirs)) < tol
+
+
 COLS = [("r2dz.x", "r2dz_x"), ("r2yz.dx", "r2yz_dx"), ("adjusted_estimate", "adjusted_estimate"),
         ("adjusted_se", "adjusted_se"), ("adjusted_t", "adjusted_t"), ("adjusted_lower_CI", "adjusted_lower_ci"),
         ("adjusted_upper_CI", "adjusted_upper_ci")]
@@ -169,12 +184,12 @@ else:
         bench = "occupation" if "occupation" in case else case.split()[1]
         r2d, r2y = darfur_r2(bench)
         kd = np.atleast_1d(np.asarray(run_["kd"], dtype=float))
-        ky = np.atleast_1d(np.asarray(run_["ky"], dtype=float))
         if "error" in run_:
             kmax = sp._kd_max(r2d)
             check(f"R {case}: R stops ({run_['error'][:45]}…) and kd = {kd[0]:g} is beyond our largest kd {kmax:.4g}",
                   "Impossible kd value" in run_["error"] and kd[0] >= kmax)
             continue
+        ky = np.atleast_1d(np.asarray(run_["ky"], dtype=float))
         r2dz, r2yz_raw = sp._ovb_partial_r2_bound(r2d, r2y, kd, ky)
         r2yz = np.minimum(r2yz_raw, 1.0)
         adj, adj_se, adj_t = sp._ovb_adjust(est_d, se_d, df_d, r2dz, r2yz)
@@ -182,16 +197,10 @@ else:
         mine = {"r2dz_x": r2dz, "r2yz_dx": r2yz, "adjusted_estimate": adj, "adjusted_se": adj_se, "adjusted_t": adj_t,
                 "adjusted_lower_ci": adj - tc * adj_se, "adjusted_upper_ci": adj + tc * adj_se}
         good = len(run_["bounds"]) == len(kd)
-        worst = 0.0
-        for i, row in enumerate(run_["bounds"]):
-            for rc, mc in COLS:
-                rv = row[rc] if not isinstance(row[rc], list) else row[rc][0]
-                if rv is None or not np.isfinite(mine[mc][i]):
-                    good = good and (rv is None) == (not np.isfinite(mine[mc][i]))
-                    continue
-                worst = max(worst, rel(mine[mc][i], rv) if abs(rv) > 1e-12 else abs(mine[mc][i] - rv))
+        bad_cells = [(i, mc, float(mine[mc][i]), rnum(row[rc])) for i, row in enumerate(run_["bounds"])
+                     for rc, mc in COLS if not same(float(mine[mc][i]), rnum(row[rc]))]
         check(f"R {case}: every column equal to sensemakr (core, from the exported statistics)",
-              good and worst < 1e-8, f"max rel. diff {worst:.2e}")
+              good and not bad_cells, bad_cells[:3])
         capped_r = bool(run_["warnings"])
         check(f"R {case}: R warns about r2yz.dx > 1 exactly when we cap", capped_r == bool(np.any(r2yz_raw > 1)),
               (run_["warnings"], np.round(r2yz_raw, 4)))
@@ -207,13 +216,10 @@ else:
         kd = np.atleast_1d(np.asarray(run_["kd"], dtype=float))
         ky = np.atleast_1d(np.asarray(run_["ky"], dtype=float))
         mine = sp.ovb_bounds(M_SIM, "d", [bench], kd=list(kd), ky=list(ky))["bounds"]
-        worst = 0.0
-        for i, row in enumerate(run_["bounds"]):
-            for rc, mc in COLS:
-                rv = row[rc] if not isinstance(row[rc], list) else row[rc][0]
-                worst = max(worst, rel(mine[mc].iloc[i], rv))
+        bad_cells = [(i, mc, float(mine[mc].iloc[i]), rnum(row[rc])) for i, row in enumerate(run_["bounds"])
+                     for rc, mc in COLS if not same(float(mine[mc].iloc[i]), rnum(row[rc]))]
         check(f"R {case}: ovb_bounds(res, …) equal to sensemakr on every column", len(mine) == len(run_["bounds"])
-              and worst < 1e-8, f"max rel. diff {worst:.2e}")
+              and not bad_cells, bad_cells[:3])
         labs_r = [row["bound_label"] if not isinstance(row["bound_label"], list) else row["bound_label"][0]
                   for row in run_["bounds"]]
         check(f"R {case}: bound labels as sensemakr's", list(mine["bound_label"]) == labs_r,
