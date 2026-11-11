@@ -521,11 +521,14 @@ def _pct(x, digits=1) -> str:
     return f"{x:.{digits}%}"
 
 
-def _report_label(cov_type: str) -> str:
+def _report_label(cov_type: str, usable: bool = True) -> str:
     """v2.6.2: printed after a robust fit by sensitivity and ovb_bounds. In the v2.6.1 validation the chat said which SE
     each number used and the memo did not: the HC3 CI sat next to classical-SE thresholds with no label."""
-    return (f"In a report, label these numbers as classical-SE (RV, k, bounds and their CIs) and show your {cov_type} CI "
-            f"separately: the two use different SEs and can disagree.")
+    if not usable:
+        return (f"In a report, label these numbers as classical-SE; your {cov_type} SE is not usable here, so report no "
+                f"{cov_type} CI next to them.")
+    return (f"In a report, label these numbers as classical-SE and show your {cov_type} CI separately: the two use "
+            f"different SEs and can disagree.")
 
 
 def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA) -> dict:
@@ -627,7 +630,7 @@ def sensitivity(res, treatment: str, q: float = 1.0, alpha: float = ALPHA, show:
                   f"not usable")
             print(f"These statistics and verdicts use the classical SE, as the formulas require (t = {t_cl:.2f}); "
                   f"{rb}.")
-            print(_report_label(res.cov_type))       # v2.6.2: the label has to reach the report, not only the chat
+            print(_report_label(res.cov_type, bool(np.isfinite(t_rb) and np.isfinite(se_rb) and se_rb > 0)))   # v2.6.2
         if len(out["benchmarks"]):
             print("Observed covariates (partial R² with outcome), for comparison:")
             print(out["benchmarks"].to_string(float_format=lambda v: f"{v:.2%}"))
@@ -1152,9 +1155,9 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                       f"{br['kd_max']:.6g}).")
             elif br["k_needed_beyond_cap"]:
                 print(f"  A confounder {kn:.3g}x as strong as {lab} in explaining the treatment could, in the worst "
-                      f"case, {goal}, but only with the outcome fully explained: from {br['k_cap']:.4g}x on, a "
-                      f"confounder as strong as {lab} in explaining the outcome would explain all of it, so the outcome "
-                      f"side is held there (this k is not the same for treatment and outcome).")
+                      f"case, {goal}, but only with the outcome fully explained: from {br['k_cap']:.4g}x (the same k "
+                      f"for both) the implied partial R² with the outcome already reaches 100%, so beyond it only the "
+                      f"treatment side grows (this k is not the same for treatment and outcome).")
             else:
                 print(f"  A confounder {kn:.3g}x as strong as {lab} (same k for treatment and outcome) could, in the "
                       f"worst case, {goal}.")
@@ -1202,7 +1205,8 @@ def ovb_bounds(res, treatment: str, benchmarks, kd=None, ky=None, q: float = 1.0
                   f"your {res.cov_type} SE is not finite or zero (often observations with leverage 1), so its t is "
                   f"not usable")
             print(f"These bounds use the classical SE, as the formulas require (t = {t_cl:.2f}); {rb}.")
-            print(_report_label(res.cov_type))       # v2.6.2
+            print(_report_label(res.cov_type, bool(np.isfinite(t_rb) and np.isfinite(float(res.bse[treatment]))
+                                                   and float(res.bse[treatment]) > 0)))   # v2.6.2
         for w in warns:
             print("  WARNING: " + w)
     return out

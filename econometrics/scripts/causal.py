@@ -229,8 +229,11 @@ def dml_plr(df: pd.DataFrame, y: str, d: str, X: list[str], learner_y=None, lear
     Xm = df[X].astype(float).to_numpy()
     Y = df[y].astype(float).to_numpy()
     D = df[d].astype(float).to_numpy()
-    ly = learner_y or RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1, random_state=seed)
-    ld = learner_d or RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1, random_state=seed)
+    # v2.6.2 review: "learner or default" called len() on an unfitted sklearn ensemble (AttributeError)
+    ly = learner_y if learner_y is not None else RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1,
+                                                                       random_state=seed)
+    ld = learner_d if learner_d is not None else RandomForestRegressor(n_estimators=300, min_samples_leaf=5, n_jobs=-1,
+                                                                       random_state=seed)
     thetas, ses, resid = [], [], []
     for rep in range(n_rep):
         uy, vd = np.zeros_like(Y), np.zeros_like(D)
@@ -387,15 +390,20 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
 def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: list[str],
                   res: dict | None = None, **dml_kwargs) -> pd.DataFrame:
     """Implied sensitivity parameters of observed covariates (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022,
-    Appendix F; as DoubleML's sensitivity_benchmark): refit dml_plr without each benchmark covariate X_j and measure
-    the gains it brings, relative to the full model (subscript l, with X_j; s, without it):
-      gain_y = (sigma2_s - sigma2_l) / sigma2_l    (G_Y, eq. 22: added explained variance of the outcome over what the
-                                                    full model leaves unexplained)
-      gain_d = (nu2_l - nu2_s) / nu2_s             (G_D, eq. 23, nu2 = E[alpha^2] = 1/E[(D - m(X))^2])
-      cf_y = min(gain_y, 1), cf_d = min(gain_d, 1) (DoubleML's cut; cf_d = 1 gives an infinite bound)
-      rho  = (theta_s - theta_l) / sqrt((sigma2_s - sigma2_l)(nu2_l - nu2_s)), clipped to [-1, 1] (F.4-F.5)
-      delta_theta = theta_s - theta_l;  k_d_max = 1/gain_d (k at which k * gain_d reaches 1)
-      r2_y, r2_d = the partial R² G/(1 + G) that cf_y and cf_d were before v2.6.2.
+    the benchmarking appendix: Appendix F, eq. 22-23, in arXiv 2112.13398v5; the v6 of September 2026 renumbers it; as DoubleML's sensitivity_benchmark): refit dml_plr without each benchmark covariate X_j and
+    measure the gains it brings, relative to the full model (subscript l, with X_j; s, without it), in each sample
+    split r and then as the median over the splits, as DoubleML does (v2.6.2 review):
+      gain_y = median_r (sigma2_s,r - sigma2_l,r) / sigma2_l,r   (G_Y: added explained variance of the outcome over
+                                                                  what the full model leaves unexplained)
+      gain_d = median_r (nu2_l,r - nu2_s,r) / nu2_s,r            (G_D, nu2 = E[alpha^2] = 1/E[(D - m(X))^2])
+      cf_y, cf_d = median_r of the split gains cut to [0, 1]     (DoubleML's cut; cf_d = 1 gives an infinite bound)
+      rho  = median_r sign(dth_r) min(|dth_r| / sqrt((sigma2_s,r - sigma2_l,r)(nu2_l,r - nu2_s,r)), 1), with
+             dth_r = theta_s,r - theta_l,r and +-1 where that denominator is 0 (DoubleML); NaN when gain_y or gain_d
+             is 0 (no strength: the skill's rule since v2.5.3)
+      delta_theta = theta_s - theta_l (medians over the splits, as before);  k_d_max = 1/gain_d
+      r2_y, r2_d = the partial R² that cf_y and cf_d were before v2.6.2, computed as before (ratios of medians).
+    The splits are paired by position: dml_plr with the same seed and n_rep splits the rows the same way in the
+    full and the short fit; if res has another number of splits, the gains fall back to ratios of medians (warning).
     v2.6.2: cf_y and cf_d were the partial R² r2_y, r2_d, always below the paper's gains, so "a confounder as strong as
     X_j" gave a smaller (less conservative) bound than the paper's benchmark; cf_d was also cut at 0.999 silently.
     For "a confounder k times as strong as X_j" use dml_bounds (the paper scales the gains by k). Benchmarks are
@@ -409,15 +417,31 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
         rs = dml_plr(df, y, d, [x for x in X if x != b], **dml_kwargs)
         sh = [_dml_sens_rep(uy, vd, 0, 0, 1) for uy, vd in rs["residuals"]]
         s2s = np.median([r_["sigma2"] for r_ in sh]); n2s = np.median([r_["nu2"] for r_ in sh])
-        Ss = np.median([r_["S"] for r_ in sh])
-        ry = max((s2s - s2l) / s2s, 0.0)            # partial R² forms (cf_y, cf_d before v2.6.2)
+        ry = max((s2s - s2l) / s2s, 0.0)            # partial R² forms (cf_y, cf_d before v2.6.2), as before
         rd = max((n2l - n2s) / n2l, 0.0)
-        gy = max((s2s - s2l) / s2l, 0.0)            # gains (paper, eq. 22-23)
-        gd = max((n2l - n2s) / n2s, 0.0)
         dth = rs["estimate"] - res["estimate"]
-        denom = Ss * np.sqrt(ry * rd / (1 - rd)) if ry > 0 and 0 < rd < 1 else np.nan   # = sqrt(dsigma2 * dnu2)
-        rows.append({"benchmark": b, "cf_y": min(gy, 1.0), "cf_d": min(gd, 1.0),
-                     "rho": float(np.clip(dth / denom, -1, 1)) if np.isfinite(denom) and denom > 0 else np.nan,
+        if len(sh) == len(long) and len(rs.get("thetas", ())) == len(sh) and len(res.get("thetas", ())) == len(long):
+            gys = np.array([max(s_["sigma2"] / l_["sigma2"] - 1, 0.0) for s_, l_ in zip(sh, long)])
+            gds = np.array([max(l_["nu2"] / s_["nu2"] - 1, 0.0) for s_, l_ in zip(sh, long)])
+            dths = np.array(rs["thetas"]) - np.array(res["thetas"])
+            den = np.array([np.sqrt(max(s_["sigma2"] - l_["sigma2"], 0.0) * max(l_["nu2"] - s_["nu2"], 0.0))
+                            for s_, l_ in zip(sh, long)])
+            with np.errstate(divide="ignore", invalid="ignore"):
+                mag = np.where(den > 0, np.minimum(np.abs(dths) / den, 1.0), 1.0)
+            rho_b = float(np.median(np.sign(dths) * mag))
+        else:
+            warnings.warn(f"Benchmark {b}: res has {len(long)} sample splits and the refit {len(sh)}; the gains are "
+                          "ratios of the medians over the splits, not medians of the split gains (pass dml_benchmark "
+                          "the same n_rep and seed as dml_plr to pair them)", stacklevel=2)
+            gys = np.array([max(s2s / s2l - 1, 0.0)]); gds = np.array([max(n2l / n2s - 1, 0.0)])
+            Ss = np.median([r_["S"] for r_ in sh])
+            denom = Ss * np.sqrt(ry * rd / (1 - rd)) if ry > 0 and 0 < rd < 1 else np.nan   # = sqrt(dsigma2 * dnu2)
+            rho_b = float(np.clip(dth / denom, -1, 1)) if np.isfinite(denom) and denom > 0 else np.nan
+        gy, gd = float(np.median(gys)), float(np.median(gds))
+        if gy == 0 or gd == 0:
+            rho_b = np.nan
+        rows.append({"benchmark": b, "cf_y": float(np.median(np.minimum(gys, 1.0))),
+                     "cf_d": float(np.median(np.minimum(gds, 1.0))), "rho": rho_b,
                      "theta_without": rs["estimate"], "delta_theta": dth, "gain_y": gy, "gain_d": gd,
                      "k_d_max": 1 / gd if gd > 0 else np.inf, "r2_y": ry, "r2_d": rd})
         if gy == 0 or gd == 0:                    # v2.5.3: this used to come back silently with rho = NaN
@@ -443,7 +467,7 @@ def dml_benchmark(df: pd.DataFrame, y: str, d: str, X: list[str], benchmarks: li
 def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark", alpha: float = ALPHA,
                show: bool = True) -> dict:
     """Bounds for DML-PLR under a confounder k times as strong as an observed covariate (v2.6.2): the analogue of
-    specification.ovb_bounds, following Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis (2022, Appendix F, eq. 22-23):
+    specification.ovb_bounds, following Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis (2022, the benchmarking appendix: Appendix F, eq. 22-23, in arXiv 2112.13398v5; the v6 of September 2026 renumbers it):
     the benchmark's gains are scaled by k, cf_y = ky * gain_y and cf_d = kd * gain_d.
 
     res    the dict of dml_plr (with its residuals); bench  the DataFrame of dml_benchmark (or any with columns
@@ -451,8 +475,9 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
     kd, ky how many times the benchmark's gain in the treatment (kd) and in the outcome (ky); a number or a sequence,
            paired as in ovb_bounds; ky = None means ky = kd; kd = None means (1, 2, 3) and skips, per benchmark,
            the values at or above k_d_max = 1/gain_d with a warning (a kd you give there stops the call).
-    rho    "benchmark" (default): each benchmark's observed rho (F.4 of the paper; a benchmark with a NaN rho is
-           skipped); or a number in [-1, 1] for every line (1: the worst case, the paper's conservative default).
+    rho    "benchmark" (default): each benchmark's observed rho (the paper's benchmark for rho; a NaN rho is
+           skipped, one outside [-1, 1] is a ValueError); or a number in [-1, 1] for every line (1: the worst case,
+           the paper's conservative default).
 
     Conventions of the skill (the paper states none): cf_y = ky * gain_y above 1 is held at 1 (the confounder would
     explain all of the outcome's residual variance), with one warning per benchmark; kd * gain_d >= 1 is impossible
@@ -464,7 +489,8 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
     Returns {"bounds": DataFrame (bound_label, benchmark, kd, ky, cf_y, cf_d, cf_y_capped, rho, bias_bound,
     theta_lower, theta_upper, ci_low, ci_high, ci_excludes_zero, ci_verdict in {"excludes zero", "includes zero"}),
     "estimate", "se", "alpha", "rho", "warnings"}."""
-    from specification import _check_k, _KD_DEFAULT
+    import numbers
+    from specification import _check_k, _KD_DEFAULT, _level_pct
     if "residuals" not in res:
         raise ValueError("pass the dict returned by causal.dml_plr")
     if not isinstance(bench, pd.DataFrame) or not {"gain_y", "gain_d", "rho"} <= set(bench.columns):
@@ -474,6 +500,8 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
     if isinstance(rho, str):
         if rho != "benchmark":
             raise ValueError(f"rho is 'benchmark' or a number in [-1, 1], got {rho!r}")
+    elif isinstance(rho, (bool, np.bool_)) or not isinstance(rho, numbers.Real):
+        raise TypeError(f"rho is 'benchmark' or one number in [-1, 1], got {rho!r}")
     elif not np.isfinite(rho) or abs(rho) > 1:
         raise ValueError(f"rho is a correlation and must be finite and in [-1, 1], got {rho!r} (1 is the worst case)")
     default_kd = kd is None
@@ -498,6 +526,10 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
     rows = []
     for lab, b in bench.iterrows():
         gy, gd = float(b["gain_y"]), float(b["gain_d"])
+        if not (np.isfinite(gy) and np.isfinite(gd)):
+            note(f"{lab}: skipped, its gains are not finite (gain_y = {gy:.3g}, gain_d = {gd:.3g}): missing or broken "
+                 "benchmark values, not a strength")
+            continue
         if not (gy > 0 and gd > 0):
             note(f"{lab}: skipped, no strength (gain_y = {gy:.3g}, gain_d = {gd:.3g}): no multiple of it biases theta")
             continue
@@ -505,8 +537,11 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
         if not np.isfinite(rb):
             note(f"{lab}: skipped, its rho is undefined (NaN); pass rho=1 (the worst case) to use it")
             continue
+        if abs(rb) > 1:
+            raise ValueError(f"benchmark {lab!r} has rho = {rb!r}, outside [-1, 1]: rho is a correlation (dml_benchmark "
+                             "clips it); fix the bench table or pass a number")
         kmax = 1 / gd
-        bad = kd_arr >= kmax
+        bad = kd_arr * gd >= 1                    # the product itself (kd just below 1/gd can round to 1)
         kd_b, ky_b = kd_arr, ky_arr
         if bad.any():
             if not default_kd:
@@ -541,10 +576,10 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
     out = {"bounds": pd.DataFrame(rows, columns=cols), "estimate": th, "se": se, "alpha": alpha, "rho": rho,
            "warnings": warns}
     if show:
-        level = f"{round(100 * (1 - alpha), 6):g}%"
+        level = _level_pct(alpha)
         print(f"\nDML-PLR bounds for a confounder k times as strong as observed covariates (Chernozhukov et al. 2022, "
-              f"Appendix F: the benchmark's gains in explaining the outcome and the treatment, scaled by k): theta = "
-              f"{th:.4f} (SE {se:.4f}).")
+              f"benchmarking appendix: the benchmark's gains in explaining the outcome and the treatment, scaled by "
+              f"k): theta = {th:.4f} (SE {se:.4f}).")
         print("  rho = the benchmark's observed correlation of the omitted pieces" if rho == "benchmark" else
               f"  rho = {float(rho):g}" + (" (the worst case)" if abs(float(rho)) == 1 else "") + " for every line")
         for _, r in out["bounds"].iterrows():
@@ -553,6 +588,8 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
                   f"between {r['theta_lower']:.4f} and {r['theta_upper']:.4f}; {level} confidence bounds "
                   f"[{r['ci_low']:.4f}, {r['ci_high']:.4f}], which "
                   f"{'exclude zero' if r['ci_excludes_zero'] else 'include zero'}.")
+        if out["bounds"].empty:
+            print("  No bound computed: every benchmark or k was skipped (see the warnings).")
         print("  Worst cases under 'k times as strong', not likely values; the gains and rho are estimates whose own "
               "uncertainty is not propagated.")
         for w in warns:
