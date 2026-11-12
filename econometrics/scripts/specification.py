@@ -550,7 +550,8 @@ def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA)
         raise ValueError(f"the sensitivity statistics need at least 2 residual degrees of freedom (the confounder "
                          f"costs one); got dof = {dof:g}")
     f = t / np.sqrt(dof)
-    fq = q * f                                # inf when q·f overflows: the formulas below then give 1
+    with np.errstate(over="ignore"):
+        fq = q * f                            # inf when q·f overflows: the formulas below then give 1
 
     def _rv(x):
         # 0.5·(√(x⁴ + 4x²) − x²) of the paper, rewritten as 2x / (x + √(x² + 4)) (v2.6.4): the original lost every

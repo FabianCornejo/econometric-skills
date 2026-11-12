@@ -99,9 +99,9 @@ for dof, t_, ref_a in ((100.0, 10.0, RVA_REF_100), (2.0, float(np.sqrt(2.0)), RV
     check(f"dof = {dof:g}: rv_q and rv_qa within 4 ulp of the mpmath references for x = 1e-300 to 1e300",
           not bad, f"worst {worst_q:.1f} / {worst_a:.1f} ulp; {bad[:3]}")
 
-o = sp.robustness_value(1e10, 100.0, q=1e300)     # f = 1e9, so q·f overflows to inf
-check("q·f overflowing to inf (t = 1e10, dof = 100, q = 1e300): rv_q = rv_qa = 1, no nan",
-      o["rv_q"] == 1.0 and o["rv_qa"] == 1.0, str({k: o[k] for k in ("rv_q", "rv_qa")}))
+o, _, w_ov = run(sp.robustness_value, 1e10, 100.0, q=1e300)     # f = 1e9, so q·f overflows to inf
+check("q·f overflowing to inf (t = 1e10, dof = 100, q = 1e300): rv_q = rv_qa = 1, no nan, no RuntimeWarning",
+      o["rv_q"] == 1.0 and o["rv_qa"] == 1.0 and w_ov == [], (o["rv_q"], o["rv_qa"], w_ov))
 qs = np.geomspace(1e-6, 1e300, 400)
 rvq = np.array([sp.robustness_value(10.0, 100.0, q=float(q))["rv_q"] for q in qs])
 rva_ = np.array([sp.robustness_value(10.0, 100.0, q=float(q))["rv_qa"] for q in qs])
