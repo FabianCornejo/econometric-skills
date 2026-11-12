@@ -554,9 +554,10 @@ def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA)
         fq = q * f                            # inf when q·f overflows: the formulas below then give 1
 
     def _rv(x):
-        # 0.5·(√(x⁴ + 4x²) − x²) of the paper, rewritten as 2x / (x + √(x² + 4)) (v2.6.4): the original lost every
-        # digit by cancellation once x²·eps > 4 (rv_q = 0.0 for x = q·f ≳ 1e8, where it is almost 1), gave inf beyond
-        # x ≈ 1.3e77 (x⁴ overflows) and nan beyond x ≈ 1.3e154 (x² too). hypot does not overflow; inf is the limit 1.
+        # 0.5·(√(x⁴ + 4x²) − x²) of the paper, rewritten as 2x / (x + √(x² + 4)) (v2.6.4): the original lost digits by
+        # cancellation as x grew (from x ≈ 4e6 rv_q was erratic, between 0 and 8192, and 0 beyond x ≈ 1e10, where it is
+        # almost 1), gave inf beyond x ≈ 1.16e77 (x⁴ overflows) and nan beyond x ≈ 1.34e154 (x² too). hypot does not
+        # overflow; inf is the limit 1.
         return 1.0 if np.isinf(x) else 2 * x / (x + np.hypot(x, 2.0))
 
     f_crit = stats.t.ppf(1 - alpha / 2, dof - 1) / np.sqrt(dof - 1)
@@ -568,7 +569,8 @@ def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA)
         rv_qa = (1 - (f_crit / fq) ** 2) / ((1 / fq) ** 2 + 1)
     else:
         rv_qa = _rv(fqa)
-    return {"partial_r2": t ** 2 / (t ** 2 + dof), "rv_q": float(_rv(fq)), "rv_qa": float(rv_qa),
+    # t²/(t² + dof) as f²/(f² + 1) with hypot: t ** 2 raised OverflowError for a finite |t| > 1.34e154 (v2.6.4 review)
+    return {"partial_r2": float((f / np.hypot(f, 1.0)) ** 2), "rv_q": float(_rv(fq)), "rv_qa": float(rv_qa),
             "q": q, "alpha": alpha}
 
 

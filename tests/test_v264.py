@@ -102,6 +102,12 @@ for dof, t_, ref_a in ((100.0, 10.0, RVA_REF_100), (2.0, float(np.sqrt(2.0)), RV
 o, _, w_ov = run(sp.robustness_value, 1e10, 100.0, q=1e300)     # f = 1e9, so q·f overflows to inf
 check("q·f overflowing to inf (t = 1e10, dof = 100, q = 1e300): rv_q = rv_qa = 1, no nan, no RuntimeWarning",
       o["rv_q"] == 1.0 and o["rv_qa"] == 1.0 and w_ov == [], (o["rv_q"], o["rv_qa"], w_ov))
+o, _, w_t = run(sp.robustness_value, 1e155, 100.0)
+check("t = 1e155 (t² overflows): partial_r2 = 1, no OverflowError, no warning",
+      isinstance(o, dict) and o["partial_r2"] == 1.0 and w_t == [], repr(o) if not isinstance(o, dict) else w_t)
+pr = [sp.robustness_value(t_, 50.0)["partial_r2"] for t_ in (0.0, 0.3, 2.0, 7.0, 40.0)]
+check("partial_r2 = t²/(t² + dof) within 4 ulp on usual t (dof = 50)",
+      all(ulps(p_, t_ ** 2 / (t_ ** 2 + 50.0)) <= 4 for p_, t_ in zip(pr, (0.0, 0.3, 2.0, 7.0, 40.0))), pr)
 qs = np.geomspace(1e-6, 1e300, 400)
 rvq = np.array([sp.robustness_value(10.0, 100.0, q=float(q))["rv_q"] for q in qs])
 rva_ = np.array([sp.robustness_value(10.0, 100.0, q=float(q))["rv_qa"] for q in qs])
@@ -182,8 +188,16 @@ for kw in ({"cf_y": 0.0}, {"cf_d": 0.0}, {"rho": 0.0}):
 o, txt, w = run(causal.dml_sensitivity, RES, cf_y=1e-300, show=False)
 check("show=False, cf_y = 1e-300: bias bound > 0, no warning (the other side of the zero)",
       o["bias_bound"] > 0 and o["warnings"] == [] and not any("bias bound" in s for s in w), o["bias_bound"])
+o, txt, w = run(causal.dml_sensitivity, RES, rho=1e-200, show=False)
+check("show=False, rho = 1e-200: a bias bound of order 1e-200, still > 0, gives no warning (both sides of exactly 0)",
+      0 < o["bias_bound"] < 1e-190 and o["warnings"] == [], o["bias_bound"])
 o, txt, w = run(causal.dml_sensitivity, RES, show=False)
 check("show=False, defaults: no warning", o["warnings"] == [] and w == [], (o["warnings"], w))
+with warnings.catch_warnings(record=True) as wr:
+    warnings.simplefilter("always")
+    causal.dml_sensitivity(RES, cf_y=0.0, show=False)
+check("the warning points at the caller (stacklevel: this file, not causal.py)",
+      len(wr) == 1 and Path(wr[0].filename).resolve() == Path(__file__).resolve(), [x.filename for x in wr])
 o, txt, w = run(causal.dml_sensitivity, RES, cf_y=0.0, show=True)
 check("show=True, cf_y = 0: the zero sentence printed once (as before), not repeated as a WARNING line",
       txt.count("The bias bound is zero") == 1 and "WARNING" not in txt, txt.splitlines()[2])
@@ -202,6 +216,11 @@ check("cf_d = 1: infinite bound, one warning (out and warnings.warn) and the sen
 o, txt, w = run(causal.dml_sensitivity, RES, cf_d=1.0, show=False)
 check("cf_d = 1 with show=False: the warning is in out['warnings'], nothing printed",
       len(o["warnings"]) == 1 and txt == "", o["warnings"])
+for kw in ({"rho": 0.0}, {"cf_y": 0.0}):
+    o, txt, w = run(causal.dml_sensitivity, RES, cf_d=1.0, show=True, **kw)
+    check(f"cf_d = 1 with {kw}: the bound is its limit, zero (was inf): the zero warning only, no 'infinite' text",
+          o["bias_bound"] == 0 and len(o["warnings"]) == 1 and "bias bound is zero" in o["warnings"][0]
+          and "infinite" not in txt and "bias <= inf" not in txt, (o["bias_bound"], o["warnings"]))
 o, _, _ = run(causal.dml_sensitivity, RES, cf_y=1.0, show=False)
 check("cf_y = 1 accepted (finite bound, no warning)", isinstance(o, dict) and np.isfinite(o["bias_bound"])
       and o["warnings"] == [], repr(o) if not isinstance(o, dict) else o["bias_bound"])
@@ -213,8 +232,9 @@ for name in ("cf_y", "cf_d"):
           isinstance(o, dict) and np.isfinite(o["bias_bound"]), repr(o) if not isinstance(o, dict) else "")
     for v in (above1, -5e-324, np.nan, np.inf, -np.inf):
         o, _, _ = run(causal.dml_sensitivity, RES, show=False, **{name: v})
-        check(f"{name} = {v!r} refused (ValueError, 'partial R²')",
-              isinstance(o, ValueError) and "partial R²" in str(o) and name in str(o), repr(o))
+        check(f"{name} = {v!r} refused (ValueError, 'sensitivity parameter ... [0, 1]')",
+              isinstance(o, ValueError) and "sensitivity parameter" in str(o) and "[0, 1]" in str(o)
+              and name in str(o), repr(o))
     for v in (True, np.True_, "0.1", None):
         o, _, _ = run(causal.dml_sensitivity, RES, show=False, **{name: v})
         check(f"{name} = {v!r} refused (TypeError)", isinstance(o, TypeError) and name in str(o), repr(o))
@@ -319,15 +339,26 @@ check("the grid designs reach both an interior root and the ceiling ('nor does a
 # ------------------------------------------------------------------ 6. reporting line, rule and case
 o, txt, _ = run(causal.dml_sensitivity, RES, rho=1.0, show=True)
 last = txt.strip().splitlines()[-1]
-check("dml_sensitivity rho = 1: last line states 'rho = 1 (the worst case)' and names both intervals",
-      "In a report, state rho = 1 (the worst case) next to the bounds" in last and "'bounds [a, b]' is the bias bound" in
-      last and "confidence bounds add sampling error" in last, last)
+check("dml_sensitivity rho = 1.0: last line states 'rho = 1.0 (the worst case)' (as line 2 prints it) and names both "
+      "intervals: the bias bound as theta plus or minus bias_bound, not accounting for sampling error",
+      "In a report, state rho = 1.0 (the worst case) next to the bounds" in last and "rho = 1.0:" in txt
+      and "'bounds [a, b]' is the bias bound (theta plus or minus its bias_bound), not accounting for sampling error"
+      in last and "confidence bounds add sampling error and are the ones that exclude or include zero" in last, last)
 o, txt, _ = run(causal.dml_sensitivity, RES, rho=0.4, show=True)
 last = txt.strip().splitlines()[-1]
 check("dml_sensitivity rho = 0.4: 'rho = 0.4 next to the bounds', no 'worst case'",
       "state rho = 0.4 next to the bounds" in last and "worst case" not in last, last)
 o, txt, _ = run(causal.dml_sensitivity, RES, rho=-1.0, show=True)
-check("dml_sensitivity rho = -1: '(the worst case)' too", "rho = -1 (the worst case)" in txt.strip().splitlines()[-1])
+check("dml_sensitivity rho = -1: '(the worst case)' too", "rho = -1.0 (the worst case)" in txt.strip().splitlines()[-1])
+o, txt, _ = run(causal.dml_sensitivity, RES, rho=0.123456789, show=True)
+check("dml_sensitivity: the reporting line gives rho as line 2 prints it (0.123456789 in both, not 0.123457)",
+      "rho = 0.123456789:" in txt and "state rho = 0.123456789 next to" in txt.strip().splitlines()[-1],
+      txt.strip().splitlines()[-1])
+o, txt, _ = run(causal.dml_sensitivity, RES, q=0.5, show=True)
+tgt = f"{0.5 * o['estimate']:.4f}"
+check(f"dml_sensitivity q = 0.5: the reporting line judges the confidence bounds against the target {tgt}, not zero",
+      f"say whether the target value {tgt} is inside them" in txt.strip().splitlines()[-1]
+      and "include zero" not in txt.strip().splitlines()[-1] and f"theta to {tgt}" in txt, txt.strip().splitlines()[-1])
 o, txt, _ = run(causal.dml_sensitivity, RES, show=False)
 check("dml_sensitivity show=False: nothing printed", txt == "")
 

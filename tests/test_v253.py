@@ -197,9 +197,9 @@ check("numbers: sensitivity on an insignificant estimate unchanged (q = 0.5, 1, 
 # substitution is the only change allowed, so the rest of the text is still byte-identical to v2.5.2.1.
 # v2.6.4 appends one reporting line at the end (rho of the bounds; bias bound vs confidence bounds): the text before it
 # is still the v2.5.2.1 text, byte for byte, and the line is written out here, not taken from the code.
-V264_LINE = ("  In a report, state rho = 1 (the worst case) next to the bounds, and name each interval: 'bounds [a, b]' "
-             "is the bias bound, without sampling error; the confidence bounds add sampling error and are the ones that "
-             "exclude or include zero.\n")
+V264_LINE = ("  In a report, state rho = 1.0 (the worst case) next to the bounds, and name each interval: 'bounds [a, b]' "
+             "is the bias bound (theta plus or minus its bias_bound), not accounting for sampling error; the confidence "
+             "bounds add sampling error and are the ones that exclude or include zero.\n")
 for nm in ("D1", "D3"):
     _, txt, _ = run(causal.dml_sensitivity, RES[nm], show=True)
     ref_ = REF["texts"][nm].replace("theta to -0.0000", "theta to 0.0000")
@@ -385,9 +385,11 @@ check("window, the claim: a regressor unrelated to both makes it insignificant (
 check("window, why not 'any regressor': one that predicts y keeps it significant", py < 0.05, f"p {py:.2e}")
 
 # --- 8. review round 1 (2026-11-10): one check per finding, on the claim and not only on the string -------------
-# A1: the zero-bound note follows the bound itself (cf_d = 1 gives an infinite bound, not a zero one)
-o, txt, _ = run(causal.dml_sensitivity, RES["D1"], 0.0, 1.0, show=True)
-check("A1: cf_y = 0, cf_d = 1 (bias bound inf) has no 'bias bound is zero' note",
+# A1: the zero-bound note follows the bound itself (cf_d = 1 gives an infinite bound, not a zero one).
+# v2.6.4 review: with cf_y = 0 the bound at cf_d = 1 is now its limit, zero, so A1 uses cf_y = 0.05 (and
+# tests/test_v264.py checks cf_y = 0 or rho = 0 with cf_d = 1)
+o, txt, _ = run(causal.dml_sensitivity, RES["D1"], 0.05, 1.0, show=True)
+check("A1: cf_y = 0.05, cf_d = 1 (bias bound inf) has no 'bias bound is zero' note",
       not np.isfinite(o["bias_bound"]) and "bias bound is zero" not in txt, txt.splitlines()[2])
 o, txt, _ = run(causal.dml_sensitivity, RES["D1"], 0.05, 0.0, show=True)
 check("A2c: cf_d = 0 (bias bound 0) is flagged", o["bias_bound"] == 0 and "bias bound is zero" in txt)

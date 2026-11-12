@@ -53,7 +53,7 @@ Every check you request names the function of this skill that runs it (`estimati
 **Robustness and magnitude**
 - [ ] At least two robustness checks, with results that do not depend on one specification?
 - [ ] Economic significance discussed, not only p-values; intervals reported?
-- [ ] Sensitivity to unobserved confounding (Oster, Cinelli-Hazlett; `causal.dml_sensitivity` for double ML) for selection-on-observables claims, benchmarked on observed covariates?
+- [ ] Sensitivity to unobserved confounding (Oster, Cinelli-Hazlett; `causal.dml_sensitivity` for double ML) for selection-on-observables claims, benchmarked on observed covariates? For double ML bounds in a document: is the ρ stated next to each bound, and is each interval named (bias bound or confidence bounds; `interpretation-rules.md`, v2.6.4)?
 - [ ] Controls justified by a causal graph? Mediators, colliders, post-treatment variables or instruments among the controls? (`dag.adjustment_report` on the graph the authors describe or imply.)
 - [ ] An insignificant result reported as "no effect" without the design's MDE? (`simulation.mde_did`, `simulation.power_did_sim`.)
 - [ ] Risk models: far-tail VaR from a normal model? ES reported without an ES backtest? (`risk.gpd_fit`, `risk.es_backtest`.)
