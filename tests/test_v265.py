@@ -197,6 +197,10 @@ check("To do offline, account unknown, two accounts at different versions -> the
       len(acts) == 1 and "2 Claude accounts" in acts[0] and "behind the other copies" in acts[0], acts)
 acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.4", "unknown")], latest=None))
 check("To do offline, account unknown, two accounts at the plugin's version -> no item", acts == [], acts)
+acts = se.doctor_actions(report([P, app("2.6.3", "unknown"), app("2.6.3", "unknown")], latest=None))
+check("To do offline, account unknown, two accounts equal to each other but behind the plugin (2.6.3 < 2.6.4) -> "
+      "the one item (the reference is the plugin's version when the release is not checked)",
+      len(acts) == 1 and "2 Claude accounts" in acts[0] and "2.6.3, 2.6.3" in acts[0], acts)
 old = {"kind": se.APP_COPY, "version": "2.6.3", "path": "s"}       # a report without "account" (before v2.6.5)
 for label, c in (("one synced copy, account unknown", app("2.6.3", "unknown")), ("a report with no account key", old)):
     acts = se.doctor_actions(report([P, c]))
