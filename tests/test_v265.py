@@ -243,6 +243,8 @@ check("listing: the other side, projectPath = this folder -> its project install
 rep = se.doctor(offline=True, cdir=cdir, env={}, run=runner(AUTH), which=CLAUDE, os_name="posix")
 check("doctor: the report carries the account (org_id and org_name) and is JSON-serializable",
       json.loads(json.dumps(rep))["account"] == {"org_id": ME, "org_name": "Org A"}, rep.get("account"))
+check("doctor: the listing it reports counts the signed-in account's synced skill only (1, not 2)",
+      rep["listing"].get("checked") and rep["listing"]["skills"] == 1, rep["listing"].get("skills"))
 check("doctor offline (notebook case): no item about the other account's 2.6.3 copy",
       not any("2.6.3" in a for a in rep["actions"]), rep["actions"])
 rep["latest"] = {"version": "2.6.4", "status": "ok"}
@@ -266,6 +268,8 @@ with contextlib.redirect_stdout(buf):
 check("doctor, auth status unreadable: account None, 'Claude Code account: not read', no owner on the copies",
       rep2["account"] == {"org_id": None, "org_name": None} and "Claude Code account: not read" in buf.getvalue()
       and "the signed-in account's copy" not in buf.getvalue(), rep2["account"])
+check("doctor, auth status unreadable: the listing counts both accounts' synced skills (2), as before v2.6.5",
+      rep2["listing"].get("checked") and rep2["listing"]["skills"] == 2, rep2["listing"].get("skills"))
 
 # ----------------------------------------------------------------------------------- 7. rho on the dml_bounds lines
 rng = np.random.default_rng(2605)
