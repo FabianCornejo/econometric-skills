@@ -539,21 +539,32 @@ def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA)
           reduce the estimate by 100·q% (q = 1: to zero).
     rv_qa: the same, to make the reduced estimate no longer significant at level alpha.
     q must be a finite real number > 0 (v2.5.3: ValueError otherwise; TypeError for a bool or a non-number).
+    t must be finite and dof finite and >= 2 (v2.6.4: ValueError otherwise; with dof = 1 the confounder of the
+    paper's df − 1 convention leaves no degree of freedom, and RV_q,α printed "nan%"; ovb_bounds refuses it too).
     """
     q = _check_q(q)
     t, dof = abs(float(t)), float(dof)
+    if not np.isfinite(t):
+        raise ValueError(f"t must be finite, got {t!r}")
+    if not (np.isfinite(dof) and dof >= 2):
+        raise ValueError(f"the sensitivity statistics need at least 2 residual degrees of freedom (the confounder "
+                         f"costs one); got dof = {dof:g}")
     f = t / np.sqrt(dof)
-    fq = q * f
+    fq = q * f                                # inf when q·f overflows: the formulas below then give 1
 
     def _rv(x):
-        return 0.5 * (np.sqrt(x ** 4 + 4 * x ** 2) - x ** 2)
+        # 0.5·(√(x⁴ + 4x²) − x²) of the paper, rewritten as 2x / (x + √(x² + 4)) (v2.6.4): the original lost every
+        # digit by cancellation once x²·eps > 4 (rv_q = 0.0 for x = q·f ≳ 1e8, where it is almost 1), gave inf beyond
+        # x ≈ 1.3e77 (x⁴ overflows) and nan beyond x ≈ 1.3e154 (x² too). hypot does not overflow; inf is the limit 1.
+        return 1.0 if np.isinf(x) else 2 * x / (x + np.hypot(x, 2.0))
 
     f_crit = stats.t.ppf(1 - alpha / 2, dof - 1) / np.sqrt(dof - 1)
     fqa = fq - f_crit
     if fqa < 0:
         rv_qa = 0.0
     elif fq > 1 / f_crit:                     # very large effects: closed form of the boundary case
-        rv_qa = (fq ** 2 - f_crit ** 2) / (1 + fq ** 2)
+        # (fq² − fc²)/(1 + fq²), divided through by fq² so it neither overflows nor gives nan (v2.6.4)
+        rv_qa = (1 - (f_crit / fq) ** 2) / ((1 / fq) ** 2 + 1)
     else:
         rv_qa = _rv(fqa)
     return {"partial_r2": t ** 2 / (t ** 2 + dof), "rv_q": float(_rv(fq)), "rv_qa": float(rv_qa),

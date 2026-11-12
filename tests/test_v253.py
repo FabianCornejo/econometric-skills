@@ -194,13 +194,19 @@ check("numbers: sensitivity on an insignificant estimate unchanged (q = 0.5, 1, 
 
 # --- 2. q = 1, significant: DML text byte-identical to 7c25644 ------------------------------------------
 # v2.6.1 (decision 2 of the user): the q = 1 target prints "0.0000" for theta < 0 (D3), not "-0.0000"; that one
-# substitution is the only change allowed, so the rest of the text is still byte-identical to v2.5.2.1
+# substitution is the only change allowed, so the rest of the text is still byte-identical to v2.5.2.1.
+# v2.6.4 appends one reporting line at the end (rho of the bounds; bias bound vs confidence bounds): the text before it
+# is still the v2.5.2.1 text, byte for byte, and the line is written out here, not taken from the code.
+V264_LINE = ("  In a report, state rho = 1 (the worst case) next to the bounds, and name each interval: 'bounds [a, b]' "
+             "is the bias bound, without sampling error; the confidence bounds add sampling error and are the ones that "
+             "exclude or include zero.\n")
 for nm in ("D1", "D3"):
     _, txt, _ = run(causal.dml_sensitivity, RES[nm], show=True)
     ref_ = REF["texts"][nm].replace("theta to -0.0000", "theta to 0.0000")
     check(f"text: dml_sensitivity {nm}, q = 1, significant, byte-identical to v2.5.2.1 (D3: '-0.0000' -> '0.0000' "
-          f"only, v2.6.1)", txt == ref_ and (nm == "D1") == (ref_ == REF["texts"][nm]),
-          "" if txt == REF["texts"][nm] else repr(txt))
+          f"only, v2.6.1; plus the v2.6.4 reporting line at the end)",
+          txt == ref_ + V264_LINE and ref_.endswith("\n") and (nm == "D1") == (ref_ == REF["texts"][nm]),
+          "" if txt == ref_ + V264_LINE else repr(txt))
 
 # --- 3. the sentences state the definitions --------------------------------------------------------------
 z95 = stats.norm.ppf(0.975)
