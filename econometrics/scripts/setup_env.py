@@ -8,8 +8,10 @@ Environment check and setup for the econometrics skill, the same on Windows, mac
                                      one list of what to ask the user: the Python to use (other interpreters
                                      on the machine included), packages and every optional extra, this skill's
                                      version against the latest release, other copies of the skill (plugin,
-                                     Claude app) and their versions, plugin auto-update, and a crowded skill
-                                     listing. Installs nothing. --json for a machine-readable report;
+                                     Claude app) and their versions (a copy another Claude account synced is
+                                     told apart when `claude auth status` gives the signed-in account and its
+                                     copy is there too), plugin auto-update, and a crowded skill listing.
+                                     Installs nothing. --json for a machine-readable report;
                                      --offline skips the release check (one request to api.github.com);
                                      --folder PATH measures the listing as Claude Code sees it in that
                                      folder (default: $CLAUDE_PROJECT_DIR, else the current folder): run it
@@ -375,10 +377,76 @@ def read_skill_version(folder) -> str | None:
     return _version_or_none(m.group(1)) if m else None
 
 
-def skill_copies(cdir: Path) -> list[dict]:
+APP_COPY = "Claude app (synced)"
+_UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+_UUID_RE = re.compile(_UUID)
+# Seen with Claude Code 2.1.322 (2026-11-12): skills/synced/<orgId>_<another id> folders, one for each of the two
+# accounts that had synced on that computer; the folder of the account no longer signed in stayed on disk at its old
+# version. The match is on the organization: two people of one organization would share the orgId.
+_SYNCED_DIR_RE = re.compile(rf"({_UUID})_{_UUID}")
+
+
+def signed_in_org(run=None, which=shutil.which, timeout: float = 20) -> dict | None:
+    """{"org_id", "org_name"} of the Claude account Claude Code is signed in to, from `claude auth status` (a JSON
+    object with "orgId" and "orgName" in 2.1.322), or None when it cannot be read: no CLI, an error, a timeout,
+    output that is not that object, signed out, or an orgId that is not a UUID. Never raises.
+    run(cmd, timeout) -> (code, out), as in skill_listing."""
+    try:
+        exe = which("claude")
+        if exe is None:
+            return None
+        run = run or (lambda cmd, t: _run(cmd, t, cwd=tempfile.gettempdir()))
+        code, out = run([exe, "auth", "status"], timeout)
+        start = re.search(r"^\ufeff?\{", out, re.M)   # a BOM or a warning line before the JSON is skipped; the object
+        data = json.JSONDecoder().raw_decode(out, start.end() - 1)[0]   # starts a line (an indented one: inside a list)
+    except Exception:                                # no CLI, a timeout, not JSON: unknown, never a crash
+        return None
+    if code != 0 or not isinstance(data, dict) or data.get("loggedIn") is False:
+        return None
+    org = data.get("orgId")
+    if not (isinstance(org, str) and _UUID_RE.fullmatch(org.strip())):
+        return None
+    name = data.get("orgName")
+    return {"org_id": org.strip(), "org_name": name if isinstance(name, str) and name.strip() else None}
+
+
+def synced_account(parts, org_id) -> str:
+    """Whose copy a path under skills/ is (`parts`: its parts relative to skills/): "signed in" when the folder
+    right after synced/ is <org_id>_<id> for the account Claude Code is signed in to, "other" when it is another
+    account's <orgId>_<id>, "unknown" when org_id is None or the folder name is not <UUID>_<UUID>.
+    skill_copies turns "other" back into "unknown" when no synced copy is the signed-in account's (see there)."""
+    parts = list(parts)
+    try:
+        acct = parts[parts.index("synced") + 1]
+    except (ValueError, IndexError):
+        return "unknown"
+    m = _SYNCED_DIR_RE.fullmatch(acct)
+    if not org_id or not m:
+        return "unknown"
+    return "signed in" if m.group(1).lower() == str(org_id).strip().lower() else "other"
+
+
+def signed_in_copy(cdir: Path, org_id) -> bool:
+    """Is a copy of this skill synced by the signed-in account on disk (skills/synced/<org_id>_<id>/econometrics)?
+    The one condition under which skill_copies and skill_listing treat another account's synced folder as not in the
+    skill list: it is the case checked on a notebook (review 2: the two used different conditions)."""
+    syn = Path(cdir) / "skills" / "synced"
+    if not org_id or not syn.is_dir():
+        return False
+    return any(synced_account(("synced", d.name), org_id) == "signed in" and (d / "econometrics" / "SKILL.md").exists()
+               for d in syn.iterdir())
+
+
+def skill_copies(cdir: Path, org_id=None) -> list[dict]:
     """Every copy of the skill Claude Code can see: the installed plugin, the marketplace checkout (the
     source of the next update), copies synced from the Claude app and manual copies under skills/.
-    Copies in skills/.trash (removed from the app) are ignored, as Claude Code ignores them."""
+    Copies in skills/.trash (removed from the app) are ignored, as Claude Code ignores them.
+
+    A synced copy carries "account" (synced_account): with org_id (signed_in_org) known, the copy of another
+    Claude account is marked "other", but only when a copy of the signed-in account is there too (the case checked
+    on a notebook); otherwise it stays "unknown", as every synced copy before v2.6.5. v2.6.5: the doctor told a user
+    signed in to one account to update the 2.6.3 copy that another account had left on disk; Claude Code listed only
+    the signed-in account's copy."""
     out = []
     inst = _load_json(cdir / "plugins" / "installed_plugins.json")
     entry = _dict(inst.get("plugins")).get(PLUGIN_ID)
@@ -397,8 +465,17 @@ def skill_copies(cdir: Path) -> list[dict]:
             rel = sk.relative_to(skills).parts
             if ".trash" in rel:
                 continue
-            kind = "Claude app (synced)" if "synced" in rel else "manual copy"
-            out.append({"kind": kind, "path": str(sk.parent), "version": read_skill_version(sk.parent)})
+            c = {"kind": APP_COPY if "synced" in rel else "manual copy", "path": str(sk.parent),
+                 "version": read_skill_version(sk.parent)}
+            if "synced" in rel:
+                c["account"] = synced_account(rel, org_id)
+            out.append(c)
+    # "other" only next to a copy of the signed-in account: checked on a notebook (Claude Code listed that copy, not the
+    # other account's), while what Claude Code lists when the signed-in account synced none was not checked (review 1)
+    if not signed_in_copy(cdir, org_id):
+        for c in out:
+            if c.get("account") == "other":
+                c["account"] = "unknown"
     return out
 
 
@@ -610,12 +687,15 @@ def folder_settings(folder) -> dict:
             "skill_off": skill_off}
 
 
-def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:
+def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None, org_id=None) -> dict:
     """How crowded Claude Code's skill listing is in folder `cwd` (default: the current folder): enabled plugins
     and their skills, from `claude plugin list --json` run there so the folder's own settings count, plus skills
     under skills/. The CLI also lists, as enabled, project-scope installs made for OTHER folders (2.1.319): those
     are left out, and an install folder listed twice is counted once. A project-scope install of this skill for
-    this folder is reported (`project_install`): it pins the folder to that version."""
+    this folder is reported (`project_install`): it pins the folder to that version. With org_id (signed_in_org)
+    known, skills synced for another Claude account are not counted: Claude Code signed in to one account did not
+    list the other account's synced copy (v2.6.5, notebook check E1); only when the signed-in account's own synced copy
+    of this skill is there too (signed_in_copy), the case that was checked."""
     folder = Path(cwd) if cwd else Path.cwd()
     run = run or (lambda cmd, timeout: _run(cmd, timeout, cwd=str(folder)))
     settings = _load_json(cdir / "settings.json")
@@ -641,7 +721,7 @@ def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:
         if p.get("scope") in ("project", "local") and isinstance(pp, str) and pp and not _same_dir(pp, folder):
             continue                                  # an install for another folder: not active here
         if str(p.get("id", "")).startswith("econometrics@") and p.get("scope") in ("project", "local") \
-                and isinstance(pp, str) and _same_dir(pp, folder):
+                and isinstance(pp, str) and pp and _same_dir(pp, folder):   # v2.6.5: "" resolved to the cwd
             res["project_install"] = {"version": p.get("version"), "scope": p.get("scope")}
         if str(p.get("id", "")).startswith("econometrics@") and p.get("scope") == "user":
             res["user_install"] = {"version": p.get("version")}      # what applies if the folder's own goes
@@ -653,7 +733,9 @@ def skill_listing(cdir: Path, run=None, which=shutil.which, cwd=None) -> dict:
             n_skills += sum(1 for _ in ip.glob("**/SKILL.md"))
     sk = cdir / "skills"
     if sk.is_dir():
-        n_skills += sum(1 for f in sk.glob("**/SKILL.md") if ".trash" not in f.relative_to(sk).parts)
+        mine = signed_in_copy(cdir, org_id)      # the same condition as skill_copies (review 2)
+        n_skills += sum(1 for f in sk.glob("**/SKILL.md") if ".trash" not in f.relative_to(sk).parts
+                        and not (mine and synced_account(f.relative_to(sk).parts, org_id) == "other"))
     ids = {p.get("id") for p in enabled}
     res.update(checked=True, enabled_plugins=len(ids), skills=n_skills,
                crowded=n_skills >= CROWDED_SKILLS,
@@ -672,6 +754,15 @@ def _safe(fn, default):
         return d
 
 
+def _running_unknown(copies: list) -> list:
+    """The copy this doctor runs from is never 'another account's' (review 2): the printed list, the To do and --json
+    then agree. Claude Code, or a script's locator, is running it."""
+    for c in copies:
+        if c.get("account") == "other" and _same_file(c["path"], SKILL_DIR):
+            c["account"] = "unknown"
+    return copies
+
+
 def doctor(offline: bool = False, *, cdir=None, env=None, opener=None, run=None, which=shutil.which,
            os_name=os.name, cwd=None) -> dict:
     """The full report (a dict). Installs, writes and changes nothing; the only network access is one
@@ -681,8 +772,13 @@ def doctor(offline: bool = False, *, cdir=None, env=None, opener=None, run=None,
     if cwd is None:
         cwd = (os.environ if env is None else env).get("CLAUDE_PROJECT_DIR") or None
     here = sys.version_info[:2] >= MIN_PYTHON
+    # the account matters only to tell synced copies apart: no synced folder, no call (up to 20 s on a stuck CLI)
+    has_synced = _safe(lambda: (cdir / "skills" / "synced").is_dir(), False)    # review 2: an OS error here crashed
+    acct = _safe(lambda: signed_in_org(run=run, which=which), None) if has_synced else None
+    org_id = acct["org_id"] if acct else None
     rep = {
         "claude_dir": str(cdir),
+        "account": acct or {"org_id": None, "org_name": None},
         "python": {"exe": sys.executable, "version": sys.version.split()[0], "supported": here,
                    "run_with": _safe(lambda: run_command(which=which, os_name=os_name), sys.executable)},
         "core_missing": missing_packages() if here else [f"{d}>={m}" for d, m in CORE.values()],
@@ -690,11 +786,12 @@ def doctor(offline: bool = False, *, cdir=None, env=None, opener=None, run=None,
                        "heavy_mb": HEAVY_MB.get(n), "minimum_tested": n not in UNTESTED_MINIMUM,
                        "caveats": extra_caveats(n, os_name=os_name)} for n in OPTIONAL},
         "skill": {"dir": str(SKILL_DIR), "version": read_skill_version(SKILL_DIR)},
-        "copies": _safe(lambda: skill_copies(cdir), list),
+        "copies": _safe(lambda: _running_unknown(skill_copies(cdir, org_id=org_id)), list),
         "autoupdate": _safe(lambda: marketplace_autoupdate(cdir, env),
                             lambda: {"registered": False, "on": False, "configured": False, "source": "unknown",
                                      "blocked_by": []}),
-        "listing": _safe(lambda: skill_listing(cdir, run=run, which=which, cwd=cwd), lambda: {"checked": False}),
+        "listing": _safe(lambda: skill_listing(cdir, run=run, which=which, cwd=cwd, org_id=org_id),
+                         lambda: {"checked": False}),
     }
     others = []
     for cmd in _safe(lambda: python_candidates(os_name=os_name, run=run, which=which), list):
@@ -745,10 +842,21 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
                         + f"  ({install_command()})")
     latest = rep["latest"]["version"]
     n_before_updates = len(acts)
+    # v2.6.5: a synced copy of another Claude account is not in the signed-in account's skill list, so it gets no
+    # item; with the account unknown and synced copies of several accounts on disk, which one counts is not known,
+    # so they get one item of their own instead of an update order aimed at one of them
+    here_dir = rep["skill"].get("dir")
+    acc = lambda c: ("unknown" if here_dir and _same_file(c["path"], here_dir)   # never silence the copy running now
+                     else c.get("account", "unknown"))                          # (reports before v2.6.5: no "account")
+    org_read = bool((rep.get("account") or {}).get("org_id"))
+    ambiguous = [c for c in rep["copies"] if c["kind"] == APP_COPY and acc(c) == "unknown"]
+    ambiguous = ambiguous if len(ambiguous) > 1 and not org_read else []    # review 1: not when the account was read
+    counted = [c for c in rep["copies"] if c["kind"] != "marketplace checkout" and acc(c) != "other"
+               and not any(c is a for a in ambiguous)]
     if latest:
         # every copy Claude can load, plus the one running if it is none of them (a clone, say); the
         # marketplace checkout is only the source of the next plugin update, so it is not one of them
-        loaded = [c for c in rep["copies"] if c["kind"] != "marketplace checkout"]
+        loaded = list(counted)
         here = rep["skill"]
         in_cache = "cache" in Path(here["dir"]).parts and any(
             part == MARKETPLACE for part in Path(here["dir"]).parts)
@@ -766,19 +874,30 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
                 continue
             if c["kind"] == "plugin":
                 acts.append(f"update the plugin from {c['version']} to {latest}: {_update_steps()}")
-            elif c["kind"] == "Claude app (synced)":
-                acts.append(f"the Claude app copy is {c['version']}, the latest is {latest}: in the Claude app, "
+            elif c["kind"] == APP_COPY:
+                where = f" at {c['path']}" if sum(x["kind"] == APP_COPY for x in loaded) > 1 else ""   # review 2:
+                acts.append(f"the Claude app copy{where} is {c['version']}, the latest is {latest}: in the Claude app, "
                             f"Customize -> Skills, upload {RELEASE_ASSET} (it reaches Claude Code at its next start)")
             else:
                 acts.append(f"the {c['kind']} at {c['path']} is {c['version']}, the latest is {latest}: replace it "
                             f"with the release ({RELEASE_ASSET}) or update the clone (git pull)")
-    vers = {c["version"] for c in rep["copies"] if c["kind"] != "marketplace checkout" and c["version"]}
+    vers = {c["version"] for c in counted if c["version"]}
     if len(vers) > 1 and len(acts) == n_before_updates:     # not already covered by an update item above
-        desc = "; ".join(f"{c['kind']} {c['version']}" for c in rep["copies"] if c["kind"] != "marketplace checkout")
-        app = any(c["kind"] == "Claude app (synced)" for c in rep["copies"])
+        desc = "; ".join(f"{c['kind']} {c['version']}" for c in counted)
+        app = any(c["kind"] == APP_COPY for c in counted)
         acts.append(f"copies of the skill at different versions ({desc}): keep them equal"
                     + (f" (the Claude app copy: Customize -> Skills, upload {RELEASE_ASSET}, or remove it there "
                        "and keep only the plugin)" if app else ""))
+    if ambiguous:                                           # after the 'different versions' item, which it must not hide
+        ref = latest or max((c["version"] for c in counted if c["version"]), key=_vtuple, default=None)
+        av = [c["version"] for c in ambiguous]
+        if (ref and any(v and _vtuple(v) < _vtuple(ref) for v in av)) or (not ref and len({v for v in av if v}) > 1):
+            acts.append(f"{len(ambiguous)} Claude app copies are on this computer, in folders of skills/synced "
+                        "(Claude Code keeps one per Claude account that synced here), at versions "
+                        + ", ".join(v or "unreadable" for v in av) + ", and the account Claude Code is signed in to "
+                        "could not be read (claude auth status). Claude Code lists the copy of the account it is "
+                        f"signed in to: if that one is behind {ref or 'the others'}, update it in "
+                        f"the Claude app signed in to that account (Customize -> Skills, upload {RELEASE_ASSET})")
     au = rep["autoupdate"]
     if au["registered"] and not au["on"]:
         if au["blocked_by"]:
@@ -855,8 +974,15 @@ def print_doctor(rep: dict) -> None:
     sk, lt = rep["skill"], rep["latest"]
     print(f"Skill in use: {sk['version']} ({sk['dir']})")
     print("Latest release: " + (lt["version"] if lt["version"] else lt["status"]))
+    ac = rep.get("account") or {}
+    if ac.get("org_id"):
+        print(f"Claude Code signed in to: {ac.get('org_name') or 'an organization'} (org {ac['org_id']})")
+    elif any(c["kind"] == APP_COPY for c in rep["copies"]):
+        print("Claude Code account: not read (claude auth status)")
+    owner = {"signed in": ", the signed-in account's copy",
+             "other": ", another Claude account's copy: not in this account's skill list, nothing to do here"}
     for c in rep["copies"]:
-        print(f"  copy: {c['kind']} {c['version']} ({c['path']})")
+        print(f"  copy: {c['kind']} {c['version']}{owner.get(c.get('account'), '')} ({c['path']})")
     au = rep["autoupdate"]
     if au["registered"]:
         print("Plugin auto-update: " + ("on" if au["on"] else "off") + f" ({au['source']}"

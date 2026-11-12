@@ -282,6 +282,16 @@ def _dml_pct(x: float, d: int) -> str:
     return f"< {10 ** -d:.{d}f}%" if 0 < x < 0.5 * 10 ** -(d + 2) else f"{x:.{d}%}"
 
 
+def _rho_g(r) -> str:
+    """rho as dml_bounds prints it on its header, its lines and its report line (v2.6.5): ':g', except that a rho that
+    :g would round to 1 or -1 is printed in full (0.9999996, not "1", which reads as the worst case), and -0.0 as 0."""
+    r = float(r)
+    s = f"{r:g}"
+    if s in ("1", "-1") and abs(r) != 1:
+        return repr(r)
+    return "0" if r == 0 else s
+
+
 def _dml_report_line(rho, bias_name: str, rho_txt: str = "", target: str = "") -> str:
     """v2.6.4, printed after the bounds by dml_sensitivity (its last line) and dml_bounds (before its warnings): in the
     v2.6.3 validation the memo did not say which rho the DML bounds used (the chat did), and called both the bias bound
@@ -676,14 +686,14 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
               f"benchmarking appendix: the benchmark's gains in explaining the outcome and the treatment, scaled by "
               f"k): theta = {th:.4f} (SE {se:.4f}).")
         print("  rho = the benchmark's observed correlation of the omitted pieces" if rho == "benchmark" else
-              f"  rho = {float(rho):g}" + (" (the worst case)" if abs(float(rho)) == 1 else "") + " for every line")
+              f"  rho = {_rho_g(rho)}" + (" (the worst case)" if abs(float(rho)) == 1 else "") + " for every line")
         for _, r in out["bounds"].iterrows():
             cap = " (capped)" if r["cf_y_capped"] else ""
             same = f"{r['kd']:g}" == f"{r['ky']:g}"   # review: kd 0.3, ky 0.1 * 3 print alike with :g
             kd_s, ky_s = ((repr(float(r["kd"])), repr(float(r["ky"]))) if same else (f"{r['kd']:g}", f"{r['ky']:g}"))
             kk = ("" if r["kd"] == r["ky"] else      # v2.6.3: "2/5x" could read as 0.4x
                   f"(kd = {kd_s} for the treatment, ky = {ky_s} for the outcome) ")
-            print(f"  {r['bound_label']}: {kk}cf_y {r['cf_y']:.1%}{cap}, cf_d {r['cf_d']:.1%}, rho {r['rho']:.2f}: "
+            print(f"  {r['bound_label']}: {kk}cf_y {r['cf_y']:.1%}{cap}, cf_d {r['cf_d']:.1%}, rho {_rho_g(r['rho'])}: "
                   f"theta "
                   f"between {r['theta_lower']:.4f} and {r['theta_upper']:.4f}; {level} confidence bounds "
                   f"[{r['ci_low']:.4f}, {r['ci_high']:.4f}], which "
@@ -694,7 +704,7 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
               "uncertainty is not propagated.")
         if not out["bounds"].empty:
             print(_dml_report_line(rho, "'theta between a and b'",
-                                   rho_txt="" if rho == "benchmark" else f"{float(rho):g}"))
+                                   rho_txt="" if rho == "benchmark" else _rho_g(rho)))
         for w in warns:
             print("  WARNING: " + w)
     return out
