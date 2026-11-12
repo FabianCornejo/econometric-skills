@@ -144,8 +144,36 @@ for nm in NREP:
     check(f"numbers: dml_benchmark {nm} unchanged (old cf_y, cf_d as r2_y, r2_d since v2.6.2)",
           all(close(None if not np.isfinite(bm.loc[b, old_name.get(c, c)]) else float(bm.loc[b, old_name.get(c, c)]),
                     rb[b][c]) for b in rb for c in rb[b]))
-    check(f"numbers: dml_benchmark {nm}, cf_y and cf_d above the reference partial R² (gains, v2.6.2)",
-          all(bm.loc[b, c] >= rb[b][c] for b in rb for c in ("cf_y", "cf_d")))
+    # v2.6.3: this check said "cf_y and cf_d above the reference partial R²", which does not hold in general (cf is
+    # the median of the split gains, r2 a ratio of medians; tests/test_v263.py builds a case with cf 0.01 < r2 0.2);
+    # it now recomputes cf from the residuals, split by split (paired by position: same seed, n_folds, n_rep). The
+    # moments below follow the same definitions as causal._dml_sens_rep; what is checked independently here is the
+    # aggregation and the pairing (tests/test_v263.py checks the moments on splits built with known values)
+    def split_gains(r_l, r_s):
+        def m_(u, v):
+            th = np.sum(v * u) / np.sum(v * v)
+            return np.mean((u - th * v) ** 2), 1 / np.mean(v * v)
+        out = []
+        for (ul, vl), (us, vs) in zip(r_l["residuals"], r_s["residuals"]):
+            (s2l, n2l), (s2s, n2s) = m_(ul, vl), m_(us, vs)
+            out.append((max(s2s / s2l - 1, 0.0), max(n2l / n2s - 1, 0.0)))
+        return np.array(out)
+    rs_x1 = causal.dml_plr(DF[nm], "y", "d", [x for x in X if x != "x1"], n_rep=NREP[nm], **LIN)
+    G = split_gains(RES[nm], rs_x1)
+    check(f"numbers: dml_benchmark {nm}, x1: cf_y and cf_d = median over the {NREP[nm]} splits of the split gains "
+          "cut at 1, recomputed from the residuals (v2.6.3)",
+          close(bm.loc["x1", "cf_y"], float(np.median(np.minimum(G[:, 0], 1))), 1e-10)
+          and close(bm.loc["x1", "cf_d"], float(np.median(np.minimum(G[:, 1], 1))), 1e-10),
+          (bm.loc["x1", ["cf_y", "cf_d"]].tolist(), G.tolist()))
+# v2.6.3: with one split the two aggregations coincide: cf = min(r2 / (1 - r2), 1) exactly (NIT of v2.6.2 review 2)
+r1 = causal.dml_plr(DF["D1"], "y", "d", X, n_rep=1, **LIN)
+b1, _, _ = run(causal.dml_benchmark, DF["D1"], "y", "d", X, ["x1", "x2"], res=r1, n_rep=1, **LIN)
+check("one split (D1, n_rep = 1): cf_y = min(r2_y/(1 - r2_y), 1) and cf_d = min(r2_d/(1 - r2_d), 1), x1 and x2 "
+      "(v2.6.3)",
+      all(close(b1.loc[b, c], min(b1.loc[b, r] / (1 - b1.loc[b, r]), 1.0), 1e-10)
+          for b in ("x1", "x2") for c, r in (("cf_y", "r2_y"), ("cf_d", "r2_d")))
+      and all(b1.loc[b, "r2_y"] > 0 and b1.loc[b, "r2_d"] > 0 for b in ("x1", "x2")),
+      b1[["cf_y", "r2_y", "cf_d", "r2_d"]].to_string())
 for key, ref in REF["oster"].items():
     nm, delta = key.split("|")
     o, _, _ = run(sp.oster, *oster_design(nm), "x", delta=float(delta))

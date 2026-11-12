@@ -6,7 +6,7 @@ Origin: the v2.6.1 validation on notebook 1 (a memo mixed the HC3 CI with classi
 reviewer A1 of v2.6.1 (k_needed can exceed k_cap: seed 29, x: 7965 > 7936), and the research of v2.6.2
 (claude/fonte-dml-benchmark-k.md in the dev repository): Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis (2022,
 Appendix F) and DoubleML 0.11.4 benchmark with *gains*, G = R/(1 - R), and scale them by k; dml_benchmark returned the
-partial R² R = G/(1 + G), which made "as strong as X" less conservative than the paper.
+partial R² R = G/(1 + G), smaller in each sample split, which made "as strong as X" less conservative than the paper.
 
 What is checked, each by a route other than the implementation's:
   1. ovb_bounds and sensitivity after a robust fit print one report sentence (label the classical-SE numbers, show
@@ -134,7 +134,7 @@ for seed, bms in ((29, ("x", "w")), (840, ("x",))):
         lines = [s for s in t.splitlines() if f"as strong as {b} in explaining the treatment" in s and BEYOND in s]
         check(f"beyond cap, seed {seed} {b}: the sentence says the outcome is fully explained, names k_cap, and never "
               f"'same k for treatment and outcome' for k_needed",
-              len(lines) == 1 and f"{kc:.4g}x" in lines[0] and f"{kn:.3g}x" in lines[0]
+              len(lines) == 1 and f"at k_cap = {kc:.4g} (with kd = ky)" in lines[0] and f"{kn:.3g}x" in lines[0]
               and not any(f"{kn:.3g}x as strong as {b} (same k for treatment and outcome) could, in the worst case, "
                           f"bring" in s for s in t.splitlines()), lines)
 m29 = smf.ols("y ~ d + x + w", design(29)).fit()
