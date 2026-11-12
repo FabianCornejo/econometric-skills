@@ -87,6 +87,21 @@ def _own_body(f):
     return out
 
 
+def _walrus_targets(node):
+    """Names bound by a walrus in `node` in the scope where `node` runs: a comprehension's walrus counts (it binds
+    in the enclosing function), a lambda's or a nested def's body does not (it binds there) (review 2)."""
+    out, stack = [], [node]
+    while stack:
+        s = stack.pop()
+        if isinstance(s, ast.NamedExpr):
+            out.append(s.target.id)
+        if isinstance(s, _FUNCS) and s is not node:
+            stack.extend(_outer_parts(s))          # its defaults, decorators...: still this scope; not its body
+            continue
+        stack.extend(ast.iter_child_nodes(s))
+    return out
+
+
 def _nonlocal_rebinds(node, params):
     """(parameter, line) for every outer parameter that a function inside `node` (node included) declares
     `nonlocal` in its own body and then rebinds there (an assignment of any kind, a def or class of that name, a
@@ -108,9 +123,9 @@ def _nonlocal_rebinds(node, params):
         bound = set()
         for s in body:
             if isinstance(s, _COMPS):
-                names = [w.target.id for w in ast.walk(s) if isinstance(w, ast.NamedExpr)]
-            elif isinstance(s, _FUNCS):
-                names = [getattr(s, "name", None)]
+                names = _walrus_targets(s)
+            elif isinstance(s, _FUNCS):            # its name, and a walrus in its defaults, decorators, annotations
+                names = [getattr(s, "name", None)] + [n for part in _outer_parts(s) for n in _walrus_targets(part)]
             else:
                 names = _bound(s)
             bound |= set(names)
@@ -133,11 +148,11 @@ def loop_reassignments(fn):
     Nested functions, lambdas and classes are their own scope and are not entered. In a comprehension only a walrus
     binds in the function (its loop variables do not). A loop's `else` block and a for's iterable run once, so they
     are outside the loop; a while's test runs on every pass; a comprehension is a loop of its own (a walrus in it
-    counts even outside any for/while). v2.6.5: a nested def's, lambda's or class's defaults, decorators, bases and
-    keywords run in this function's scope, so a walrus there counts like one in the body (inside a loop, a hit); and a
-    parameter that a nested function rebinds after `nonlocal p` is always a hit, in a loop or not, because where the
-    nested function is called is not visible without flow analysis. (A nested function that has its own `p` as a
-    parameter shadows the outer one; a `nonlocal p` under it is then flagged anyway: none occurs in scripts/.)"""
+    counts even outside any for/while). v2.6.5: a nested def's, lambda's or class's defaults, decorators, annotations,
+    bases and keywords run in this function's scope, so a walrus there counts like one in the body (inside a loop, a
+    hit); and a parameter that a nested function rebinds after `nonlocal p` is always a hit, in a loop or not, because
+    where the nested function is called is not visible without flow analysis. Scopes are followed: under a function
+    with its own `p`, a `nonlocal p` is that function's (see _nonlocal_rebinds)."""
     a = fn.args
     params = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs}
     params |= {x.arg for x in (a.vararg, a.kwarg) if x is not None}
@@ -268,6 +283,20 @@ VARIANTS = {
                                           "        class q:\n            pass\n    g()\n",
     "nonlocal in a method of a nested class (the class body hides nothing)": "def f(q, show=False):\n"
         "    class C:\n        def m(self):\n            nonlocal q\n            q = 1\n    C().m()\n",
+    "nonlocal, then a walrus in a deeper def's default": "def f(q, show=False):\n    def g():\n        nonlocal q\n"
+        "        def h(x=(q := 1)):\n            pass\n    g()\n",
+    "nonlocal, then a walrus in a deeper def's decorator": "def f(q, show=False):\n    def g():\n        nonlocal q\n"
+        "        @deco(q := 1)\n        def h():\n            pass\n    g()\n",
+    "nonlocal, then a walrus in a lambda's default": "def f(q, show=False):\n    def g():\n        nonlocal q\n"
+        "        h = lambda x=(q := 1): x\n    g()\n",
+    "nonlocal, then a walrus in a class base": "def f(q, show=False):\n    def g():\n        nonlocal q\n"
+        "        class C(base(q := 1)):\n            pass\n    g()\n",
+    "walrus in a nested def's keyword-only annotation inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+        "        def g(*, x: (q := int)):\n            pass\n",
+    "walrus in a nested def's *args annotation inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+        "        def g(*a: (q := int)):\n            pass\n",
+    "walrus in a nested def's positional-only annotation inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+        "        def g(x: (q := int), /):\n            pass\n",
     "nonlocal then a walrus in a comprehension": "def f(q, show=False):\n    def g():\n        nonlocal q\n"
                                                  "        z = [(q := t) for t in y]\n    g()\n",
 }
@@ -303,6 +332,8 @@ CLEAN = {
     "nonlocal q, then q only as a comprehension's own loop variable": "def f(q, show=False):\n    def g():\n"
                                                                       "        nonlocal q\n        return [0 for q in y]\n"
                                                                       "    return g()\n",
+    "nonlocal q, then a walrus inside a lambda inside a comprehension (binds in the lambda)":
+        "def f(q, show=False):\n    def g():\n        nonlocal q\n        z = [(lambda: (q := 1)) for t in y]\n    g()\n",
     "an annotation that reads a parameter inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
                                                           "        def g(x: q):\n            pass\n",
 }

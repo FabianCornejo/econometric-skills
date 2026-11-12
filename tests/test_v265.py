@@ -49,6 +49,7 @@ import sys
 import tempfile
 import warnings
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[0]
@@ -106,7 +107,8 @@ bad = {"exit code 1": runner(AUTH, code=1), "empty output": runner(""), "not JSO
        "a JSON list": runner([AUTH]), "loggedIn false": runner({**AUTH, "loggedIn": False}),
        "no orgId": runner({k: v for k, v in AUTH.items() if k != "orgId"}),
        "orgId not a UUID": runner({**AUTH, "orgId": "Org A"}), "orgId a UUID with a suffix": runner({**AUTH, "orgId": ME + "x"}),
-       "orgId a number": runner({**AUTH, "orgId": 7}), "a timeout (_run gives -1, '')": runner("", code=-1),
+       "orgId a number": runner({**AUTH, "orgId": 7}),
+       "a JSON list printed with indent (review 2)": runner(json.dumps([AUTH], indent=2)), "a timeout (_run gives -1, '')": runner("", code=-1),
        "run() raises": runner(raises=OSError("boom"))}
 for label, run in bad.items():
     check(f"signed_in_org: {label} -> None (account unknown, no exception)",
@@ -209,7 +211,7 @@ acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.4", "unkno
 check("To do, account unknown, two accounts both current -> no item", acts == [], acts)
 acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.3", "unknown")], latest=None))
 check("To do offline, account unknown, two accounts at different versions -> the one item, not 'different versions'",
-      len(acts) == 1 and "2 Claude app copies are on this computer" in acts[0] and "behind the others" in acts[0], acts)
+      len(acts) == 1 and "2 Claude app copies are on this computer" in acts[0] and "behind 2.6.4," in acts[0], acts)
 acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.4", "unknown")], latest=None))
 check("To do offline, account unknown, two accounts at the plugin's version -> no item", acts == [], acts)
 acts = se.doctor_actions(report([P, app("2.6.3", "unknown"), app("2.6.3", "unknown")], latest=None))
@@ -235,8 +237,8 @@ check("To do offline, no plugin, two accounts unknown at different versions -> t
 acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.3", "unknown")], org=ME))
 check("To do, account READ but two folder names it cannot place -> no 'could not be read' item; each copy as before "
       "(review 1: the item contradicted the line above it)",
-      acts == ["the Claude app copy is 2.6.3, the latest is 2.6.4: in the Claude app, Customize -> Skills, upload "
-               f"{se.RELEASE_ASSET} (it reaches Claude Code at its next start)"], acts)
+      acts == ["the Claude app copy at s/unknown/2.6.3 is 2.6.3, the latest is 2.6.4: in the Claude app, Customize -> "
+               f"Skills, upload {se.RELEASE_ASSET} (it reaches Claude Code at its next start)"], acts)
 acts = se.doctor_actions(report([P, app("2.6.3", "unknown"), {"kind": se.APP_COPY, "version": None, "path": "z",
                                                               "account": "unknown"}]))
 check("To do, accounts item (one copy behind) with an unreadable version: 'versions 2.6.3, unreadable', never 'None'",
@@ -244,16 +246,21 @@ check("To do, accounts item (one copy behind) with an unreadable version: 'versi
 acts = se.doctor_actions(report([P, app("2.6.4", "signed in"), app("2.6.3", "other")], here="s/other/2.6.3"))
 check("To do: the copy running now is the other account's (2.6.3) -> it is not silenced (review 1)",
       len(acts) == 1 and "2.6.3" in acts[0], acts)
+acts = se.doctor_actions(report([app("2.6.3", "unknown"), {"kind": se.APP_COPY, "version": None, "path": "z",
+                                                         "account": "unknown"}], latest=None, here="/c/clone/econometrics"))
+check("To do offline, no reference, two accounts: 2.6.3 and an unreadable version are not 'different versions' -> []",
+      acts == [], acts)
 acts = se.doctor_actions(report([P, app("2.6.3", "signed in"), app("2.6.3", "unknown")]))
-check("To do: a signed-in copy and one unknown folder name, both behind -> each gets the usual item (not 'accounts')",
-      len(acts) == 2 and all(a.startswith("the Claude app copy is 2.6.3") for a in acts), acts)
+check("To do: a signed-in copy and one unknown folder name, both behind -> one item each, naming its folder, never two "
+      "identical items (review 2)", len(acts) == 2 and acts[0].startswith("the Claude app copy at s/signed in/2.6.3 is 2.6.3")
+      and acts[1].startswith("the Claude app copy at s/unknown/2.6.3 is 2.6.3") and acts[0] != acts[1], acts)
 
 # ----------------------------------------------------------------------------------- 5. skill_listing
 lt = Path(tempfile.mkdtemp())
 lc = lt / ".claude"
-for acct, n in ((f"{ME}_{ME_ID}", 3), (f"{OTHER}_{OTHER_ID}", 5)):
+for acct, n in ((f"{ME}_{ME_ID}", 3), (f"{OTHER}_{OTHER_ID}", 5)):   # each with its own copy of this skill
     for k in range(n):
-        d = lc / "skills" / "synced" / acct / f"s{k}"
+        d = lc / "skills" / "synced" / acct / ("econometrics" if k == 0 else f"s{k}")
         d.mkdir(parents=True)
         (d / "SKILL.md").write_text("x", encoding="utf-8")
 (lc / "skills" / "mine").mkdir(parents=True)
@@ -265,6 +272,16 @@ for org, want, label in ((ME, 3 + 1, "signed in to the 3-skill account"), (OTHER
     lst = se.skill_listing(lc, run=runner(), which=CLAUDE, cwd=folder, org_id=org)
     check(f"listing: {label} -> {want} skills (synced skills of another account not counted; a manual one counted)",
           lst["checked"] and lst["skills"] == want, lst.get("skills"))
+lm = Path(tempfile.mkdtemp()) / ".claude"
+for acct, sub in ((f"{ME}_{ME_ID}", "other-skill"), (f"{OTHER}_{OTHER_ID}", "econometrics")):
+    d = lm / "skills" / "synced" / acct / sub
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("x", encoding="utf-8")
+lst = se.skill_listing(lm, run=runner(), which=CLAUDE, cwd=folder, org_id=ME)
+cps = se.skill_copies(lm, org_id=ME)
+check("listing and copies agree: the signed-in folder has another skill but no copy of this one -> the other "
+      "account's econometrics is 'unknown' AND counted (2 skills; review 2: the count left it out)",
+      lst["skills"] == 2 and [c.get("account") for c in cps] == ["unknown"], (lst.get("skills"), cps))
 lo = Path(tempfile.mkdtemp()) / ".claude"
 for k in range(4):
     d = lo / "skills" / "synced" / f"{OTHER}_{OTHER_ID}" / f"s{k}"
@@ -334,6 +351,41 @@ check("doctor with no skills/synced folder: claude auth status is not run, and n
       ["auth", "status"] not in calls and "Claude Code account" not in buf.getvalue()
       and "Claude Code signed in to" not in buf.getvalue(), calls)
 
+calls.clear()
+nsk = Path(tempfile.mkdtemp()) / ".claude"
+write_copy(nsk / "skills" / "mine" / "econometrics", "2.6.4")      # a manual copy: skills/ but no skills/synced
+se.doctor(offline=True, cdir=nsk, env={}, run=counting, which=CLAUDE, os_name="posix")
+check("doctor with skills/ but no skills/synced: claude auth status is not run", ["auth", "status"] not in calls, calls)
+_isdir = Path.is_dir
+
+
+def denied(self):
+    if self.name == "synced":
+        raise PermissionError(13, "Permission denied")
+    return _isdir(self)
+
+
+with mock.patch.object(Path, "is_dir", denied):
+    try:
+        rp = se.doctor(offline=True, cdir=cdir, env={}, run=runner(AUTH), which=CLAUDE, os_name="posix")
+        crashed = None
+    except Exception as e:                     # noqa: BLE001
+        rp, crashed = None, e
+check("doctor: an OS error on skills/synced (permission) does not crash it; the account is then not read (review 2)",
+      crashed is None and rp["account"]["org_id"] is None, repr(crashed))
+oth = next(c["path"] for c in se.skill_copies(cdir, org_id=ME) if c.get("account") == "other")
+with mock.patch.object(se, "SKILL_DIR", Path(oth)):
+    rr = se.doctor(offline=True, cdir=cdir, env={}, run=runner(AUTH), which=CLAUDE, os_name="posix")
+rr["latest"] = {"version": "2.6.4", "status": "ok"}
+rr["actions"] = se.doctor_actions(rr)
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    se.print_doctor(rr)
+check("doctor run FROM the other account's 2.6.3 copy: that copy is not 'another account's' in the report, the printed "
+      "list or the To do (review 2: 'nothing to do here' next to an update item)",
+      [c.get("account") for c in rr["copies"] if c["path"] == oth] == ["unknown"]
+      and "nothing to do here" not in buf.getvalue() and any("2.6.3" in a for a in rr["actions"]), rr["actions"])
+
 # ----------------------------------------------------------------------------------- 7. rho on the dml_bounds lines
 rng = np.random.default_rng(2605)
 n = 400
@@ -342,8 +394,9 @@ d = 0.5 * X[:, 0] + rng.normal(size=n)
 y = 1.0 * d + 0.7 * X[:, 0] - 0.4 * X[:, 1] + rng.normal(size=n)
 R = causal.dml_plr(pd.DataFrame(dict(y=y, d=d, x1=X[:, 0], x2=X[:, 1])), "y", "d", ["x1", "x2"],
                    learner_y=LinearRegression(), learner_d=LinearRegression(), n_rep=1)
-BENCH = pd.DataFrame({"gain_y": [0.05] * 6, "gain_d": [0.05] * 6,
-                      "rho": [0.9726123, 0.996, 1.0, -1.0, 0.9999996, -0.0]}, index=["a", "b", "c", "e", "g", "h"])
+BENCH = pd.DataFrame({"gain_y": [0.05] * 7, "gain_d": [0.05] * 7,
+                      "rho": [0.9726123, 0.996, 1.0, -1.0, 0.9999996, -0.0, -0.9999996]},
+                     index=["a", "b", "c", "e", "g", "h", "i"])
 
 
 def printed(**k):
@@ -355,7 +408,8 @@ def printed(**k):
 
 
 o, lines = printed()
-want = {"a": "rho 0.972612:", "b": "rho 0.996:", "c": "rho 1:", "e": "rho -1:", "g": "rho 0.9999996:", "h": "rho 0:"}
+want = {"a": "rho 0.972612:", "b": "rho 0.996:", "c": "rho 1:", "e": "rho -1:", "g": "rho 0.9999996:", "h": "rho 0:",
+        "i": "rho -0.9999996:"}
 for b, w in want.items():
     ln = [x for x in lines if x.startswith(f"  1x {b}:")]
     check(f"dml_bounds line of benchmark rho {BENCH.loc[b, 'rho']!r}: '{w}'", len(ln) == 1 and w in ln[0], ln)
@@ -367,7 +421,7 @@ head = [x for x in lines if x.startswith("  rho = ")]
 rows = [x for x in lines if x.startswith("  1x ")]
 rep_line = [x for x in lines if x.startswith("  In a report, state")]
 check(f"dml_bounds rho = 1/3: header, every line and the report line all print '{txt}'",
-      head == [f"  rho = {txt} for every line"] and len(rows) == 6 and all(f"rho {txt}:" in x for x in rows)
+      head == [f"  rho = {txt} for every line"] and len(rows) == 7 and all(f"rho {txt}:" in x for x in rows)
       and len(rep_line) == 1 and f"rho = {txt} next to the bounds" in rep_line[0], (head, rows[:1], rep_line))
 
 o, lines = printed(rho=0.9999996)
