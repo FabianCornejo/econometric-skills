@@ -87,17 +87,26 @@ RVA_REF_100 = {1e-300: 0.0, 1e-160: 0.0, 1e-08: 0.0, 0.001: 0.0, 0.1: 0.0, 0.5: 
 RVA_REF_2 = {1e-300: 0.0, 1e-160: 0.0, 1e-08: 0.0, 0.001: 0.0, 0.1: 0.0, 0.5: 0.0, 1.0: 0.0, 2.0: 0.0, 10.0: 0.0,
              1e4: 0.9999983755236282, 1e7: 0.9999999999983755, 1e8: 0.9999999999999838, 1e9: 0.9999999999999999,
              1e20: 1.0, 1e153: 1.0, 1e155: 1.0, 1e200: 1.0, 1e300: 1.0}
-# f = |t|/sqrt(dof) = 1 exactly, so x = q: t = 10 with dof = 100, t = sqrt(2) with dof = 2
+# f = |t|/sqrt(dof) = 1 exactly, so x = q: t = 10 with dof = 100, t = sqrt(2) with dof = 2.
+# RV_q,alpha takes fc = t_{1-alpha/2, dof-1}/sqrt(dof-1) from scipy; the references used scipy 1.18.1's (FC_REF). The
+# minimum CI job's scipy 1.14.1 gives a quantile 3.9e-11 (relative) away, so there rv_qa is held to 1e-9 relative and
+# the quantile itself to 1e-9; with the same quantile, to 4 ulp. rv_q does not use the quantile: always 4 ulp.
+FC_REF = {100.0: 0.19942130700227068, 2.0: 12.706204736174694}
 for dof, t_, ref_a in ((100.0, 10.0, RVA_REF_100), (2.0, float(np.sqrt(2.0)), RVA_REF_2)):
+    fc_now = float(stats.t.ppf(0.975, dof - 1) / np.sqrt(dof - 1))
+    same_fc = fc_now == FC_REF[dof]
     worst_q, worst_a, bad = 0.0, 0.0, []
     for x, ref in RV_REF.items():
         o = sp.robustness_value(t_, dof, q=x)
         eq, ea = ulps(o["rv_q"], ref), ulps(o["rv_qa"], ref_a[x])
+        ok_a = ea <= 4 if same_fc else abs(o["rv_qa"] - ref_a[x]) <= 1e-9 * max(abs(ref_a[x]), 1e-300)
         worst_q, worst_a = max(worst_q, eq), max(worst_a, ea)
-        if not (eq <= 4 and ea <= 4 and np.isfinite(o["rv_q"]) and np.isfinite(o["rv_qa"])):
+        if not (eq <= 4 and ok_a and np.isfinite(o["rv_q"]) and np.isfinite(o["rv_qa"])):
             bad.append((x, o["rv_q"], ref, o["rv_qa"], ref_a[x]))
-    check(f"dof = {dof:g}: rv_q and rv_qa within 4 ulp of the mpmath references for x = 1e-300 to 1e300",
-          not bad, f"worst {worst_q:.1f} / {worst_a:.1f} ulp; {bad[:3]}")
+    check(f"dof = {dof:g}: rv_q within 4 ulp and rv_qa within " + ("4 ulp" if same_fc else "1e-9 (another scipy t "
+          "quantile)") + " of the mpmath references for x = 1e-300 to 1e300",
+          not bad and abs(fc_now - FC_REF[dof]) <= 1e-9 * FC_REF[dof],
+          f"worst {worst_q:.1f} / {worst_a:.1f} ulp; fc {fc_now!r} vs {FC_REF[dof]!r}; {bad[:3]}")
 
 o, _, w_ov = run(sp.robustness_value, 1e10, 100.0, q=1e300)     # f = 1e9, so q·f overflows to inf
 check("q·f overflowing to inf (t = 1e10, dof = 100, q = 1e300): rv_q = rv_qa = 1, no nan, no RuntimeWarning",
