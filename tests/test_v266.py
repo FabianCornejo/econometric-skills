@@ -31,6 +31,12 @@ What is checked (expected texts written by hand, not read from the code):
   6. the doctor's printed text: with --offline status the line saying it is only for a machine without network
      (and not without it); the To do header asks once, at the end of the reply, with optional items included
      (and no header when there is nothing to do); the --json status stays "not checked (--offline)".
+Review 1 added: the section 4 sentence gives the DML boundary too (two dml_bounds k values) and forbids rounding to 1x,
+not every "as strong as" (a 1x sentence that follows the 1x line's ci_verdict is right); each section 4 piece is pinned
+in its place in tests/test_v2501.py; the rules' DML paragraph and its numbers (the linear DML loses significance
+between 1.3x and 1.4x, not at the OLS 1.2x, recomputed here); the case's DML grading (1.2x is not the DML boundary;
+the rho of each line); the README, setup_env's docstring and its --help say "in a folder" and "only without network";
+the doctor call isolated (no real ~/.claude, no CLI, no request made).
 
 Run from the repository root:  python3 tests/test_v266.py
 Needs: numpy, pandas, statsmodels, scikit-learn.
@@ -39,7 +45,10 @@ import contextlib
 import io
 import json
 import re
+import subprocess
 import sys
+import tempfile
+import warnings
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -90,14 +99,17 @@ check("section 4: DML sensitivity names dml_sensitivity, dml_benchmark and dml_b
       "`causal.dml_sensitivity` + `dml_benchmark` and `dml_bounds`)" in rule, rule[-500:])
 check("section 4: each of the three v2.6.6 pieces appears once in the section",
       sec4.count(" and `ovb_bounds`") == 1 and sec4.count(" and `dml_bounds`") == 1
-      and sec4.count("Where significance is lost is a number") == 1)
-sent = rule[rule.find("Where significance is lost"):]
-check("section 4: the boundary sentence names k_not_significant with a number, the summary and the chat reply",
-      "`k_not_significant`" in sent and "1.2x as strong as size" in sent and "opening summary" in sent
-      and "chat reply" in sent and "every sentence" in sent, sent)
-check("section 4: it forbids 'as strong as size' and 'weaker than size' and points to the rules",
-      'never "as strong as size"' in sent and '"weaker than size"' in sent and "interpretation-rules.md" in sent
-      and "v2.6.6" in sent, sent)
+      and sec4.count("The point where significance is lost is a number") == 1)
+sent = rule[rule.find("The point where significance is lost"):]
+check("section 4: the boundary sentence names the number for OLS (k_not_significant) and for DML (two dml_bounds k), "
+      "in every sentence, the summary and the chat reply included",
+      "OLS: `k_not_significant`" in sent and '"a confounder 1.2x as strong as X"' in sent
+      and "DML: the two `dml_bounds` k values between which the confidence bounds first include zero" in sent
+      and "opening summary" in sent and "chat reply" in sent and "every sentence" in sent, sent)
+check("section 4: it forbids rounding to 1x ('as strong as X' with no number, 'weaker than X'), not every "
+      "'as strong as' (review 1), and points to the rules",
+      'never rounded to 1x ("as strong as X" with no number) or to "weaker than X"' in sent
+      and "interpretation-rules.md" in sent and "v2.6.6" in sent and "size" not in sent, sent)
 
 # ------------------------------------------------------------------------------------------------ 3. section 7
 check("section 7: once per analysis folder", "**Once per analysis folder, before the first script**" in sec7)
@@ -120,8 +132,18 @@ r266 = rules[rules.index("## Rules added in v2.6.6"):] if "## Rules added in v2.
 check("interpretation rules v2.6.6: the summary, the slide title and the chat reply carry the number",
       all(k in r266 for k in ("opening line", "executive summary", "slide title", "reply in the chat", "1.2x",
                               "worst case", "classical SE")), r266[:400])
-check("interpretation rules v2.6.6: forbids the 1x paraphrases and ties 1x to the 1x line's ci_verdict",
-      all(k in r266 for k in ('"as strong as size"', '"weaker than size"', "ci_verdict", "v2.6.5 validation")))
+check("interpretation rules v2.6.6: forbids the 1x paraphrases, allows a 1x sentence that follows the 1x line's "
+      "ci_verdict",
+      all(k in r266 for k in ('"as strong as size" with no number', '"weaker than size"', "put the boundary at 1x",
+                              "ci_verdict", "v2.6.5 validation")), r266[:600])
+check("interpretation rules v2.6.6: the example states 'the same k for treatment and outcome' and no 'only' "
+      "(review 1: with kd = 2, ky = 0.9 a weaker confounder also does it)",
+      "the same k for treatment and outcome" in r266 and "only a confounder" not in r266)
+check("interpretation rules v2.6.6: DML has no k_not_significant -> the two dml_bounds k around the boundary, "
+      "reported apart from the OLS one, with the validation's numbers",
+      all(k in r266 for k in ("DML has no `k_not_significant`", "causal.dml_bounds", "between which two k",
+                              "never compute the bounds by hand", "OLS lost significance at 1.2x",
+                              "linear DML only between 1.3x and 1.4x", '"1.2x with any method" was wrong')), r266[-700:])
 
 # ------------------------------------------------------------------------------------------------ 5. cases.json
 cases = json.loads((ROOT / "evals" / "cases.json").read_text(encoding="utf-8"))["cases"]
@@ -131,8 +153,15 @@ new = byid.get("review-memo-summary-boundary", {})
 check("new case: present, pt-BR, at least 3 must and 3 must_not",
       new.get("language") == "pt-BR" and len(new.get("must", [])) >= 3 and len(new.get("must_not", [])) >= 3)
 must, must_not = " ".join(new.get("must", [])), " ".join(new.get("must_not", []))
-check("new case: grades the 1x paraphrase in the summary against k_not_significant 1.2x",
-      "1.2x" in must and "k_not_significant" in must and "ci_verdict" in must and "Rounds the boundary to 1x" in must_not)
+check("new case: grades the 1x paraphrase in the summary against k_not_significant 1.2x, and only the unnumbered "
+      "'as strong as size' (review 1)",
+      "1.2x" in must and "k_not_significant" in must and "ci_verdict" in must and "Rounds the boundary to 1x" in must_not
+      and "keeps the boundary at 1x in the rewritten summary ('as strong as size' with no number" in must_not)
+check("new case: 1.2x is the OLS boundary only; giving it to the DML models fails (review 1)",
+      "Presents 1.2x as the boundary of the DML models" in must_not)
+check("new case: the DML rho is in the prompt as the benchmark's and graded with its values",
+      "ρ observado no benchmark" in new.get("prompt", "") and "1 in the linear and 0.967914 in the forest, both "
+      "observed in the benchmark" in must)
 check("new case: grades the 2x OLS line as a sign flip, not 'compatible with zero' (triage item 28)",
       "[1.351, 3.624]" in must and "sign would flip" in must and "compatible with zero" in must_not)
 ma = " ".join(byid.get("dag-controls-advisor-premium", {}).get("must", []))
@@ -175,7 +204,6 @@ prompt = new.get("prompt", "")
 quoted = re.findall(r'"([^"]+)"', prompt)
 df = simular()
 ols = smf.ols("espera ~ triagem + log_pac + med + C(regiao)", df).fit(cov_type="HC3")
-import warnings  # noqa: E402
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     bnd, out = shown(specification.ovb_bounds, ols, "triagem", ["C(regiao)", "log_pac"], kd=[1, 2, 3], alpha=0.05,
@@ -191,8 +219,8 @@ check("ovb_bounds on the design: 1x size keeps the sign (the summary's '1x' is w
 check("ovb_bounds on the design: 2x size flips the sign (not 'compatible with zero')",
       b.loc["2x log_pac", "ci_verdict"] == "opposite sign" and b.loc["2x log_pac", "adjusted_lower_ci"] > 0)
 kns = bnd["benchmark_r2"].loc["log_pac", "k_not_significant"]
-check("ovb_bounds on the design: k_not_significant for size rounds to 1.2 (between 1.15 and 1.25)",
-      1.15 < kns < 1.25 and f"{round(kns, 2):g}" == "1.2", kns)
+check("ovb_bounds on the design: k_not_significant for size prints as 1.2 (1.195 <= k < 1.205)",
+      1.195 <= kns < 1.205 and f"{round(kns, 2):g}" == "1.2", kns)
 X = ["log_pac", "med"] + [c for c in df.columns if c.startswith("reg_")]
 kw = dict(n_folds=5, n_rep=5, seed=SEED, learner_y=LinearRegression(), learner_d=LinearRegression())
 with warnings.catch_warnings():
@@ -200,13 +228,24 @@ with warnings.catch_warnings():
     res = causal.dml_plr(df, "espera", "triagem", X, **kw)
     bench = causal.dml_benchmark(df, "espera", "triagem", X, ["log_pac"], res=res, **kw)
     dbd, dout = shown(causal.dml_bounds, res, bench, kd=[1, 2, 3], rho="benchmark", alpha=0.05, show=True)
+# Word for word on numpy 2.1.3 ... 2.5.4 (review 1 of v2.6.6). The upper confidence bound is 2.72975001445: it prints
+# 2.7298 at :.4f only 1.4e-8 from the rounding edge, so a flip to 2.7297 on another BLAS would be rounding, not a bug.
 dl = [ln.strip() for ln in dout.splitlines() if ln.strip().startswith("2x log_pac:")]
 check("new case: the linear DML 2x line is what dml_bounds prints, word for word", len(dl) == 1 and dl[0] in quoted, dl)
 row = dbd["bounds"].set_index("bound_label").loc["2x log_pac"]
 check("dml_bounds (linear) on the design: 2x size includes zero", row["ci_verdict"] == "includes zero")
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    kb = causal.dml_bounds(res, bench, kd=[1.2, 1.3, 1.4], rho="benchmark", alpha=0.05, show=False)["bounds"]
+kb = kb.set_index("bound_label")
+check("dml_bounds (linear) on the design: the boundary is between 1.3x and 1.4x, not at the OLS 1.2x "
+      "(1.2x and 1.3x exclude zero, 1.4x includes it; interpretation-rules v2.6.6)",
+      kb.loc["1.2x log_pac", "ci_verdict"] == "excludes zero" and kb.loc["1.3x log_pac", "ci_verdict"] == "excludes zero"
+      and kb.loc["1.4x log_pac", "ci_verdict"] == "includes zero", kb[["ci_low", "ci_high", "ci_verdict"]].to_string())
 fl = [q for q in quoted if q.startswith("2x log_pac:") and "rho 0.967914" in q]
-check("new case: the forest DML 2x line is quoted with its observed rho 0.967914 and includes zero",
-      len(fl) == 1 and "which include zero" in fl[0], fl)
+cb = [float(v) for v in re.findall(r"confidence bounds \[(-?[\d.]+), (-?[\d.]+)\]", fl[0])[0]] if fl else []
+check("new case: the forest DML 2x line is quoted with its observed rho 0.967914, and its bounds include zero",
+      len(fl) == 1 and "which include zero" in fl[0] and len(cb) == 2 and cb[0] < 0 < cb[1], fl)
 
 # ------------------------------------------------------------------------------------------------ 6. doctor text
 def report(**over):
@@ -240,9 +279,27 @@ check("doctor text: the To do header asks once, in one question at the end of th
       and "optional ones included" in head[0] and "install or change nothing before the answer" in head[0]
       and "\n  1. crowded skill listing" in o4, head)
 check("doctor text: nothing to do -> no To do header", "To do" not in o2 and "Nothing to do" in o2)
-rep_off = se.doctor(offline=True, cwd=str(ROOT))
-check("doctor --offline: the JSON status is unchanged ('not checked (--offline)')",
-      rep_off["latest"]["status"] == "not checked (--offline)")
+calls = []
+with tempfile.TemporaryDirectory() as tmp:            # isolated (review 1): no real ~/.claude, no CLI, no network
+    rep_off = se.doctor(offline=True, cdir=Path(tmp), env={}, opener=lambda *a, **k: calls.append(a),
+                        run=lambda *a, **k: (1, ""), which=lambda n: None, cwd=tmp)
+check("doctor --offline: no request, and the JSON status is unchanged ('not checked (--offline)')",
+      calls == [] and json.loads(json.dumps(rep_off))["latest"] == {"version": None,
+                                                                    "status": "not checked (--offline)"}, rep_off["latest"])
+readme = (ROOT / "README.md").read_text(encoding="utf-8")
+doc = se.__doc__ or ""
+check("README and setup_env's own text: the doctor runs before the first analysis in a folder, not on a machine; "
+      "--offline only without network (review 1)",
+      "Before the first analysis in a folder, Claude runs `setup_env.py --doctor`" in readme
+      and "on a machine" not in readme.split("*What happens the first time.*")[1][:400]
+      and "before the first analysis in a folder" in doc and "first analysis on a machine" not in doc
+      and "api.github.com): only without network" in doc)
+hlp = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), "--help"], capture_output=True,
+                     text=True, timeout=120)
+flat = " ".join(hlp.stdout.split())
+check("setup_env --help (what the user sees): --offline only without network, the doctor before the first analysis "
+      "in a folder", "skip the latest-release check (only without network)" in flat
+      and "before the first analysis in a folder" in flat and "on a machine" not in flat, flat[-400:])
 
 passed = sum(ok)
 print(f"\n{passed}/{len(ok)} checks passed")

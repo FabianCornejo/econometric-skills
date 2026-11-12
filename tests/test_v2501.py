@@ -726,9 +726,10 @@ V251_DID = (" With one to three treated units, use `causal.did_single_treated` a
 # sentence on stating the boundary with its number; remove exactly those as well.
 V266_OVB = " and `ovb_bounds`"
 V266_DML = " and `dml_bounds`"
-V266_SUM = (" Where significance is lost is a number (`k_not_significant`: \"a confounder 1.2x as strong as size\"): "
-            "say it with that number in every sentence, the opening summary and the chat reply included, never \"as "
-            "strong as size\" or \"weaker than size\" (`interpretation-rules.md`, v2.6.3 and v2.6.6).")
+V266_SUM = (" The point where significance is lost is a number (OLS: `k_not_significant`, \"a confounder 1.2x as strong "
+            "as X\"; DML: the two `dml_bounds` k values between which the confidence bounds first include zero): say it "
+            "with that number in every sentence, the opening summary and the chat reply included, never rounded to 1x "
+            "(\"as strong as X\" with no number) or to \"weaker than X\" (`interpretation-rules.md`, v2.6.3 and v2.6.6).")
 V266 = (V266_OVB, V266_DML, V266_SUM)
 sec4_v250 = sec4.replace(V251_ASK, "", 1).replace(V251_DID, "", 1)
 for piece in V266:
@@ -736,6 +737,9 @@ for piece in V266:
 check("SKILL.md section 4 (non-negotiable rules), minus the documented v2.5.1 and v2.6.6 additions, is byte-identical "
       "to v2.5.0 (SHA-256 pinned, works in a shallow CI checkout)", V251_ASK in sec4 and V251_DID in sec4
       and all(sec4.count(piece) == 1 for piece in V266)
+      # each piece where the CHANGELOG says it is (review 1 of v2.6.6: moving the sentence passed the hash)
+      and "(`specification.sensitivity`" + V266_OVB + ";" in sec4
+      and "`dml_benchmark`" + V266_DML + ")." + V266_SUM in sec4
       and hashlib.sha256(sec4_v250.encode("utf-8")).hexdigest()
       == "a820ccbfddb871b324a556bb963a15e75ed594799a292d50c82ec217c83538f1")
 agent = (SKILL / "agents" / "econometrician.md").read_text(encoding="utf-8")
