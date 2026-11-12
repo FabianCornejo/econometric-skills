@@ -247,6 +247,22 @@
         "Rounds the boundary to 1x or to 1.1x.",
         "Recomputes the thresholds with the HC3 SE or a grid of k written in the answer's own code."
       ]
+    },
+    {
+      "id": "review-memo-dml-rho-and-interval",
+      "language": "pt-BR",
+      "prompt": "Revise esta tabela do memorando antes de eu mandar para a diretoria. Linha \"Sensibilidade (fator 2x o porte, log_pac)\": DML linear \"intervalo de −13,8 a +0,8\"; DML floresta \"intervalo de −9,4 a +0,4\"; conclusão: \"nos dois modelos o intervalo inclui zero\". A saída do dml_bounds (cabeçalho \"rho = the benchmark's observed correlation of the omitted pieces\") foi, para o linear: \"2x log_pac: cf_y 4.1%, cf_d 6.3%, rho 0.62: theta between -13.8213 and 0.7891; 95% confidence bounds [-15.9902, 2.9484], which include zero.\" e, para a floresta: \"2x log_pac: cf_y 5.0%, cf_d 7.7%, rho 0.55: theta between -8.1035 and -0.9017; 95% confidence bounds [-9.4122, 0.4110], which include zero.\"",
+      "must": [
+        "Points out that the two cells are different quantities: the linear one is the bias bound (theta between, without sampling error) and the forest one is the confidence bounds (with sampling error), so the row compares unlike things (interpretation-rules v2.6.4).",
+        "Puts the same quantity in both columns (the confidence bounds, which decide whether zero is included, or both with their names) and says that the forest's bias bound (−8.1 to −0.9) excludes zero while its confidence bounds include it.",
+        "Asks for the rho of each line in the document itself: 0.62 and 0.55, the benchmark's observed correlation, as the dml_bounds header says.",
+        "Keeps the conclusion that the confidence bounds include zero in both models at 2x, worded as a worst case under 'k times as strong', not as a likely value."
+      ],
+      "must_not": [
+        "Approves the table as it is or keeps calling both numbers 'interval' without saying which is which.",
+        "Recomputes the bounds by hand or multiplies cf_y and cf_d by k instead of reading the dml_bounds lines.",
+        "Drops the rho or says rho = 1 when the lines report the benchmark's rho."
+      ]
     }
   ]
 }

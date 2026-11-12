@@ -262,7 +262,10 @@ def _dml_sens_rep(uy, vd, cf_y, cf_d, rho):
     psi_th = eps * vd / Evv
     psi_sig2 = eps ** 2 - sig2
     psi_nu2 = -(vd * vd - Evv) / Evv ** 2
-    c = abs(rho) * np.sqrt(cf_y * cf_d / (1 - cf_d)) if cf_d < 1 else np.inf
+    if rho == 0 or cf_y == 0:                       # the limit as cf_d -> 1 too (v2.6.4 review: was inf at cf_d = 1)
+        c = 0.0
+    else:
+        c = abs(rho) * np.sqrt(cf_y * cf_d / (1 - cf_d)) if cf_d < 1 else np.inf
     bound = c * S
     psi_S = (nu2 * psi_sig2 + sig2 * psi_nu2) / (2 * S)
     psi_lo, psi_hi = psi_th - c * psi_S, psi_th + c * psi_S
@@ -277,6 +280,37 @@ def _dml_pct(x: float, d: int) -> str:
     ("< 0.01%"). Module-level since v2.6.1 so its thresholds are tested directly: with |rho| <= 1 they are out of
     reach of real data (an RV below 0.005% that is significant needs n of the order of 1e9)."""
     return f"< {10 ** -d:.{d}f}%" if 0 < x < 0.5 * 10 ** -(d + 2) else f"{x:.{d}%}"
+
+
+def _dml_report_line(rho, bias_name: str, rho_txt: str = "", target: str = "") -> str:
+    """v2.6.4, printed after the bounds by dml_sensitivity (its last line) and dml_bounds (before its warnings): in the
+    v2.6.3 validation the memo did not say which rho the DML bounds used (the chat did), and called both the bias bound
+    and the confidence bounds "interval". rho_txt is rho as the caller already printed it (so the two lines agree;
+    rho itself if not given); target is the value the confidence bounds are judged against when it is not zero
+    (q != 1 in dml_sensitivity)."""
+    if isinstance(rho, str):                  # dml_bounds with rho="benchmark": each line carries its own rho
+        which = "each line's rho next to it (the benchmark's observed correlation, as printed on the line)"
+    else:
+        which = f"rho = {rho_txt or rho}" + (" (the worst case)" if abs(float(rho)) == 1 else "") + " next to the bounds"
+    judge = f"say whether the target value {target} is inside them" if target else "exclude or include zero"
+    return (f"  In a report, state {which}, and name each interval: {bias_name} is the bias bound (theta plus or minus "
+            f"its bias_bound), not accounting for sampling error; the confidence bounds add sampling error and are the "
+            f"ones that {judge}.")
+
+
+def _check_cf(v, name: str) -> float:
+    """cf_y or cf_d of dml_sensitivity as a float in [0, 1] (v2.6.4): a sensitivity parameter (cf_y the share of the
+    outcome's residual variance, cf_d as in DoubleML), so a bool, a non-number, NaN, inf, a negative value or one above
+    1 is refused (TypeError for the first two, ValueError for the rest)."""
+    import numbers
+    if isinstance(v, (bool, np.bool_)) or not isinstance(v, numbers.Real):
+        raise TypeError(f"{name} must be a number in [0, 1] (a sensitivity parameter), got {v!r}")
+    x = float(v)
+    if not (np.isfinite(x) and 0 <= x <= 1):
+        raise ValueError(f"{name} is a sensitivity parameter and must be finite and in [0, 1] (pass dml_benchmark's "
+                         f"cf_y and cf_d as they are), got {v!r}"
+                         + (" (cf_d = 1 already gives an infinite bound)" if name == "cf_d" and x > 1 else ""))
+    return x
 
 
 def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: float = 1.0,
@@ -300,9 +334,21 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
     rho = 0, where the bias bound is zero; with a tiny |rho| the bound only gets there as cf -> 1),
     0.0 for rva means the zero-confounder confidence bound already reaches it. Calibrate cf_y
     and cf_d with dml_benchmark: "a confounder as strong as income" is a statement the reader can
-    judge. q must be a finite real number > 0 (v2.5.3)."""
+    judge. q must be a finite real number > 0 (v2.5.3).
+    v2.6.4: cf_y and cf_d are sensitivity parameters in [0, 1]. The values to pass are those dml_benchmark returns as
+    cf_y and cf_d (the paper's gains, cut to [0, 1], in the parametrization of DoubleML), never its r2_y and r2_d; a
+    ValueError outside [0, 1], a TypeError for a bool or a non-number (a 0-d array or a Decimal too, as for q; and for
+    rho, a bool); before, cf_y = 1.5 was used as if valid, negatives gave nan and True read as 1. cf_d = 1 is accepted,
+    as dml_benchmark can return it: the bound is then infinite and says nothing, except with cf_y = 0 or rho = 0, where
+    it is zero by convention (the limit as cf_d -> 1; at cf_d = 1 itself the treatment has no residual variation). An
+    infinite and a zero bias bound now also go to out["warnings"] (and warnings.warn), so they are not lost with
+    show=False."""
+    import numbers
     from specification import _check_q, _q_is_one
     q = _check_q(q)
+    cf_y, cf_d = _check_cf(cf_y, "cf_y"), _check_cf(cf_d, "cf_d")
+    if isinstance(rho, (bool, np.bool_)) or not isinstance(rho, numbers.Real):   # v2.6.4 review 2: True printed "rho = True"
+        raise TypeError(f"rho must be a number in [-1, 1] (a correlation; 1 is the worst case), got {rho!r}")
     if not np.isfinite(rho):                  # NaN crashed brentq; inf printed RV = RVa = 0.00% (7c25644)
         raise ValueError(f"rho must be finite (got {rho!r})" + (
             "; a benchmark with cf_y = 0 or cf_d = 0 has an undefined rho and is no reference (see the warning of "
@@ -319,6 +365,12 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
     lo, hi = th - B, th + B
     ci_lo, ci_hi = lo - z * med["se_lo"], hi + z * med["se_hi"]
 
+    # Why the endpoints decide (v2.6.4, backlog of v2.5.3): in one sample split the confidence bound's SE is
+    # ||psi_th − c·psi_S|| / √n, the norm of an affine function of c, hence convex in c; c·S is linear, so gap is convex
+    # in c, and c = |rho|·eta²/√(1 − eta²) increases in eta. A convex gap below zero at both ends is below zero in
+    # between ("nor does any"), and one that starts below zero and ends above has one root (brentq). With several splits
+    # gap uses medians, which need not be convex; tests/test_v264.py checks the endpoint verdict and the root against a
+    # dense grid on many designs.
     def rv_for(target_gap, with_se):
         def gap(eta):
             e2 = eta * eta
@@ -346,15 +398,28 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
            "cf_y": cf_y, "cf_d": cf_d, "rho": rho, "S": S, "bias_bound": B,
            "theta_lower": lo, "theta_upper": hi, "rv": rv, "rva": rva, "q": q,
            "bound_table": tab, "warnings": []}
+    zero_bound = bool(np.isfinite(B) and B == 0)   # keyed on the bound itself (cf_d = 1 gives an infinite one)
+    if zero_bound:                                 # v2.6.4: also with show=False (backlog of v2.5.3)
+        out["warnings"].append("The bias bound is zero: a confounder with cf_y = 0, cf_d = 0 or rho = 0 changes "
+                               "nothing, so these bounds say nothing about confounding (a benchmark with no strength is "
+                               "no reference).")
+    if np.isinf(B):                                # cf_d = 1 with cf_y > 0 and rho != 0 (v2.6.4 review: keyed on B)
+        out["warnings"].append("cf_d = 100% leaves no residual variation in the treatment: the bias bound is infinite "
+                               "and says nothing; for 'k times as strong as' a benchmark use dml_bounds, which refuses kd "
+                               "at or above k_d_max.")
+    for w_ in out["warnings"]:
+        warnings.warn(w_, stacklevel=2)
     if show:
         one = _q_is_one(q)                        # q a rounding error from 1 reads as q = 1 (text only)
         target = 0.0 if one else (1 - q) * th   # v2.6.1: was 0.0 * th, printed "-0.0000" for th < 0
         level = f"{round(100 * (1 - alpha), 6):g}%"   # v2.5.3: was :.0f, which printed "100%" for alpha = 0.001
         print(f"\nDML-PLR sensitivity: theta = {th:.4f} (SE {res['se']:.4f}), S = {S:.4f}")
         print(f"  confounder with cf_y = {cf_y:.1%}, cf_d = {cf_d:.1%}, rho = {rho}: bias <= {B:.4f}")
-        if np.isfinite(B) and B == 0:        # keyed on the bound itself (cf_d = 1 gives an infinite one)
+        if zero_bound:                       # the same text as out["warnings"], printed where it always was
             print("  The bias bound is zero: a confounder with cf_y = 0, cf_d = 0 or rho = 0 changes nothing, so these "
                   "bounds say nothing about confounding (a benchmark with no strength is no reference).")
+        if np.isinf(B):                      # v2.6.4: was a silent "bias <= inf"
+            print("  " + out["warnings"][-1])
         print(f"  bounds [{lo:.4f}, {hi:.4f}]; {level} confidence bounds [{ci_lo:.4f}, {ci_hi:.4f}]")
         pct = _dml_pct
         if rv >= 1.0:                             # the ceiling of the search, cf up to 1 − 1e-9
@@ -384,6 +449,7 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
             rva_txt = f"RVa = {pct(rva, 2)} would put that value inside the {level} confidence bounds"
         print(f"  {rv_txt}; {rva_txt}.")
         print("  Benchmark these strengths against observed covariates with causal.dml_benchmark.")
+        print(_dml_report_line(rho, "'bounds [a, b]'", rho_txt=f"{rho}", target="" if one else f"{target:.4f}"))
     return out
 
 
@@ -626,6 +692,9 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
             print("  No bound computed: every benchmark or k was skipped (see the warnings).")
         print("  Worst cases under 'k times as strong', not likely values; the gains and rho are estimates whose own "
               "uncertainty is not propagated.")
+        if not out["bounds"].empty:
+            print(_dml_report_line(rho, "'theta between a and b'",
+                                   rho_txt="" if rho == "benchmark" else f"{float(rho):g}"))
         for w in warns:
             print("  WARNING: " + w)
     return out

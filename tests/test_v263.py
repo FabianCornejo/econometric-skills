@@ -172,9 +172,11 @@ sec41 = docs["causal-inference.md"]
 check("§4.1 says per split and that cf_y can be below r2_y with several splits",
       "in each sample split" in sec41 and "can be below" in sec41)
 chg = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-top = chg.split("\n## v")[1]
+# v2.6.4 review: the entry is found by its heading (it was the top one, and a newer entry broke this check)
+parts = chg.split("\n## v2.6.3 — ")
+top = parts[1].split("\n## v")[0] if len(parts) == 2 else ""
 check("the CHANGELOG entry of v2.6.3 corrects 'always smaller' and 'plus the gain identity' of v2.6.2",
-      top.startswith("2.6.3") and "always smaller" in top and "gain identity" in top)
+      bool(top) and "always smaller" in top and "gain identity" in top)
 
 # ------------------------------------------------------------------ 3. ovb_bounds "not reached"
 def fit(seed, bd, by, eff, n=400):              # claude/scripts/sonda_v263.py (dev repository)
