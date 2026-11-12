@@ -283,14 +283,15 @@ def _dml_pct(x: float, d: int) -> str:
 
 
 def _dml_report_line(rho, bias_name: str, rho_txt: str = "", target: str = "") -> str:
-    """v2.6.4, printed last by dml_sensitivity and dml_bounds: in the v2.6.3 validation the memo did not say which rho
-    the DML bounds used (the chat did), and called both the bias bound and the confidence bounds "interval". rho_txt is
-    rho as the caller already printed it (so the two lines agree); target is the value the confidence bounds are judged
-    against when it is not zero (q != 1 in dml_sensitivity)."""
+    """v2.6.4, printed after the bounds by dml_sensitivity (its last line) and dml_bounds (before its warnings): in the
+    v2.6.3 validation the memo did not say which rho the DML bounds used (the chat did), and called both the bias bound
+    and the confidence bounds "interval". rho_txt is rho as the caller already printed it (so the two lines agree;
+    rho itself if not given); target is the value the confidence bounds are judged against when it is not zero
+    (q != 1 in dml_sensitivity)."""
     if isinstance(rho, str):                  # dml_bounds with rho="benchmark": each line carries its own rho
         which = "each line's rho next to it (the benchmark's observed correlation, as printed on the line)"
     else:
-        which = f"rho = {rho_txt}" + (" (the worst case)" if abs(float(rho)) == 1 else "") + " next to the bounds"
+        which = f"rho = {rho_txt or rho}" + (" (the worst case)" if abs(float(rho)) == 1 else "") + " next to the bounds"
     judge = f"say whether the target value {target} is inside them" if target else "exclude or include zero"
     return (f"  In a report, state {which}, and name each interval: {bias_name} is the bias bound (theta plus or minus "
             f"its bias_bound), not accounting for sampling error; the confidence bounds add sampling error and are the "
@@ -334,15 +335,20 @@ def dml_sensitivity(res: dict, cf_y: float = 0.03, cf_d: float = 0.03, rho: floa
     0.0 for rva means the zero-confounder confidence bound already reaches it. Calibrate cf_y
     and cf_d with dml_benchmark: "a confounder as strong as income" is a statement the reader can
     judge. q must be a finite real number > 0 (v2.5.3).
-    v2.6.4: cf_y and cf_d are sensitivity parameters in [0, 1], as defined above (pass the cf_y and cf_d of
-    dml_benchmark as they are); ValueError outside, TypeError for a bool or a non-number (a 0-d array or a Decimal too,
-    as for q); before, cf_y = 1.5 was used as if valid, negatives gave nan and True read as 1. cf_d = 1 is accepted, as
-    dml_benchmark can return it: the bound is then infinite and says nothing (unless cf_y = 0 or rho = 0, where it is
-    zero, its limit). An infinite and a zero bias bound now also go to out["warnings"] (and warnings.warn), so they are
-    not lost with show=False."""
+    v2.6.4: cf_y and cf_d are sensitivity parameters in [0, 1]. The values to pass are those dml_benchmark returns as
+    cf_y and cf_d (the paper's gains, cut to [0, 1], in the parametrization of DoubleML), never its r2_y and r2_d; a
+    ValueError outside [0, 1], a TypeError for a bool or a non-number (a 0-d array or a Decimal too, as for q; and for
+    rho, a bool); before, cf_y = 1.5 was used as if valid, negatives gave nan and True read as 1. cf_d = 1 is accepted,
+    as dml_benchmark can return it: the bound is then infinite and says nothing, except with cf_y = 0 or rho = 0, where
+    it is zero by convention (the limit as cf_d -> 1; at cf_d = 1 itself the treatment has no residual variation). An
+    infinite and a zero bias bound now also go to out["warnings"] (and warnings.warn), so they are not lost with
+    show=False."""
+    import numbers
     from specification import _check_q, _q_is_one
     q = _check_q(q)
     cf_y, cf_d = _check_cf(cf_y, "cf_y"), _check_cf(cf_d, "cf_d")
+    if isinstance(rho, (bool, np.bool_)) or not isinstance(rho, numbers.Real):   # v2.6.4 review 2: True printed "rho = True"
+        raise TypeError(f"rho must be a number in [-1, 1] (a correlation; 1 is the worst case), got {rho!r}")
     if not np.isfinite(rho):                  # NaN crashed brentq; inf printed RV = RVa = 0.00% (7c25644)
         raise ValueError(f"rho must be finite (got {rho!r})" + (
             "; a benchmark with cf_y = 0 or cf_d = 0 has an undefined rho and is no reference (see the warning of "

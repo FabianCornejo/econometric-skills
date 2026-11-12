@@ -102,6 +102,11 @@ for dof, t_, ref_a in ((100.0, 10.0, RVA_REF_100), (2.0, float(np.sqrt(2.0)), RV
 o, _, w_ov = run(sp.robustness_value, 1e10, 100.0, q=1e300)     # f = 1e9, so q·f overflows to inf
 check("q·f overflowing to inf (t = 1e10, dof = 100, q = 1e300): rv_q = rv_qa = 1, no nan, no RuntimeWarning",
       o["rv_q"] == 1.0 and o["rv_qa"] == 1.0 and w_ov == [], (o["rv_q"], o["rv_qa"], w_ov))
+for t_, dof_, q_ in ((1e10, 100.0, 1e299), (1.7e308, 2.0, 1.0)):   # review 2: x finite above ~9e307 gave nan
+    o, _, w_x = run(sp.robustness_value, t_, dof_, q=q_)
+    check(f"x = q·f finite near the largest float (t = {t_:g}, dof = {dof_:g}, q = {q_:g}): rv_q = rv_qa = partial_r2 "
+          "= 1, no warning", isinstance(o, dict) and o["rv_q"] == 1.0 and o["rv_qa"] == 1.0 and o["partial_r2"] == 1.0
+          and w_x == [], (o if not isinstance(o, dict) else (o["rv_q"], o["rv_qa"], o["partial_r2"]), w_x))
 o, _, w_t = run(sp.robustness_value, 1e155, 100.0)
 check("t = 1e155 (t² overflows): partial_r2 = 1, no OverflowError, no warning",
       isinstance(o, dict) and o["partial_r2"] == 1.0 and w_t == [], repr(o) if not isinstance(o, dict) else w_t)
@@ -129,6 +134,9 @@ check("where the old formula was accurate (x <= 1), the new one agrees with it w
 # x⁴ overflows beyond ~1.3e77 (inf), x² beyond ~1.3e154 (inf − inf = nan)
 with np.errstate(all="ignore"):
     olds = {x: old_rv(x) for x in (1e7, 1e9, 1e77, 1e78, 1e154, 1e155)}
+    neg = old_rv(825742055.3289121)               # review 2: the old form also went negative (a value near 1)
+check("old formula at x = 825742055.3289121: -64.0, not near 1 (the erratic region, negative values included)",
+      neg == -64.0, neg)
 check("old formula: 1e7 still close, 1e9 already 0 (cancellation), 1e77 finite and 1e78 inf (x⁴ overflow), 1e154 inf "
       "and 1e155 nan (x² overflow): the regions the new tests cover",
       abs(olds[1e7] - RV_REF[1e7]) < 1e-6 and olds[1e9] == 0.0 and np.isfinite(olds[1e77]) and olds[1e78] == np.inf
@@ -220,7 +228,8 @@ for kw in ({"rho": 0.0}, {"cf_y": 0.0}):
     o, txt, w = run(causal.dml_sensitivity, RES, cf_d=1.0, show=True, **kw)
     check(f"cf_d = 1 with {kw}: the bound is its limit, zero (was inf): the zero warning only, no 'infinite' text",
           o["bias_bound"] == 0 and len(o["warnings"]) == 1 and "bias bound is zero" in o["warnings"][0]
-          and "infinite" not in txt and "bias <= inf" not in txt, (o["bias_bound"], o["warnings"]))
+          and "infinite" not in txt and "bias <= inf" not in txt and txt.count("The bias bound is zero") == 1,
+          (o["bias_bound"], o["warnings"]))
 o, _, _ = run(causal.dml_sensitivity, RES, cf_y=1.0, show=False)
 check("cf_y = 1 accepted (finite bound, no warning)", isinstance(o, dict) and np.isfinite(o["bias_bound"])
       and o["warnings"] == [], repr(o) if not isinstance(o, dict) else o["bias_bound"])
@@ -361,6 +370,10 @@ check(f"dml_sensitivity q = 0.5: the reporting line judges the confidence bounds
       and "include zero" not in txt.strip().splitlines()[-1] and f"theta to {tgt}" in txt, txt.strip().splitlines()[-1])
 o, txt, _ = run(causal.dml_sensitivity, RES, show=False)
 check("dml_sensitivity show=False: nothing printed", txt == "")
+for v in (True, np.True_, "1", None):
+    o, _, _ = run(causal.dml_sensitivity, RES, rho=v, show=False)
+    check(f"dml_sensitivity rho = {v!r} refused (TypeError; a bool printed 'rho = True')",
+          isinstance(o, TypeError) and "rho" in str(o), repr(o))
 
 BENCH, _, _ = run(causal.dml_benchmark, DD, "y", "d", ["x1", "x2", "x3"], ["x1", "x2"], res=RES, n_folds=5, n_rep=3,
                   seed=3, **LIN)
@@ -382,7 +395,7 @@ check("dml_bounds show=False: nothing printed", txt == "")
 empty = pd.DataFrame({"gain_y": [0.0], "gain_d": [0.1], "rho": [0.5]}, index=["z"])
 o, txt, _ = run(causal.dml_bounds, RES, empty, show=True)
 check("dml_bounds with no line computed: no reporting line (nothing to report)",
-      isinstance(o, dict) and o["bounds"].empty and "In a report" not in txt, txt)
+      isinstance(o, dict) and o["bounds"].empty and "In a report" not in txt and "No bound computed" in txt)
 
 docs = (ROOT / "econometrics" / "references" / "interpretation-rules.md").read_text(encoding="utf-8")
 sec = docs.split("## Rules added in v2.6.4")[1] if "## Rules added in v2.6.4" in docs else ""

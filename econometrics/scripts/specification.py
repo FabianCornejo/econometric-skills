@@ -554,11 +554,12 @@ def robustness_value(t: float, dof: float, q: float = 1.0, alpha: float = ALPHA)
         fq = q * f                            # inf when q·f overflows: the formulas below then give 1
 
     def _rv(x):
-        # 0.5·(√(x⁴ + 4x²) − x²) of the paper, rewritten as 2x / (x + √(x² + 4)) (v2.6.4): the original lost digits by
-        # cancellation as x grew (from x ≈ 4e6 rv_q was erratic, between 0 and 8192, and 0 beyond x ≈ 1e10, where it is
-        # almost 1), gave inf beyond x ≈ 1.16e77 (x⁴ overflows) and nan beyond x ≈ 1.34e154 (x² too). hypot does not
-        # overflow; inf is the limit 1.
-        return 1.0 if np.isinf(x) else 2 * x / (x + np.hypot(x, 2.0))
+        # 0.5·(√(x⁴ + 4x²) − x²) of the paper, rewritten as x / (x/2 + √((x/2)² + 1)) = 2x / (x + √(x² + 4)) (v2.6.4): the
+        # original lost digits by cancellation as x grew (from x ≈ 4e6 rv_q was erratic, between −8192 and 8192 up to
+        # x ≈ 1e10, mostly 0 beyond with the rest ± multiples of ulp(x²)/2, where it is almost 1), gave inf beyond
+        # x ≈ 1.16e77 (x⁴ overflows) and nan beyond x ≈ 1.34e154 (x² too). Halving x first keeps 2x and x + hypot finite
+        # up to the largest float (review 2: nan above x ≈ 9e307); inf is the limit 1.
+        return 1.0 if np.isinf(x) else x / (0.5 * x + np.hypot(0.5 * x, 1.0))
 
     f_crit = stats.t.ppf(1 - alpha / 2, dof - 1) / np.sqrt(dof - 1)
     fqa = fq - f_crit
