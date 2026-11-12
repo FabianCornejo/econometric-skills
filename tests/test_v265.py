@@ -32,6 +32,10 @@ What is checked (expected items written by hand, not derived from the code):
   7. dml_bounds prints rho on each line as :g (0.9726123 -> 0.972612; 0.996 -> 0.996, never 1.00; 1 -> 1; -1 -> -1),
      and with a numeric rho = 1/3 the line, the header and the report line show the same text;
   8. .gitattributes marks *.skill binary (git check-attr when git is there).
+Review 1 added: "other" only next to a signed-in copy (the checked case), else "unknown"; the accounts item only when the
+account was not read, after the "different versions" item (it hid it), with "unreadable" for a missing version; the
+copy running now never silenced; a BOM or a warning line before the JSON; folder names in full (<UUID>_<UUID>); no
+`claude auth status` call without a synced folder; rho 0.9999996 printed in full and -0.0 as 0.
 
 Run from the repository root:  python3 tests/test_v265.py
 Needs: numpy, pandas, scikit-learn (part 7); git for one check of part 8.
@@ -107,6 +111,10 @@ bad = {"exit code 1": runner(AUTH, code=1), "empty output": runner(""), "not JSO
 for label, run in bad.items():
     check(f"signed_in_org: {label} -> None (account unknown, no exception)",
           se.signed_in_org(run=run, which=CLAUDE) is None)
+for label, txt in (("a UTF-8 BOM before the JSON", "\ufeff" + json.dumps(AUTH, indent=2)),
+                   ("a warning line before the JSON", "Note: a newer version is available\n" + json.dumps(AUTH, indent=2))):
+    got = se.signed_in_org(run=runner(txt), which=CLAUDE)
+    check(f"signed_in_org: {label} -> still read (review 1)", got == {"org_id": ME, "org_name": "Org A"}, got)
 check("signed_in_org: no claude CLI on the PATH -> None", se.signed_in_org(run=runner(AUTH), which=lambda n: None) is None)
 up = se.signed_in_org(run=runner({**AUTH, "orgId": ME.upper(), "orgName": ""}), which=CLAUDE)
 check("signed_in_org: an upper-case orgId is accepted; an empty orgName becomes None",
@@ -124,6 +132,9 @@ cases = [
     (ME, ME, "unknown", "the orgId with no '_<id>'"),
     (f"{ME}0_{ME_ID}", ME, "unknown", "the orgId plus one character before '_'"),
     ("acct", ME, "unknown", "a folder name with no orgId"),
+    (f"{ME}_x", ME, "unknown", "the orgId and '_' but no second UUID (review 1)"),
+    (f"{ME}_", ME, "unknown", "the orgId and '_' only"),
+    (f"{OTHER}_{OTHER_ID}x", ME, "unknown", "a second UUID with one character more"),
     (f"{ME}_{ME_ID}", None, "unknown", "org not known"),
 ]
 for folder, org, want, label in cases:
@@ -153,15 +164,19 @@ check("skill_copies: plugin and checkout as before, with no account key",
       == [("plugin", "2.6.4"), ("marketplace checkout", "2.6.4")] and all("account" not in c for c in cp
                                                                          if c["kind"] != se.APP_COPY), cp)
 check("skill_copies: the copy in .trash is still ignored", not any(c["version"] == "2.6.2" for c in cp))
+t2 = Path(tempfile.mkdtemp()) / ".claude"
+write_copy(t2 / "skills" / "synced" / f"{OTHER}_{OTHER_ID}" / "econometrics", "2.6.3")
+only = se.skill_copies(t2, org_id=ME)
+check("skill_copies: signed in, but only another account's folder on disk -> 'unknown', not 'other' (the case not "
+      "checked on the notebook; review 1)", [c.get("account") for c in only] == ["unknown"], only)
 check("skill_copies: no org -> every synced copy 'unknown'",
       [c.get("account") for c in se.skill_copies(cdir) if c["kind"] == se.APP_COPY] == ["unknown", "unknown"])
 
 
 # ----------------------------------------------------------------------------------- 4. doctor_actions
-def report(copies, latest="2.6.4"):
-    return {"python": {"exe": "x", "version": "3.13.0", "supported": True, "run_with": "py -3.13"},
-            "core_missing": [], "interpreters": [], "skill": {"dir": "/c/plugins/cache/econometric-skills/x/2.6.4",
-                                                              "version": "2.6.4"},
+def report(copies, latest="2.6.4", org=None, here="/c/plugins/cache/econometric-skills/x/2.6.4"):
+    return {"account": {"org_id": org, "org_name": None}, "python": {"exe": "x", "version": "3.13.0", "supported": True, "run_with": "py -3.13"},
+            "core_missing": [], "interpreters": [], "skill": {"dir": here, "version": "2.6.4"},
             "latest": {"version": latest, "status": "ok" if latest else "not checked (--offline)"},
             "copies": copies, "autoupdate": {"registered": True, "on": True, "configured": True,
                                              "source": "settings.json", "blocked_by": []},
@@ -187,26 +202,48 @@ check("To do offline: the signed-in copy at another version -> 'different versio
 acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.3", "unknown")]))
 check("To do, account unknown, copies of two accounts (2.6.4, 2.6.3) -> one item naming both, saying the account "
       "could not be read, and no 'the Claude app copy is 2.6.3' order",
-      len(acts) == 1 and "2 Claude accounts" in acts[0] and "2.6.4, 2.6.3" in acts[0] and
+      len(acts) == 1 and "2 Claude app copies are on this computer" in acts[0] and "versions 2.6.4, 2.6.3," in acts[0] and
       "could not be read" in acts[0] and "the Claude app copy is" not in acts[0] and "different versions" not in acts[0],
       acts)
 acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.4", "unknown")]))
 check("To do, account unknown, two accounts both current -> no item", acts == [], acts)
 acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.3", "unknown")], latest=None))
 check("To do offline, account unknown, two accounts at different versions -> the one item, not 'different versions'",
-      len(acts) == 1 and "2 Claude accounts" in acts[0] and "behind the other copies" in acts[0], acts)
+      len(acts) == 1 and "2 Claude app copies are on this computer" in acts[0] and "behind the others" in acts[0], acts)
 acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.4", "unknown")], latest=None))
 check("To do offline, account unknown, two accounts at the plugin's version -> no item", acts == [], acts)
 acts = se.doctor_actions(report([P, app("2.6.3", "unknown"), app("2.6.3", "unknown")], latest=None))
 check("To do offline, account unknown, two accounts equal to each other but behind the plugin (2.6.3 < 2.6.4) -> "
       "the one item (the reference is the plugin's version when the release is not checked)",
-      len(acts) == 1 and "2 Claude accounts" in acts[0] and "2.6.3, 2.6.3" in acts[0], acts)
+      len(acts) == 1 and "2 Claude app copies are on this computer" in acts[0] and "versions 2.6.3, 2.6.3," in acts[0], acts)
 old = {"kind": se.APP_COPY, "version": "2.6.3", "path": "s"}       # a report without "account" (before v2.6.5)
 for label, c in (("one synced copy, account unknown", app("2.6.3", "unknown")), ("a report with no account key", old)):
     acts = se.doctor_actions(report([P, c]))
     check(f"To do: {label} -> the v2.6.4 item, word for word",
           acts == ["the Claude app copy is 2.6.3, the latest is 2.6.4: in the Claude app, Customize -> Skills, upload "
                    f"{se.RELEASE_ASSET} (it reaches Claude Code at its next start)"], acts)
+M = {"kind": "manual copy", "version": "2.6.2", "path": "m"}
+acts = se.doctor_actions(report([P, M, app("2.6.3", "unknown"), app("2.6.4", "unknown")], latest=None))
+check("To do offline, a manual copy 2.6.2 plus two accounts unknown: BOTH the 'different versions' item (naming the "
+      "manual copy) and the accounts item (review 1: the second hid the first)",
+      len(acts) == 2 and "different versions" in acts[0] and "manual copy 2.6.2" in acts[0]
+      and "2 Claude app copies are on this computer" in acts[1], acts)
+acts = se.doctor_actions(report([app("2.6.4", "unknown"), app("2.6.3", "unknown")], latest=None,
+                                here="/c/clone/econometrics"))
+check("To do offline, no plugin, two accounts unknown at different versions -> the accounts item",
+      any("2 Claude app copies are on this computer" in a for a in acts), acts)
+acts = se.doctor_actions(report([P, app("2.6.4", "unknown"), app("2.6.3", "unknown")], org=ME))
+check("To do, account READ but two folder names it cannot place -> no 'could not be read' item; each copy as before "
+      "(review 1: the item contradicted the line above it)",
+      acts == ["the Claude app copy is 2.6.3, the latest is 2.6.4: in the Claude app, Customize -> Skills, upload "
+               f"{se.RELEASE_ASSET} (it reaches Claude Code at its next start)"], acts)
+acts = se.doctor_actions(report([P, app("2.6.3", "unknown"), {"kind": se.APP_COPY, "version": None, "path": "z",
+                                                              "account": "unknown"}]))
+check("To do, accounts item (one copy behind) with an unreadable version: 'versions 2.6.3, unreadable', never 'None'",
+      len(acts) == 1 and "versions 2.6.3, unreadable," in acts[0] and "None" not in acts[0], acts)
+acts = se.doctor_actions(report([P, app("2.6.4", "signed in"), app("2.6.3", "other")], here="s/other/2.6.3"))
+check("To do: the copy running now is the other account's (2.6.3) -> it is not silenced (review 1)",
+      len(acts) == 1 and "2.6.3" in acts[0], acts)
 acts = se.doctor_actions(report([P, app("2.6.3", "signed in"), app("2.6.3", "unknown")]))
 check("To do: a signed-in copy and one unknown folder name, both behind -> each gets the usual item (not 'accounts')",
       len(acts) == 2 and all(a.startswith("the Claude app copy is 2.6.3") for a in acts), acts)
@@ -228,6 +265,14 @@ for org, want, label in ((ME, 3 + 1, "signed in to the 3-skill account"), (OTHER
     lst = se.skill_listing(lc, run=runner(), which=CLAUDE, cwd=folder, org_id=org)
     check(f"listing: {label} -> {want} skills (synced skills of another account not counted; a manual one counted)",
           lst["checked"] and lst["skills"] == want, lst.get("skills"))
+lo = Path(tempfile.mkdtemp()) / ".claude"
+for k in range(4):
+    d = lo / "skills" / "synced" / f"{OTHER}_{OTHER_ID}" / f"s{k}"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("x", encoding="utf-8")
+lst = se.skill_listing(lo, run=runner(), which=CLAUDE, cwd=folder, org_id=ME)
+check("listing: signed in, only another account's folder (4 skills) -> counted (4), as in skill_copies (review 1)",
+      lst["checked"] and lst["skills"] == 4, lst.get("skills"))
 pl = json.dumps([{"id": se.PLUGIN_ID, "enabled": True, "scope": "project", "projectPath": "", "version": "2.0",
                   "installPath": str(lt / "none")}])
 lst = se.skill_listing(lc, run=runner(plugins=pl), which=CLAUDE, cwd=Path.cwd())
@@ -271,6 +316,24 @@ check("doctor, auth status unreadable: account None, 'Claude Code account: not r
 check("doctor, auth status unreadable: the listing counts both accounts' synced skills (2), as before v2.6.5",
       rep2["listing"].get("checked") and rep2["listing"]["skills"] == 2, rep2["listing"].get("skills"))
 
+calls = []
+
+
+def counting(cmd, timeout):
+    calls.append(cmd[1:3])
+    return runner(AUTH)(cmd, timeout)
+
+
+nos = Path(tempfile.mkdtemp()) / ".claude"
+write_copy(nos / "plugins" / "cache" / "econometric-skills" / "econometrics" / "2.6.4", "2.6.4")
+rep3 = se.doctor(offline=True, cdir=nos, env={}, run=counting, which=CLAUDE, os_name="posix")
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    se.print_doctor(rep3)
+check("doctor with no skills/synced folder: claude auth status is not run, and no account line is printed (review 1)",
+      ["auth", "status"] not in calls and "Claude Code account" not in buf.getvalue()
+      and "Claude Code signed in to" not in buf.getvalue(), calls)
+
 # ----------------------------------------------------------------------------------- 7. rho on the dml_bounds lines
 rng = np.random.default_rng(2605)
 n = 400
@@ -279,8 +342,8 @@ d = 0.5 * X[:, 0] + rng.normal(size=n)
 y = 1.0 * d + 0.7 * X[:, 0] - 0.4 * X[:, 1] + rng.normal(size=n)
 R = causal.dml_plr(pd.DataFrame(dict(y=y, d=d, x1=X[:, 0], x2=X[:, 1])), "y", "d", ["x1", "x2"],
                    learner_y=LinearRegression(), learner_d=LinearRegression(), n_rep=1)
-BENCH = pd.DataFrame({"gain_y": [0.05] * 4, "gain_d": [0.05] * 4, "rho": [0.9726123, 0.996, 1.0, -1.0]},
-                     index=["a", "b", "c", "e"])
+BENCH = pd.DataFrame({"gain_y": [0.05] * 6, "gain_d": [0.05] * 6,
+                      "rho": [0.9726123, 0.996, 1.0, -1.0, 0.9999996, -0.0]}, index=["a", "b", "c", "e", "g", "h"])
 
 
 def printed(**k):
@@ -292,7 +355,7 @@ def printed(**k):
 
 
 o, lines = printed()
-want = {"a": "rho 0.972612:", "b": "rho 0.996:", "c": "rho 1:", "e": "rho -1:"}
+want = {"a": "rho 0.972612:", "b": "rho 0.996:", "c": "rho 1:", "e": "rho -1:", "g": "rho 0.9999996:", "h": "rho 0:"}
 for b, w in want.items():
     ln = [x for x in lines if x.startswith(f"  1x {b}:")]
     check(f"dml_bounds line of benchmark rho {BENCH.loc[b, 'rho']!r}: '{w}'", len(ln) == 1 and w in ln[0], ln)
@@ -304,8 +367,15 @@ head = [x for x in lines if x.startswith("  rho = ")]
 rows = [x for x in lines if x.startswith("  1x ")]
 rep_line = [x for x in lines if x.startswith("  In a report, state")]
 check(f"dml_bounds rho = 1/3: header, every line and the report line all print '{txt}'",
-      head == [f"  rho = {txt} for every line"] and len(rows) == 4 and all(f"rho {txt}:" in x for x in rows)
+      head == [f"  rho = {txt} for every line"] and len(rows) == 6 and all(f"rho {txt}:" in x for x in rows)
       and len(rep_line) == 1 and f"rho = {txt} next to the bounds" in rep_line[0], (head, rows[:1], rep_line))
+
+o, lines = printed(rho=0.9999996)
+head = [x for x in lines if x.startswith("  rho = ")]
+rep_line = [x for x in lines if x.startswith("  In a report, state")]
+check("dml_bounds rho = 0.9999996: the header and report line say 0.9999996 (not '1', the worst case), and no "
+      "'(the worst case)'", head == ["  rho = 0.9999996 for every line"] and len(rep_line) == 1
+      and "rho = 0.9999996 next to the bounds" in rep_line[0] and "worst case" not in rep_line[0], (head, rep_line))
 
 # ----------------------------------------------------------------------------------- 8. .gitattributes
 ga = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()

@@ -60,30 +60,69 @@ def _bound(node):
 
 
 def _outer_parts(node):
-    """The parts of a nested def, lambda or class that run in the enclosing scope (where they are defined)."""
+    """The parts of a nested def, lambda or class that run in the enclosing scope (where they are defined):
+    decorators, defaults, class bases and keywords, and the annotations of a def's arguments and return (evaluated
+    at definition up to Python 3.13; 3.14 refuses a walrus there, so counting them costs nothing)."""
     out = list(getattr(node, "decorator_list", []))
     if isinstance(node, ast.ClassDef):
         return out + list(node.bases) + [k.value for k in node.keywords]
     a = node.args
-    return out + list(a.defaults) + [d for d in a.kw_defaults if d is not None]
+    out += list(a.defaults) + [d for d in a.kw_defaults if d is not None]
+    if not isinstance(node, ast.Lambda):
+        args = a.posonlyargs + a.args + a.kwonlyargs + [x for x in (a.vararg, a.kwarg) if x is not None]
+        out += [x.annotation for x in args if x.annotation is not None]
+        out += [node.returns] if node.returns is not None else []
+    return out
+
+
+def _own_body(f):
+    """The nodes of function f's own scope, nested defs, lambdas, classes and comprehensions not entered (each of
+    those is returned itself, so its name or its walrus can still be looked at)."""
+    stack, out = list(f.body), []
+    while stack:
+        s = stack.pop()
+        out.append(s)
+        if not isinstance(s, _FUNCS + _COMPS):
+            stack.extend(ast.iter_child_nodes(s))
+    return out
 
 
 def _nonlocal_rebinds(node, params):
     """(parameter, line) for every outer parameter that a function inside `node` (node included) declares
-    `nonlocal` and then rebinds in its own body."""
+    `nonlocal` in its own body and then rebinds there (an assignment of any kind, a def or class of that name, a
+    walrus in a comprehension; a comprehension's own loop variable does not count). Scopes are followed: a function
+    that has its own `p` (a parameter, or bound without `nonlocal p`) hides the outer one from the functions inside
+    it, whose `nonlocal p` then means that local (review 1); a class body hides nothing (nonlocal skips it)."""
     hits = []
-    for f in ast.walk(node):
-        if not isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        declared = {n for s in ast.walk(f) if isinstance(s, ast.Nonlocal) for n in s.names} & params
-        if not declared:
-            continue
-        stack = list(f.body)
-        while stack:                              # its own body only: a deeper def has its own nonlocal to check
-            s = stack.pop()
-            hits.extend((n, getattr(s, "lineno", 0)) for n in _bound(s) if n in declared)
-            if not isinstance(s, _FUNCS):
-                stack.extend(ast.iter_child_nodes(s))
+
+    def walk(f, live):
+        if isinstance(f, ast.Lambda):             # an expression body: no nonlocal, no def inside
+            return
+        if isinstance(f, ast.ClassDef):           # methods see through the class body
+            for s in _own_body(f):
+                if isinstance(s, _FUNCS) and s is not f:
+                    walk(s, live)
+            return
+        body = _own_body(f)
+        declared = {n for s in body if isinstance(s, ast.Nonlocal) for n in s.names} & live
+        bound = set()
+        for s in body:
+            if isinstance(s, _COMPS):
+                names = [w.target.id for w in ast.walk(s) if isinstance(w, ast.NamedExpr)]
+            elif isinstance(s, _FUNCS):
+                names = [getattr(s, "name", None)]
+            else:
+                names = _bound(s)
+            bound |= set(names)
+            hits.extend((n, getattr(s, "lineno", 0)) for n in names if n in declared)
+        a = f.args
+        own = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs} | {x.arg for x in (a.vararg, a.kwarg) if x}
+        inner = live - ((own | bound) - declared)     # names still meaning the outer parameters below this function
+        for s in body:
+            if isinstance(s, _FUNCS):
+                walk(s, inner)
+
+    walk(node, set(params))
     return hits
 
 
@@ -110,7 +149,7 @@ def loop_reassignments(fn):
             if in_loop and not comp and name in params:
                 hits.append((name, node.lineno))
             for ch in _outer_parts(node):         # defaults, decorators, bases: evaluated here (v2.6.5)
-                visit(ch, in_loop, comp)
+                visit_part(ch, in_loop, comp)
             hits.extend(_nonlocal_rebinds(node, params))
             return
         if in_loop:
@@ -120,7 +159,7 @@ def loop_reassignments(fn):
                 names = _bound(node)
             hits.extend((n, getattr(node, "lineno", 0)) for n in names if n in params)
         if isinstance(node, (ast.For, ast.AsyncFor)):
-            visit(node.iter, in_loop, comp)
+            visit_part(node.iter, in_loop, comp)
             for ch in [node.target, *node.body]:
                 visit(ch, True, comp)
             for ch in node.orelse:
@@ -133,10 +172,13 @@ def loop_reassignments(fn):
                 visit(ch, in_loop, comp)
             return
         for ch in ast.iter_child_nodes(node):
-            if isinstance(ch, _COMPS):            # a comprehension is itself a loop: a walrus in it rebinds every pass
-                visit(ch, True, True)
-            else:
-                visit(ch, in_loop, comp)
+            visit_part(ch, in_loop, comp)
+
+    def visit_part(ch, in_loop, comp):
+        if isinstance(ch, _COMPS):                # a comprehension is itself a loop: a walrus in it rebinds every pass
+            visit(ch, True, True)                 # (review 1: also as a default or a for's iterable)
+        else:
+            visit(ch, in_loop, comp)
 
     for stmt in fn.body:
         visit(stmt, False)
@@ -211,6 +253,23 @@ VARIANTS = {
                                                                          "    for i in range(2):\n        g()\n",
     "nonlocal two levels down": "def f(q, show=False):\n    def g():\n        def h():\n"
                                 "            nonlocal q\n            q = 1\n        h()\n    g()\n",
+    # review 1 of v2.6.5
+    "walrus in a comprehension that is a nested def's default (outside any loop: a comprehension is a loop)":
+        "def f(q, show=False):\n    def g(x=[(q := t) for t in y]):\n        pass\n",
+    "walrus in a comprehension that is a for's iterable": "def f(q, show=False):\n"
+                                                          "    for i in [(q := t) for t in y]:\n        pass\n",
+    "walrus in a nested def's argument annotation inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+                                                                  "        def g(x: (q := int)):\n            pass\n",
+    "walrus in a nested def's return annotation inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+                                                                "        def g() -> (q := int):\n            pass\n",
+    "nonlocal then a def of that name": "def f(q, show=False):\n    def g():\n        nonlocal q\n"
+                                        "        def q():\n            pass\n    g()\n",
+    "nonlocal then a class of that name": "def f(q, show=False):\n    def g():\n        nonlocal q\n"
+                                          "        class q:\n            pass\n    g()\n",
+    "nonlocal in a method of a nested class (the class body hides nothing)": "def f(q, show=False):\n"
+        "    class C:\n        def m(self):\n            nonlocal q\n            q = 1\n    C().m()\n",
+    "nonlocal then a walrus in a comprehension": "def f(q, show=False):\n    def g():\n        nonlocal q\n"
+                                                 "        z = [(q := t) for t in y]\n    g()\n",
 }
 for label, src in VARIANTS.items():
     check(f"guard catches: {label}", len(scan_source(src, "m")) == 1, str(scan_source(src, "m")))
@@ -238,9 +297,22 @@ CLEAN = {
                                                  "        return q + 1\n    return g()\n",
     "a nested function's own assignment without nonlocal is local": "def f(q, show=False):\n    def g():\n"
                                                                     "        q = 2\n        return q\n    return g()\n",
+    "a local q of an intermediate def, with nonlocal q one level deeper (it refers to that local)":
+        "def f(q, show=False):\n    def g():\n        q = 5\n        def h():\n            nonlocal q\n"
+        "            q = 6\n        h()\n    g()\n",
+    "nonlocal q, then q only as a comprehension's own loop variable": "def f(q, show=False):\n    def g():\n"
+                                                                      "        nonlocal q\n        return [0 for q in y]\n"
+                                                                      "    return g()\n",
+    "an annotation that reads a parameter inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+                                                          "        def g(x: q):\n            pass\n",
 }
 for label, src in CLEAN.items():
     check(f"guard stays quiet: {label}", scan_source(src, "m") == [], str(scan_source(src, "m")))
+SHADOW = ("def f(q, show=False):\n    def g(q):\n        def h():\n            nonlocal q\n            q = 6\n"
+          "        h()\n    g(1)\n")
+f_ = scan_source(SHADOW, "m")
+check("nonlocal q under a def g(q): the hit is g's parameter, never f's (scopes followed; review 1 of v2.6.5)",
+      [(fn, p) for _, fn, p, _, _ in f_] == [("g", "q")], str(f_))
 
 # --- 2. the package ------------------------------------------------------------------------------------
 found = []
