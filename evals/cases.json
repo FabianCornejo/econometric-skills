@@ -135,7 +135,7 @@
         "Writes the causal graph of the problem and runs dag.adjustment_report (or adjustment_sets / classify_controls) instead of controlling for every available variable.",
         "Flags post-treatment variables as bad controls: time to closing and the announcement abnormal return are outcomes or descendants of the advisor choice and the premium, so they must not be controls.",
         "Treats target size, sector and listed status as candidate confounders, and discusses competitive auction as a possible mediator (the advisor may run the auction) whose inclusion changes the estimand.",
-        "Says the choice of advisor is not random (selection on deal complexity, acquirer sophistication) and adds a sensitivity analysis benchmarked on an observed covariate (specification.sensitivity and specification.ovb_bounds for OLS; causal.dml_sensitivity, dml_benchmark and dml_bounds for double ML), and says that the boundary will be reported with its number (k_not_significant for OLS; the dml_bounds k values for DML), never as 'as strong as X'.",
+        "Says the choice of advisor is not random (selection on deal complexity, acquirer sophistication) and adds a sensitivity analysis benchmarked on an observed covariate (specification.sensitivity and specification.ovb_bounds for OLS; causal.dml_sensitivity, dml_benchmark and dml_bounds for double ML), and, if it says where significance would be lost, gives that boundary with its number (k_not_significant for OLS; the dml_bounds k values for DML), never 'as strong as X' with no number.",
         "Delivers a runnable script with a SKILL_DIR variable that calls the skill's functions, on simulated data with the same structure if no data are attached."
       ],
       "must_not": [
@@ -272,14 +272,15 @@
         "Points out that the second sentence ('only holds if no unmeasured factor is as strong as size') puts the boundary at 1x and contradicts the output: at 1x log_pac the worst-case CI still excludes zero (the 1x line's ci_verdict), and significance is lost only from about 1.2x (k_not_significant), as the memo's own third sentence says (interpretation-rules v2.6.3 and v2.6.6).",
         "Rewrites the opening summary with the number (a confounder about 1.2x as strong as size could, in the worst case, make the effect not significant), not 'as strong as size' or 'weaker than size'.",
         "Points out that the last sentence is wrong for OLS: at 2x size the OLS line's CI [1.351, 3.624] excludes zero on the other side (the sign would flip), which is stronger than 'compatible with zero'; only the two DML lines include zero at 2x.",
-        "Says these are worst cases for a confounder orthogonal to the covariates, not likely values, and labels 1.2x (and the OLS lines) as classical-SE numbers next to the HC3 CI (interpretation-rules v2.6.2); for the DML lines, states the rho of each in the document (1 in the linear and 0.967914 in the forest, both observed in the benchmark)."
+        "Says these are worst cases for a confounder orthogonal to the covariates, not likely values, and labels 1.2x (and the OLS lines) as classical-SE numbers next to the HC3 CI (interpretation-rules v2.6.2).",
+        "When the rewritten text mentions the DML lines, states the rho of each in the document (1 in the linear and 0.967914 in the forest, both observed in the benchmark; interpretation-rules v2.6.4)."
       ],
       "must_not": [
         "Approves the summary as it is, or keeps the boundary at 1x in the rewritten summary ('as strong as size' with no number, or 'weaker than size').",
         "Rounds the boundary to 1x, or rounds 1.2x to another number.",
         "Presents 1.2x as the boundary of the DML models too (1.2x is the OLS k_not_significant; the DML boundary comes from dml_bounds lines at several k).",
         "Calls the 2x OLS line 'compatible with zero' or 'includes zero'.",
-        "Computes bounds or k with formulas or loops of its own instead of reading the ovb_bounds and dml_bounds lines (or rerunning those functions)."
+        "Computes bounds or k with formulas of its own instead of reading the ovb_bounds and dml_bounds lines (rerunning those functions, or a loop that calls them, is fine)."
       ]
     }
   ]

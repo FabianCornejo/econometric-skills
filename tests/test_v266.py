@@ -29,7 +29,7 @@ What is checked (expected texts written by hand, not read from the code):
      2x linear DML line includes zero, k_not_significant for size rounds to 1.2. The forest DML line (slow) is
      quoted from the same run and only checked for its rho;
   6. the doctor's printed text: with --offline status the line saying it is only for a machine without network
-     (and not without it); the To do header asks once, at the end of the reply, with optional items included
+     (and no such line without --offline); the To do header asks once, at the end of the reply, with optional items included
      (and no header when there is nothing to do); the --json status stays "not checked (--offline)".
 Review 1 added: the section 4 sentence gives the DML boundary too (two dml_bounds k values) and forbids rounding to 1x,
 not every "as strong as" (a 1x sentence that follows the 1x line's ci_verdict is right); each section 4 piece is pinned
@@ -144,6 +144,11 @@ check("interpretation rules v2.6.6: DML has no k_not_significant -> the two dml_
       all(k in r266 for k in ("DML has no `k_not_significant`", "causal.dml_bounds", "between which two k",
                               "never compute the bounds by hand", "OLS lost significance at 1.2x",
                               "linear DML only between 1.3x and 1.4x", '"1.2x with any method" was wrong')), r266[-700:])
+check("interpretation rules v2.6.6: when no k in the list includes zero, say so at the largest k or extend the list "
+      "below k_d_max; the OLS and DML boundaries are different quantities that can differ (review 2)",
+      all(k in r266 for k in ("If every k in the list still excludes zero", "with the largest k",
+                              "kd must stay below `k_d_max`", "different quantities, can differ"))
+      and "different numbers" not in r266, r266[-900:])
 
 # ------------------------------------------------------------------------------------------------ 5. cases.json
 cases = json.loads((ROOT / "evals" / "cases.json").read_text(encoding="utf-8"))["cases"]
@@ -167,6 +172,17 @@ check("new case: grades the 2x OLS line as a sign flip, not 'compatible with zer
 ma = " ".join(byid.get("dag-controls-advisor-premium", {}).get("must", []))
 check("M&A case: the sensitivity criterion names ovb_bounds and dml_bounds and the number of the boundary",
       "specification.ovb_bounds" in ma and "dml_bounds" in ma and "k_not_significant" in ma)
+check("M&A case: the boundary criterion applies only if the answer states it, and forbids only the unnumbered "
+      "'as strong as X' (review 2)",
+      "if it says where significance would be lost" in ma and "never 'as strong as X' with no number" in ma
+      and "will be reported" not in ma)
+check("new case: the DML rho is graded only when the rewritten text mentions the DML lines, in a criterion of its "
+      "own that cites the v2.6.4 rule (review 2)",
+      any(m_.startswith("When the rewritten text mentions the DML lines") and "interpretation-rules v2.6.4" in m_
+          and "classical" not in m_ for m_ in new.get("must", []))
+      and not any("classical" in m_ and "rho" in m_ for m_ in new.get("must", [])))
+check("new case: a loop that calls ovb_bounds or dml_bounds is not penalized (review 2)",
+      "a loop that calls them, is fine" in must_not and "loops of its own" not in must_not)
 
 
 # The validation's design (copied by script from claude/scripts/validacao_v265_triagem_sensibilidade.py of the
@@ -213,12 +229,12 @@ want = [ln for ln in lines if ln.startswith("1x log_pac:") or ln.startswith("2x 
         or ln.startswith("A confounder 1.2x as strong as log_pac")]
 check("new case: ovb_bounds prints the three quoted lines (1x, 2x size and the 1.2x boundary), word for word",
       len(want) == 3 and all(w in quoted for w in want), want)
-b = bnd["bounds"].set_index("bound_label")
+b = bnd["bounds"].set_index("bound_label").reindex(["1x log_pac", "2x log_pac"])
 check("ovb_bounds on the design: 1x size keeps the sign (the summary's '1x' is wrong)",
       b.loc["1x log_pac", "ci_verdict"] == "same sign")
 check("ovb_bounds on the design: 2x size flips the sign (not 'compatible with zero')",
       b.loc["2x log_pac", "ci_verdict"] == "opposite sign" and b.loc["2x log_pac", "adjusted_lower_ci"] > 0)
-kns = bnd["benchmark_r2"].loc["log_pac", "k_not_significant"]
+kns = bnd["benchmark_r2"]["k_not_significant"].get("log_pac", float("nan"))
 check("ovb_bounds on the design: k_not_significant for size prints as 1.2 (1.195 <= k < 1.205)",
       1.195 <= kns < 1.205 and f"{round(kns, 2):g}" == "1.2", kns)
 X = ["log_pac", "med"] + [c for c in df.columns if c.startswith("reg_")]
@@ -232,12 +248,12 @@ with warnings.catch_warnings():
 # 2.7298 at :.4f only 1.4e-8 from the rounding edge, so a flip to 2.7297 on another BLAS would be rounding, not a bug.
 dl = [ln.strip() for ln in dout.splitlines() if ln.strip().startswith("2x log_pac:")]
 check("new case: the linear DML 2x line is what dml_bounds prints, word for word", len(dl) == 1 and dl[0] in quoted, dl)
-row = dbd["bounds"].set_index("bound_label").loc["2x log_pac"]
+row = dbd["bounds"].set_index("bound_label").reindex(["2x log_pac"]).iloc[0]
 check("dml_bounds (linear) on the design: 2x size includes zero", row["ci_verdict"] == "includes zero")
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     kb = causal.dml_bounds(res, bench, kd=[1.2, 1.3, 1.4], rho="benchmark", alpha=0.05, show=False)["bounds"]
-kb = kb.set_index("bound_label")
+kb = kb.set_index("bound_label").reindex(["1.2x log_pac", "1.3x log_pac", "1.4x log_pac"])
 check("dml_bounds (linear) on the design: the boundary is between 1.3x and 1.4x, not at the OLS 1.2x "
       "(1.2x and 1.3x exclude zero, 1.4x includes it; interpretation-rules v2.6.6)",
       kb.loc["1.2x log_pac", "ci_verdict"] == "excludes zero" and kb.loc["1.3x log_pac", "ci_verdict"] == "excludes zero"
@@ -287,11 +303,13 @@ check("doctor --offline: no request, and the JSON status is unchanged ('not chec
       calls == [] and json.loads(json.dumps(rep_off))["latest"] == {"version": None,
                                                                     "status": "not checked (--offline)"}, rep_off["latest"])
 readme = (ROOT / "README.md").read_text(encoding="utf-8")
+_first = readme.split("*What happens the first time.*")
+first_par = _first[1].split("\n\n")[0] if len(_first) > 1 else ""
 doc = se.__doc__ or ""
 check("README and setup_env's own text: the doctor runs before the first analysis in a folder, not on a machine; "
       "--offline only without network (review 1)",
       "Before the first analysis in a folder, Claude runs `setup_env.py --doctor`" in readme
-      and "on a machine" not in readme.split("*What happens the first time.*")[1][:400]
+      and len(first_par) > 1000 and "on a machine" not in first_par
       and "before the first analysis in a folder" in doc and "first analysis on a machine" not in doc
       and "api.github.com): only without network" in doc)
 hlp = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), "--help"], capture_output=True,
