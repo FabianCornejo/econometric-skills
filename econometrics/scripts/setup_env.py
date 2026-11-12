@@ -974,6 +974,8 @@ def print_doctor(rep: dict) -> None:
     sk, lt = rep["skill"], rep["latest"]
     print(f"Skill in use: {sk['version']} ({sk['dir']})")
     print("Latest release: " + (lt["version"] if lt["version"] else lt["status"]))
+    if lt.get("status") == "not checked (--offline)":
+        print("  --offline is only for a machine without network; with network, run --doctor without it")
     ac = rep.get("account") or {}
     if ac.get("org_id"):
         print(f"Claude Code signed in to: {ac.get('org_name') or 'an organization'} (org {ac['org_id']})")
@@ -996,7 +998,8 @@ def print_doctor(rep: dict) -> None:
     else:
         print(f"Skill listing: not checked ({lst.get('reason')})")
     if rep["actions"]:
-        print("\nTo do (ask the user once, listing all of these; install or change nothing before the answer):")
+        print("\nTo do (ask the user once, in one question at the end of your reply, listing all of these, optional "
+              "ones included; install or change nothing before the answer):")
         for k, a in enumerate(rep["actions"], 1):
             print(f"  {k}. {a}")
     else:

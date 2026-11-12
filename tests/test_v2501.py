@@ -722,9 +722,20 @@ V251_DID = (" With one to three treated units, use `causal.did_single_treated` a
             "Prais-Winsten p-values on the gap series (about three times too many false positives with ~24 periods); "
             "before a causal DiD claim, run `causal.did_falsification` (with `cluster=` when assignment is by cluster) "
             "and report its findings and its uninformative checks.")
+# v2.6.6 added three pieces to the sensitivity rule (CHANGELOG v2.6.6): the OLS and DML bounds functions and the
+# sentence on stating the boundary with its number; remove exactly those as well.
+V266_OVB = " and `ovb_bounds`"
+V266_DML = " and `dml_bounds`"
+V266_SUM = (" Where significance is lost is a number (`k_not_significant`: \"a confounder 1.2x as strong as size\"): "
+            "say it with that number in every sentence, the opening summary and the chat reply included, never \"as "
+            "strong as size\" or \"weaker than size\" (`interpretation-rules.md`, v2.6.3 and v2.6.6).")
+V266 = (V266_OVB, V266_DML, V266_SUM)
 sec4_v250 = sec4.replace(V251_ASK, "", 1).replace(V251_DID, "", 1)
-check("SKILL.md section 4 (non-negotiable rules), minus the two documented v2.5.1 additions, is byte-identical to "
-      "v2.5.0 (SHA-256 pinned, works in a shallow CI checkout)", V251_ASK in sec4 and V251_DID in sec4
+for piece in V266:
+    sec4_v250 = sec4_v250.replace(piece, "", 1)
+check("SKILL.md section 4 (non-negotiable rules), minus the documented v2.5.1 and v2.6.6 additions, is byte-identical "
+      "to v2.5.0 (SHA-256 pinned, works in a shallow CI checkout)", V251_ASK in sec4 and V251_DID in sec4
+      and all(sec4.count(piece) == 1 for piece in V266)
       and hashlib.sha256(sec4_v250.encode("utf-8")).hexdigest()
       == "a820ccbfddb871b324a556bb963a15e75ed594799a292d50c82ec217c83538f1")
 agent = (SKILL / "agents" / "econometrician.md").read_text(encoding="utf-8")
