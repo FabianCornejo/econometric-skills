@@ -59,6 +59,34 @@ def _bound(node):
     return []
 
 
+def _outer_parts(node):
+    """The parts of a nested def, lambda or class that run in the enclosing scope (where they are defined)."""
+    out = list(getattr(node, "decorator_list", []))
+    if isinstance(node, ast.ClassDef):
+        return out + list(node.bases) + [k.value for k in node.keywords]
+    a = node.args
+    return out + list(a.defaults) + [d for d in a.kw_defaults if d is not None]
+
+
+def _nonlocal_rebinds(node, params):
+    """(parameter, line) for every outer parameter that a function inside `node` (node included) declares
+    `nonlocal` and then rebinds in its own body."""
+    hits = []
+    for f in ast.walk(node):
+        if not isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        declared = {n for s in ast.walk(f) if isinstance(s, ast.Nonlocal) for n in s.names} & params
+        if not declared:
+            continue
+        stack = list(f.body)
+        while stack:                              # its own body only: a deeper def has its own nonlocal to check
+            s = stack.pop()
+            hits.extend((n, getattr(s, "lineno", 0)) for n in _bound(s) if n in declared)
+            if not isinstance(s, _FUNCS):
+                stack.extend(ast.iter_child_nodes(s))
+    return hits
+
+
 def loop_reassignments(fn):
     """(parameter, line) for every parameter of `fn` rebound (assignment, augmented or annotated assignment, walrus,
     for target, with/except/import alias, del, match capture) inside a for/while of `fn` itself.
@@ -66,8 +94,11 @@ def loop_reassignments(fn):
     Nested functions, lambdas and classes are their own scope and are not entered. In a comprehension only a walrus
     binds in the function (its loop variables do not). A loop's `else` block and a for's iterable run once, so they
     are outside the loop; a while's test runs on every pass; a comprehension is a loop of its own (a walrus in it
-    counts even outside any for/while). Not covered: `nonlocal` rebinding from a nested function, and a walrus in a
-    nested def's or lambda's defaults or decorators (need scope analysis; none occurs in scripts/)."""
+    counts even outside any for/while). v2.6.5: a nested def's, lambda's or class's defaults, decorators, bases and
+    keywords run in this function's scope, so a walrus there counts like one in the body (inside a loop, a hit); and a
+    parameter that a nested function rebinds after `nonlocal p` is always a hit, in a loop or not, because where the
+    nested function is called is not visible without flow analysis. (A nested function that has its own `p` as a
+    parameter shadows the outer one; a `nonlocal p` under it is then flagged anyway: none occurs in scripts/.)"""
     a = fn.args
     params = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs}
     params |= {x.arg for x in (a.vararg, a.kwarg) if x is not None}
@@ -78,6 +109,9 @@ def loop_reassignments(fn):
             name = getattr(node, "name", None)
             if in_loop and not comp and name in params:
                 hits.append((name, node.lineno))
+            for ch in _outer_parts(node):         # defaults, decorators, bases: evaluated here (v2.6.5)
+                visit(ch, in_loop, comp)
+            hits.extend(_nonlocal_rebinds(node, params))
             return
         if in_loop:
             if comp:
@@ -159,6 +193,24 @@ VARIANTS = {
     "walrus in a comprehension, outside any for/while (the one-line form of the bug)":
         "def f(q, show=False):\n    z = [(q := len(t)) for t in g]\n    print(q)\n",
     "assignment in a while test": "def f(q, show=False):\n    while (q := q - 1) > 0:\n        pass\n",
+    # v2.6.5 (v2.5.3 review NITs): parts of a nested def that run in the outer scope, and nonlocal
+    "walrus in the default of a def inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+                                                   "        def g(x=(q := i)):\n            pass\n",
+    "walrus in the keyword-only default of a def inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+                                                                 "        def g(*, x=(q := i)):\n            pass\n",
+    "walrus in the default of a lambda inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+                                                       "        h = lambda x=(q := i): x\n",
+    "walrus in a decorator inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+                                           "        @deco(q := i)\n        def g():\n            pass\n",
+    "walrus in a class base inside a loop": "def f(q, show=False):\n    for i in range(2):\n"
+                                            "        class C(base(q := i)):\n            pass\n",
+    "nonlocal rebinding of a parameter (outside any loop)": "def f(q, show=False):\n    def g():\n"
+                                                            "        nonlocal q\n        q = 3\n    g()\n    print(q)\n",
+    "nonlocal rebinding with an augmented assignment, called in a loop": "def f(q, show=False):\n    def g():\n"
+                                                                         "        nonlocal q\n        q += 1\n"
+                                                                         "    for i in range(2):\n        g()\n",
+    "nonlocal two levels down": "def f(q, show=False):\n    def g():\n        def h():\n"
+                                "            nonlocal q\n            q = 1\n        h()\n    g()\n",
 }
 for label, src in VARIANTS.items():
     check(f"guard catches: {label}", len(scan_source(src, "m")) == 1, str(scan_source(src, "m")))
@@ -176,6 +228,16 @@ CLEAN = {
     "a walrus in a for's iterable runs once": "def f(q, show=False):\n    for i in (q := [1, 2]):\n        pass\n",
     "a comprehension's own loop variable": "def f(q, show=False):\n    for i in range(2):\n"
                                            "        z = {q: 1 for q in range(3)}\n",
+    "walrus in the default of a nested def outside any loop runs once": "def f(q, show=False):\n"
+                                                                        "    def g(x=(q := 1)):\n        pass\n",
+    "a default that reads a parameter without rebinding it": "def f(q, show=False):\n    for i in range(2):\n"
+                                                             "        def g(x=q):\n            return x\n",
+    "nonlocal of a local that is not a parameter": "def f(q, show=False):\n    k = 0\n    def g():\n"
+                                                   "        nonlocal k\n        k = 1\n    g()\n",
+    "nonlocal of a parameter that is only read": "def f(q, show=False):\n    def g():\n        nonlocal q\n"
+                                                 "        return q + 1\n    return g()\n",
+    "a nested function's own assignment without nonlocal is local": "def f(q, show=False):\n    def g():\n"
+                                                                    "        q = 2\n        return q\n    return g()\n",
 }
 for label, src in CLEAN.items():
     check(f"guard stays quiet: {label}", scan_source(src, "m") == [], str(scan_source(src, "m")))

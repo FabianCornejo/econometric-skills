@@ -683,7 +683,7 @@ def dml_bounds(res: dict, bench: pd.DataFrame, kd=None, ky=None, rho="benchmark"
             kd_s, ky_s = ((repr(float(r["kd"])), repr(float(r["ky"]))) if same else (f"{r['kd']:g}", f"{r['ky']:g}"))
             kk = ("" if r["kd"] == r["ky"] else      # v2.6.3: "2/5x" could read as 0.4x
                   f"(kd = {kd_s} for the treatment, ky = {ky_s} for the outcome) ")
-            print(f"  {r['bound_label']}: {kk}cf_y {r['cf_y']:.1%}{cap}, cf_d {r['cf_d']:.1%}, rho {r['rho']:.2f}: "
+            print(f"  {r['bound_label']}: {kk}cf_y {r['cf_y']:.1%}{cap}, cf_d {r['cf_d']:.1%}, rho {r['rho']:g}: "
                   f"theta "
                   f"between {r['theta_lower']:.4f} and {r['theta_upper']:.4f}; {level} confidence bounds "
                   f"[{r['ci_low']:.4f}, {r['ci_high']:.4f}], which "
