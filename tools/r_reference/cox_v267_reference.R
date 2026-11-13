@@ -19,7 +19,7 @@ out <- c()
 txt <- c(R.version.string, paste("survival", as.character(packageVersion("survival"))))
 for (nm in names(cases)) {
   cs <- cases[[nm]]
-  fit <- coxph(cs$f, data = d, ties = cs$ties, cluster = d[[cs$cl]], control = coxph.control(eps = 1e-12, iter.max = 100))
+  fit <- coxph(cs$f, data = d, ties = cs$ties, cluster = d[[cs$cl]], control = coxph.control(eps = 1e-10, iter.max = 100))
   out <- c(out, sprintf('  "%s": {"ties": "%s", "cluster": "%s", "coef": %s, "robust_se": %s, "naive_se": %s}',
                         nm, cs$ties, cs$cl, num(coef(fit)), num(sqrt(diag(fit$var))), num(sqrt(diag(fit$naive.var)))))
   txt <- c(txt, paste("==", nm), capture.output(print(summary(fit)$coefficients)))
