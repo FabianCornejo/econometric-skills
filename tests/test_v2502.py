@@ -292,14 +292,17 @@ orig = (rt.shutil.which, rt.subprocess.run)
 rt.shutil.which, rt.subprocess.run = (lambda name: "/usr/bin/claude"), fake_run
 try:
     with tempfile.TemporaryDirectory() as tmp:
+        # --no-responses (v2.6.7): without it every arm keeps its run directories to save the answers
         for arm in ("both", "nameonly", "all"):
-            rt.main(["--arm", arm, "--runs", "1", "--case", "two-groups", "--out", str(Path(tmp) / arm)])
-        rt.main(["--arm", "nameonly", "--no-hooks", "--runs", "1", "--case", "two-groups", "--out", str(Path(tmp) / "nh")])
+            rt.main(["--arm", arm, "--runs", "1", "--case", "two-groups", "--no-responses", "--out", str(Path(tmp) / arm)])
+        rt.main(["--arm", "nameonly", "--no-hooks", "--runs", "1", "--case", "two-groups", "--no-responses",
+                 "--out", str(Path(tmp) / "nh")])
         heads = {d: (Path(tmp) / d / "summary.md").read_text(encoding="utf-8").splitlines()[0] for d in ("both", "nh")}
         diag = (Path(tmp) / "nameonly" / "nameonly-diagnostics.json").exists()
 finally:
     rt.shutil.which, rt.subprocess.run = orig
-check("main(): --keep-temp only when the name-only arm runs (not for both), and the diagnostics file is written",
+check("main() with --no-responses: --keep-temp only when the name-only arm runs (not for both), and the diagnostics "
+      "file is written",
       ["--keep-temp" in c for c in calls] == [False, True, True, True] and diag)
 check("main(): the summary header says whether the plugin hooks were on",
       "plugin hooks on" in heads["both"] and "plugin hooks off" in heads["nh"], str(heads))
