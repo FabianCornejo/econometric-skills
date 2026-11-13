@@ -137,8 +137,9 @@ try:
         rt.main(["--arm", "both", "--runs", "1", "--case", "two-groups", "--out", str(Path(tmp) / "d")])
         rt.main(["--arm", "both", "--runs", "1", "--case", "two-groups", "--no-responses",
                  "--out", str(Path(tmp) / "n")])
-        d_idx = json.loads((Path(tmp) / "d" / "responses.json").read_text(encoding="utf-8"))
-        d_file = (Path(tmp) / "d" / "responses" / "clean-a__run0.md").read_text(encoding="utf-8")
+        pi, pf = Path(tmp) / "d" / "responses.json", Path(tmp) / "d" / "responses" / "clean-a__run0.md"
+        d_idx = json.loads(pi.read_text(encoding="utf-8")) if pi.exists() else None
+        d_file = pf.read_text(encoding="utf-8") if pf.exists() else ""
         n_has = (Path(tmp) / "n" / "responses.json").exists() or (Path(tmp) / "n" / "responses").exists()
         diag = (Path(tmp) / "d" / "nameonly-diagnostics.json").exists()
 finally:
