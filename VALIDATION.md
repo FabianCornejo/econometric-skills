@@ -6,7 +6,7 @@ Check it is in sync with the code and the tests: `python tests/test_validation_m
 
 ## Levels
 
-- **A, replicated against a fixed reference.** The test compares the function with a published value (textbook with the example number, a published table), with the output of other software stored in the repository (R, Stata, DoubleML, lifelines) or run in the test (csdid, statsmodels, scipy), or with a closed form computed in the test by another route.
+- **A, replicated against a fixed reference.** The test compares the function with a published value (textbook with the example number, a published table), with the output of other software stored in the repository (R, Stata, DoubleML, lifelines) or run in the test (csdid, statsmodels, scipy), or with a closed form computed in the test by another route. A number the function returns about its own output (a "theory" column next to a simulated one) does not count as a reference.
 - **B, known truth.** Simulated or constructed data whose answer is known by construction (a planted effect, a size or coverage target, a graph solved by hand).
 - **C, execution only.** The test calls the function and checks shape, keys, warnings or messages, not a value.
 - **D, no test.** No test file refers to the function (by `module.function` or by importing it).
@@ -26,11 +26,11 @@ The *Tolerance* column is the one the test uses, read from the test. Tests writt
 
 ## Largest observed difference
 
-For the level-A rows with an external reference (a published value, or R, Stata, DoubleML, csdid, lifelines), `tools/validation_diffs.py` redoes the test's comparison and records the largest difference and the tolerance of that comparison, written as *difference of tolerance*. Measured on 2026-11-13 with Python 3.13.18, numpy 2.5.4, scipy 1.18.1, statsmodels 0.15.0, linearmodels 7.1, scikit-learn 1.9.1; output in `tools/validation_diffs.json`. Rows whose reference is a closed form computed in the test are not measured.
+For the level-A rows whose reference is outside the Python scientific stack the skill is built on (published values, and R, Stata, DoubleML, csdid, lifelines), `tools/validation_diffs.py` redoes the test's comparison and records the largest difference and the tolerance of that comparison, written as *difference of tolerance*. Measured on 2026-11-13 with Python 3.13.18, numpy 2.5.4, scipy 1.18.1, statsmodels 0.15.0, linearmodels 7.1, scikit-learn 1.9.1; output in `tools/validation_diffs.json`. It reads data, designs and reference values from the tests themselves, and CI runs it with `--check` (every comparison within its tolerance) on the latest dependency versions. Rows compared with software run in the test (scipy, statsmodels, linearmodels, arch, pandas) or with a closed form computed in the test are not measured.
 
 ## Summary
 
-289 public functions: level A 97, level B 134, level C 20, level D 38.
+289 public functions: level A 88, level B 142, level C 21, level D 38.
 
 | module | A | B | C | D |
 |---|---|---|---|---|
@@ -38,7 +38,7 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | `causal` | 8 | 19 | 2 | 0 |
 | `dag` | 1 | 7 | 0 | 0 |
 | `data_prep` | 0 | 7 | 1 | 3 |
-| `dependence` | 1 | 4 | 1 | 5 |
+| `dependence` | 0 | 5 | 1 | 5 |
 | `diagnostics` | 9 | 1 | 0 | 11 |
 | `discrete_choice` | 2 | 0 | 0 | 0 |
 | `estimation` | 4 | 2 | 0 | 0 |
@@ -50,9 +50,9 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | `multivariate` | 4 | 4 | 0 | 0 |
 | `regimes` | 0 | 2 | 4 | 2 |
 | `reporting` | 0 | 3 | 1 | 2 |
-| `risk` | 3 | 13 | 0 | 2 |
+| `risk` | 3 | 12 | 1 | 2 |
 | `segments` | 1 | 3 | 1 | 0 |
-| `simulation` | 10 | 15 | 0 | 1 |
+| `simulation` | 2 | 23 | 0 | 1 |
 | `specification` | 12 | 0 | 0 | 0 |
 | `state_space` | 0 | 3 | 3 | 1 |
 | `survival` | 1 | 4 | 0 | 0 |
@@ -69,6 +69,7 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 - Rules of thumb in warnings and verdicts (thresholds such as F > 10 or 1.2x excess zeros) are checked for what they print on each side of the threshold, not for being the right threshold.
 - Several Wooldridge examples are checked against numbers without the edition stated in the test (noted per row); `tests/test_v242.py` says 2e. Numbering can differ between editions.
 - Level D functions have no test; level C functions have no check of their value.
+- Public classes are not rows: `dag.DAG` is exercised through the `dag` functions, which take it or build it.
 
 ## `backtest`
 
@@ -95,8 +96,8 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | `causal.aipw` | B | simulated ATE = 2 | CI covers 2 | — | test_causal_text_survival.py: AIPW recovers ATE≈2 |  |
 | `causal.nn_match` | B | simulated ATT = 2 (homogeneous effect) | \|estimate - 2\| < 0.25 | — | test_causal_text_survival.py: NN matching ATT≈2 |  |
 | `causal.dml_plr` | B | simulated theta = 2; omitted-confounder bias by covariance algebra | \|theta - 2\| < 0.2; bias bound within 5% of the actual bias | — | test_causal_text_survival.py: DML-PLR theta≈2; test_dml_sensitivity.py | numbers also frozen against v2.5.2.1 (tests/data/v253_refs_7c25644.json, a regression anchor, not an external reference) |
-| `causal.dml_sensitivity` | A | closed form S·sqrt(cf_y·cf_d/(1−cf_d)) (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022); Cinelli-Hazlett OLS RV for linear learners | relative 1e-12 (closed form); 0.005 absolute against the OLS RV | not measured (closed form in the test) | test_v261.py: rho = 1: bias bound = S·sqrt(...); test_dml_sensitivity.py: linear learners: RV equals Cinelli-Hazlett OLS RV |  |
-| `causal.dml_benchmark` | A | DoubleML 0.11.4 sensitivity_benchmark (tests/data/doubleml_benchmark_v262.json) | cf_y, cf_d within 2% relative, rho equal, delta_theta within 0.01 (different sample splits) | 0.00022 of 0.01 | test_v262.py: DoubleML 0.11.4, <benchmark> | the tolerance is wider than the D2 rule (1e-6) because the two runs use different sample splits |
+| `causal.dml_sensitivity` | A | closed form S·sqrt(cf_y·cf_d/(1−cf_d)) (Chernozhukov, Cinelli, Newey, Sharma & Syrgkanis 2022); Cinelli-Hazlett OLS RV for linear learners | relative 1e-12 (closed form); 0.005 absolute against the OLS RV | not measured (closed form in the test) | test_v261.py: rho = 1: bias bound = S·sqrt(cf_y·cf_d/(1 - cf_d)); test_dml_sensitivity.py: linear learners: RV equals Cinelli-Hazlett OLS RV |  |
+| `causal.dml_benchmark` | A | DoubleML 0.11.4 sensitivity_benchmark (tests/data/doubleml_benchmark_v262.json) | cf_y, cf_d within 2% relative (3% for x3), rho equal, delta_theta within 0.01 | 0.00022 of 0.01 | test_v262.py: DoubleML 0.11.4 | wider than the D2 rule (1e-6) because the two runs use different sample splits |
 | `causal.dml_bounds` | B | planted confounder with known (kd, ky) | near end of the bounds within 0.03 of theta at k*; equal to dml_sensitivity by hand within 1e-12 at k = 1 | — | test_v262.py: planted confounder; test_v262.py: k = 1 with the benchmark's rho equals dml_sensitivity called by hand |  |
 | `causal.ik_bandwidth` | B | simulated sharp RD, jump 0.8 | \|estimate - 0.8\| < 0.12 | — | test_causal_text_survival.py: IK bandwidth gives a sensible estimate too |  |
 | `causal.select_bandwidth` | C | — | — | — | test_v2501.py: select_bandwidth without rdrobust | checks the method chosen and its label (rdrobust mserd or IK fallback), not the bandwidth value |
@@ -108,9 +109,9 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | `causal.att_gt` | A | csdid (DRDID port) cell by cell, 3 methods x 2 control groups | max \|difference\| < 1e-8 | 3.1e-11 of 1e-08 | test_did_covariates.py: att_gt with covariates equals csdid (DRDID) cell by cell | skipped when csdid is not installed (it is in requirements-dev.txt); known-truth checks in test_causal_text_survival.py |
 | `causal.did_timing_sensitivity` | B | misdated simulated adoption, true ATT 2 | \|ATT - 2\| < 0.25 | — | test_causal_text_survival.py: misdated: date-robust ATT |  |
 | `causal.did_uncertain_dates` | B | simulated adoption windows, true ATT 2 | \|ATT - 2\| < 0.25 | — | test_causal_text_survival.py: uncertain dates |  |
-| `causal.did_imputation` | A | R didimputation 0.5.1 (tools/r_reference/did_v250_reference.R -> output/did_v250_reference.json) | estimate within 1e-6, SE within 1e-8 (event-study SEs 1e-7) | 9.9e-09 of 1e-08 | test_v250.py: R didimputation, static ATT | also closed-form DiD of means in the canonical design (1e-10) |
+| `causal.did_imputation` | A | R didimputation 0.5.1 (tools/r_reference/did_v250_reference.R -> output/did_v250_reference.json) | estimate within 1e-6, SE within 1e-8 (event-study SEs 1e-7) | 9.9e-09 of 1e-08 | test_v250.py: R didimputation, static ATT | the state-clustered SE sits at 99% of its tolerance (about 1e-7 relative); also closed-form DiD of means in the canonical design (1e-10) |
 | `causal.did_compare` | B | simulated panels with and without a linear pre-trend | difference significant in <= 12% of 80 panels without pre-trend; >= 70% of 30 with | — | test_v250.py: did_compare | below the 200-panel rule of the guide for size statements; measured before that rule |
-| `causal.ccc_test` | A | statsmodels cell-dummy regression (HC1) and cluster Wald (CR1), computed another way | relative 1e-6 | not measured (closed form in the test) | test_did_covariates.py: ccc stage 1 HC1 Wald = statsmodels cell-dummy regression | size of the wild bootstrap <= 9% in 120 reps (below the 200-rep rule) |
+| `causal.ccc_test` | A | statsmodels cell-dummy regression (HC1) and cluster Wald (CR1), computed another way | relative 1e-6 | not measured (software run in the test) | test_did_covariates.py: ccc stage 1 HC1 Wald = statsmodels cell-dummy regression | size of the wild bootstrap <= 9% in 120 reps (below the 200-rep rule) |
 | `causal.bacon_decomposition` | A | TWFE coefficient by OLS (the weighted 2x2s must add up to it) | 1e-10 | not measured (closed form in the test) | test_did_v231.py: Bacon: weighted 2x2s equal the TWFE coefficient exactly |  |
 | `causal.twfe_weights` | A | R TwoWayFEWeights 2.1.0 (tools/r_reference/output/did_v250_reference.json) | 1e-9 | 3.6e-15 of 1e-09 | test_v250.py: R TwoWayFEWeights | also a hand example (1, -1/2, 1/2) |
 | `causal.twfe_covariate_diagnostic` | B | simulated drifting covariate effect (0.4 per period) | \|level coefficient - 0.4\| < 0.06 | — | test_did_covariates.py: TWFE diagnostic |  |
@@ -129,7 +130,7 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | `dag.optimal_adjustment_set` | B | O-set of Henckel, Perković & Maathuis (2022) on hand-solved graphs | exact | — | test_dag.py: butterfly O-set = {M, Z2} |  |
 | `dag.classify_controls` | B | hand-solved graphs (mediator, collider, instrument) | exact | — | test_dag.py: mediator M and post-treatment K |  |
 | `dag.implied_independencies` | B | simulated linear-Gaussian data from the graph | all implications pass on the true graph; the missing edge is rejected | — | test_dag.py: true graph |  |
-| `dag.test_implications` | A | Holm adjustment by statsmodels.stats.multitest | 1e-12 | not measured (closed form in the test) | test_show_text.py: test_implications: Holm-adjusted p equal to statsmodels.multitest | known-truth checks in test_dag.py |
+| `dag.test_implications` | A | Holm adjustment by statsmodels.stats.multitest | 1e-12 | not measured (software run in the test) | test_show_text.py: test_implications: Holm-adjusted p equal to statsmodels.multitest | known-truth checks in test_dag.py |
 | `dag.adjustment_report` | B | hand-solved graphs | exact | — | test_dag.py: adjustment_report bundles sets; test_show_text.py: adjustment_report |  |
 
 ## `data_prep`
@@ -156,7 +157,7 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | `dependence.rank_correlations` | D | — | — | — | — |  |
 | `dependence.empirical_tail_dependence` | D | — | — | — | — | exercised through fit_copulas; its printed values are checked against the ranks in test_show_text.py |
 | `dependence.fit_copula` | B | simulated copulas with known parameter | relative 0.15 on the parameter | — | test_financial_modules.py: <family>: sim tau ≈ implied, MLE recovers param |  |
-| `dependence.fit_copulas` | A | Clayton tail coefficient 2^(-1/theta) (closed form) | 1e-6 (theta stored rounded to 6 decimals) | not measured (closed form in the test) | test_show_text.py: fit_copulas: Clayton lambda_L = 2^(-1/theta) | family selection on simulated Clayton and Frank data (known truth) |
+| `dependence.fit_copulas` | B | simulated Clayton, Frank, Gumbel, Student t and Gaussian data (family and tail sentence known); Clayton λ_L = 2^(−1/θ) | 1e-6 on λ_L (θ stored rounded to 6 decimals) | — | test_show_text.py: fit_copulas: Clayton lambda_L = 2^(-1/theta) | the λ check uses the same expression as the implementation, so it is not an independent route |
 | `dependence.simulate_copula` | B | Kendall tau implied by the parameter | \|tau - implied\| < 0.03 | — | test_financial_modules.py: <family>: sim tau ≈ implied |  |
 | `dependence.linfoot` | B | Gaussian pair with rho = 0.7 | \|Linfoot(MI) - 0.7\| < 0.05 | — | test_financial_modules.py: Linfoot(MI) ≈ \|rho\| for Gaussian |  |
 | `dependence.mutual_information_matrix` | C | — | — | — | test_financial_modules.py: MI matrix diagonal NaN, symmetric | shape and symmetry only |
@@ -170,7 +171,7 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 |---|---|---|---|---|---|---|
 | `diagnostics.newey_west_lags` | D | — | — | — | — |  |
 | `diagnostics.white_simplified` | D | — | — | — | — |  |
-| `diagnostics.ols_diagnostics` | A | Wooldridge, Introductory Econometrics, Example 8.4 (Breusch-Pagan LM 14.09, p .0028) | 0.01 on LM, 0.0001 on p (half the last printed digit or tighter) | 0.0024 of 0.01 | test_textbook_replication.py: W8.4 Breusch-Pagan | edition not stated in the test |
+| `diagnostics.ols_diagnostics` | A | Wooldridge, Introductory Econometrics, Example 8.4 (Breusch-Pagan LM 14.09, p .0028) | 0.01 on LM, 0.0001 on p (looser than half the last printed digit: 0.005 and 0.00005) | 0.0024 of 0.01 | test_textbook_replication.py: W8.4 Breusch-Pagan | edition not stated in the test; tolerance looser than the v2.6.7 rule (numpy defaults) |
 | `diagnostics.vif_table` | D | — | — | — | — |  |
 | `diagnostics.influence` | D | — | — | — | — |  |
 | `diagnostics.chow` | A | Chow F from three least-squares fits (numpy), computed in the test | 1e-8 | not measured (closed form in the test) | test_show_text.py: chow: F label F(2, 196) and F equal to the three-fit Chow F |  |
@@ -181,13 +182,13 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | `diagnostics.cointegration` | D | — | — | — | — |  |
 | `diagnostics.endogeneity_test` | A | Wooldridge, Introductory Econometrics, Example 15.7 (Durbin-Wu-Hausman t = 1.67) | 0.02 on F = t² | 0.0037 of 0.02 | test_textbook_replication.py: W15.7 Durbin-Wu-Hausman | edition not stated in the test |
 | `diagnostics.overid_test` | A | Wooldridge, Introductory Econometrics, Example 15.8 (nR² = .378, p = .539) | 0.0006 | 0.00036 of 0.0006 | test_textbook_replication.py: W15.8 overidentification | edition not stated in the test; nR² also equal to n·R² of the auxiliary regression (1e-9, test_show_text.py) |
-| `diagnostics.iv_report` | A | Wooldridge, Introductory Econometrics, Example 15.1 (educ .059 (.035)); Example 15.7 overidentification | 0.0003 on the coefficient and SE | 4e-05 of 0.0003 | test_v242.py: 2SLS reproduces Wooldridge Example 15.1 | the test says 2e |
+| `diagnostics.iv_report` | A | Wooldridge, Introductory Econometrics, Example 15.1 (educ .059 (.035)); Example 15.7 overidentification | 0.0003 on the coefficient and SE; 0.01 on the overidentification nR² and p | 4e-05 of 0.0003 | test_v242.py: 2SLS reproduces Wooldridge Example 15.1 | the test says 2e; the overidentification comparison is not measured |
 | `diagnostics.hausman` | D | — | — | — | — |  |
 | `diagnostics.panel_bp_lm` | D | — | — | — | — |  |
-| `diagnostics.mundlak_test` | A | Wooldridge, Introductory Econometrics, Example 14.4 (FE union .080, married .047); CRE = FE identity | 1e-6 against the FE estimates | not measured (closed form in the test) | test_specification_tools.py: Mundlak/CRE coefficients equal FE | edition not stated in the test |
+| `diagnostics.mundlak_test` | A | linearmodels PanelOLS fixed effects on the data of Wooldridge, Introductory Econometrics, Example 14.4 (CRE = FE identity) | 1e-6 | not measured (software run in the test) | test_specification_tools.py: Mundlak/CRE coefficients equal FE | the book's FE numbers are compared with linearmodels, not with this function, in test_textbook_replication.py |
 | `diagnostics.count_diagnostics` | A | Wooldridge, Introductory Econometrics, Example 17.3 (Pearson dispersion σ̂² = 1.52) | 0.005 | 0.0032 of 0.005 | test_specification_tools.py: W17.3 Pearson dispersion | edition not stated in the test |
-| `diagnostics.tobit` | A | Wooldridge, Introductory Econometrics, Example 17.2 (educ 80.65, kidslt6 −894.02, σ 1122.02, log L −3819.09) | 0.01 to 0.05 (half the last printed digit) | 0.0046 of 0.01 | test_textbook_replication.py: W17.2 Tobit | edition not stated in the test |
-| `diagnostics.diebold_mariano` | A | with h = 1, the OLS t of the loss difference on a constant (statsmodels) | 1e-9 on the statistic, 1e-12 on p | not measured (closed form in the test) | test_show_text.py: diebold_mariano: with h = 1 the HLN statistic is the OLS t | h > 1 has no external reference |
+| `diagnostics.tobit` | A | Wooldridge, Introductory Econometrics, Example 17.2 (educ 80.65, kidslt6 −894.02, σ 1122.02, log L −3819.09) | 0.01 to 0.05 (looser than half the last printed digit, 0.005) | 0.0046 of 0.01 | test_textbook_replication.py: W17.2 Tobit | edition not stated in the test; tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `diagnostics.diebold_mariano` | A | with h = 1, the OLS t of the loss difference on a constant (statsmodels) | 1e-9 on the statistic, 1e-12 on p | not measured (software run in the test) | test_show_text.py: diebold_mariano: with h = 1 the HLN statistic is the OLS t | h > 1 has no external reference |
 | `diagnostics.main` | D | — | — | — | — | command-line entry point |
 
 ## `discrete_choice`
@@ -195,15 +196,15 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
 | `discrete_choice.binary_effects` | A | Wooldridge, Introductory Econometrics, Example 17.1 (LPM) | 6e-5 to 6e-4 (half the last printed digit) | 0.00019 of 0.0006 | test_v242.py: LPM reproduces Wooldridge Example 17.1 | the test says 2e; AMEs also against closed forms (1e-8 to 1e-10) |
-| `discrete_choice.heckman` | A | Wooldridge, Introductory Econometrics, Example 17.5 and Stata heckman twostep | 0.0002 | 3.8e-05 of 0.0002 | test_v242.py: Heckit reproduces Wooldridge Example 17.5 and Stata heckman twostep | the test says 2e |
+| `discrete_choice.heckman` | A | Wooldridge, Introductory Econometrics, Example 17.5 and Stata heckman twostep | 0.0002 on coefficients and SEs; 0.0003 on se(λ), ρ and σ | 3.8e-05 of 0.0002 | test_v242.py: Heckit reproduces Wooldridge Example 17.5 and Stata heckman twostep | the test says 2e |
 
 ## `estimation`
 
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
-| `estimation.mle` | A | Wooldridge, Introductory Econometrics, Example 17.3 (Poisson); statsmodels Poisson | 0.0011 against the book; 1e-5 against statsmodels | 0.00049 of 0.0011 | test_estimation.py: W17.3 Poisson coefficients match the book | edition not stated in the test |
-| `estimation.trinity_test` | A | statsmodels LR and Wald | 1e-4 (LR), 1e-3 relative (Wald) | not measured (closed form in the test) | test_estimation.py: LR statistic = 2(llf_u - llf_r) from statsmodels |  |
-| `estimation.nls` | A | statsmodels OLS (NLS with a linear f) | 1e-7 on coefficients, 1e-5 relative on HC1 SEs | not measured (closed form in the test) | test_estimation.py: NLS with a linear f = OLS |  |
+| `estimation.mle` | A | Wooldridge, Introductory Econometrics, Example 17.3 (Poisson); statsmodels Poisson | 0.0011 against the book (looser than half the last printed digit, 0.0005 or 0.00005 for inc86); 1e-5 against statsmodels | 0.00049 of 0.0011 | test_estimation.py: W17.3 Poisson coefficients match the book | edition not stated in the test; tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `estimation.trinity_test` | A | statsmodels LR and Wald | 1e-4 (LR), 1e-3 relative (Wald) | not measured (software run in the test) | test_estimation.py: LR statistic = 2(llf_u - llf_r) from statsmodels |  |
+| `estimation.nls` | A | statsmodels OLS (NLS with a linear f) | 1e-7 on coefficients, 1e-5 relative on HC1 SEs | not measured (software run in the test) | test_estimation.py: NLS with a linear f = OLS |  |
 | `estimation.delta_method` | A | exact variance a'Va of a linear function | 1e-9 | not measured (closed form in the test) | test_estimation.py: delta method of a linear function is exact |  |
 | `estimation.bootstrap` | B | HC3 and CR1 SEs under simulated heteroskedasticity and clustering | within 15% | — | test_estimation.py: pairs bootstrap SE ~ HC3 SE |  |
 | `estimation.wild_cluster_bootstrap` | B | simulated 8-cluster design | size in [2%, 9%]; power > 70% | — | test_estimation.py: 8 clusters: wild cluster bootstrap size |  |
@@ -261,27 +262,27 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
-| `inference.describe_dist` | A | pandas skew and kurt (Excel SKEW, KURT) | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: describe_dist: skewness equals pandas/Excel SKEW |  |
-| `inference.one_sample` | A | scipy.stats ttest_1samp and its confidence interval | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: one_sample: t, p and CI equal scipy |  |
-| `inference.two_sample` | A | scipy.stats ttest_ind (Welch and pooled) | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: two_sample: Welch is the default |  |
-| `inference.variance_test` | A | chi-square and F formulas; scipy levene(center='median') | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: variance_test |  |
-| `inference.proportion_ci` | A | statsmodels proportion_confint (Wilson, Clopper-Pearson, Agresti-Coull, Wald) | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: proportion_ci |  |
-| `inference.proportion_test` | A | scipy binomtest; statsmodels score and pooled z; Newcombe CI | 1e-7 to 1e-8 | not measured (closed form in the test) | test_v240.py: proportion_test |  |
+| `inference.describe_dist` | A | pandas skew and kurt (Excel SKEW, KURT) | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: describe_dist: skewness equals pandas/Excel SKEW |  |
+| `inference.one_sample` | A | scipy.stats ttest_1samp and its confidence interval | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: one_sample: t, p and CI equal scipy |  |
+| `inference.two_sample` | A | scipy.stats ttest_ind (Welch and pooled) | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: two_sample: Welch is the default |  |
+| `inference.variance_test` | A | chi-square and F formulas; scipy levene(center='median') | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: variance_test |  |
+| `inference.proportion_ci` | A | statsmodels proportion_confint (Wilson, Clopper-Pearson, Agresti-Coull, Wald) | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: proportion_ci |  |
+| `inference.proportion_test` | A | scipy binomtest; statsmodels score and pooled z; Newcombe CI | 1e-7 to 1e-8 | not measured (software run in the test) | test_v240.py: proportion_test |  |
 | `inference.n_for_proportion` | A | textbook sample sizes (1068 at ±3 points, 95%; 965 with N = 10,000) | exact | 0 (exact) | test_v240.py: n_for_proportion |  |
-| `inference.chisq_fit` | A | scipy chisquare; pooled cells by hand | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: chisq_fit with given probabilities equals scipy chisquare |  |
-| `inference.normality` | A | scipy shapiro | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: normality: Shapiro-Wilk equals scipy |  |
-| `inference.contingency` | A | chi-square and Cramér's V by hand; scipy fisher_exact; Mantel-Haenszel by hand | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: contingency |  |
-| `inference.nonparametric` | A | scipy mannwhitneyu and wilcoxon; Hodges-Lehmann as the median of differences | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: nonparametric: Mann-Whitney p equals scipy | HL CI coverage in [0.91, 0.985] |
+| `inference.chisq_fit` | A | scipy chisquare; pooled cells by hand | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: chisq_fit with given probabilities equals scipy chisquare |  |
+| `inference.normality` | A | scipy shapiro | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: normality: Shapiro-Wilk equals scipy |  |
+| `inference.contingency` | A | chi-square and Cramér's V by hand; scipy fisher_exact; Mantel-Haenszel by hand | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: contingency |  |
+| `inference.nonparametric` | A | scipy mannwhitneyu and wilcoxon; Hodges-Lehmann as the median of differences | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: nonparametric: Mann-Whitney p equals scipy | HL CI coverage in [0.91, 0.985] |
 | `inference.correlation_test` | A | Pearson r and Fisher-z CI by hand | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: correlation_test: Pearson r and Fisher-z CI |  |
-| `inference.power_curve` | A | statsmodels TTestIndPower and TTestPower; normal-power closed form | 1e-6 (statsmodels), 1e-5 (closed form) | not measured (closed form in the test) | test_v240.py: power_curve two-sample t equals statsmodels |  |
-| `inference.n_for_power` | A | ceil of statsmodels solve_power | exact | not measured (closed form in the test) | test_v246.py: n_for_power two-sample |  |
-| `inference.adjust_pvalues` | A | statsmodels multipletests (Bonferroni, Holm, BH, BY) | rtol and atol 1e-8 | not measured (closed form in the test) | test_v240.py: adjust_pvalues: Bonferroni, Holm, BH and BY equal statsmodels |  |
+| `inference.power_curve` | A | statsmodels TTestIndPower and TTestPower; normal-power closed form | 1e-6 (statsmodels), 1e-5 (closed form) | not measured (software run in the test) | test_v240.py: power_curve two-sample t equals statsmodels |  |
+| `inference.n_for_power` | A | ceil of statsmodels solve_power | exact | not measured (software run in the test) | test_v246.py: n_for_power two-sample |  |
+| `inference.adjust_pvalues` | A | statsmodels multipletests (Bonferroni, Holm, BH, BY) | rtol and atol 1e-8 | not measured (software run in the test) | test_v240.py: adjust_pvalues: Bonferroni, Holm, BH and BY equal statsmodels |  |
 
 ## `linear_models`
 
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
-| `linear_models.anova_table` | A | scipy f_oneway | 1e-8 | not measured (closed form in the test) | test_linear_models.py: one-way ANOVA F = scipy f_oneway |  |
+| `linear_models.anova_table` | A | scipy f_oneway | 1e-8 | not measured (software run in the test) | test_linear_models.py: one-way ANOVA F = scipy f_oneway |  |
 | `linear_models.pairwise` | B | simulated groups with known differences | the planted pair rejects, the null pair does not | — | test_linear_models.py: Tukey: a vs d significant, a vs b not |  |
 | `linear_models.ancova` | B | simulated adjusted difference 0.5 | within 3 SE of 0.5; equal to the group coefficient (1e-10) | — | test_linear_models.py: ANCOVA adjusted difference |  |
 | `linear_models.robust_regression` | B | simulated slope 2 with planted outliers | robust error below a third of the OLS error | — | test_linear_models.py: bisquare slope closer to 2 than OLS |  |
@@ -298,14 +299,14 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
-| `multivariate.var_analysis` | A | statsmodels VAR select_order and test_causality | numpy isclose defaults | not measured (closed form in the test) | test_v247.py: var_analysis: lag order and criteria = statsmodels select_order | known-truth Granger direction also checked; tolerance looser than the v2.6.7 rule (numpy defaults) |
-| `multivariate.irf_bands` | A | statsmodels orth_irfs (both orderings) | numpy allclose defaults | not measured (closed form in the test) | test_v247.py: irf_bands: point IRF = statsmodels orth_irfs | band coverage >= 0.8 for a persistent VAR; tolerance looser than the v2.6.7 rule (numpy defaults) |
-| `multivariate.fevd_table` | A | statsmodels fevd | numpy allclose defaults | not measured (closed form in the test) | test_v247.py: fevd_table: shares = statsmodels fevd | tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `multivariate.var_analysis` | A | statsmodels VAR select_order and test_causality | numpy isclose defaults | not measured (software run in the test) | test_v247.py: var_analysis: lag order and criteria = statsmodels select_order | known-truth Granger direction also checked; tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `multivariate.irf_bands` | A | statsmodels orth_irfs (both orderings) | numpy allclose defaults | not measured (software run in the test) | test_v247.py: irf_bands: point IRF = statsmodels orth_irfs | band coverage >= 0.8 for a persistent VAR; tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `multivariate.fevd_table` | A | statsmodels fevd | numpy allclose defaults | not measured (software run in the test) | test_v247.py: fevd_table: shares = statsmodels fevd | tolerance looser than the v2.6.7 rule (numpy defaults) |
 | `multivariate.svar_identify` | B | identification of textbook restriction patterns | exact verdicts | — | test_v247.py: svar_identify |  |
 | `multivariate.svar_longrun` | B | B0 B0' = Σ_u and a lower-triangular long-run matrix (defining identities) | numpy allclose defaults; 1e-10 | — | test_v247.py: svar_longrun | tolerance looser than the v2.6.7 rule (numpy defaults) |
 | `multivariate.svar_sign` | B | imposed sign pattern; rotation of the Cholesky factor | signs exact; norm 1 (isclose) | — | test_v247.py: svar_sign |  |
 | `multivariate.johansen_trace` | B | simulated cointegrated systems | size of the rank tests <= 10% to 15% | — | test_v247.py: johansen_trace | fewer replications than the 200-panel rule; written before it |
-| `multivariate.vecm_fit` | A | statsmodels VECM beta | numpy allclose defaults | not measured (closed form in the test) | test_v247.py: vecm_fit: rank 1, β = statsmodels VECM β | known cointegrating vector (1, −2) within 0.05; tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `multivariate.vecm_fit` | A | statsmodels VECM beta | numpy allclose defaults | not measured (software run in the test) | test_v247.py: vecm_fit: rank 1, β = statsmodels VECM β | known cointegrating vector (1, −2) within 0.05; tolerance looser than the v2.6.7 rule (numpy defaults) |
 
 ## `regimes`
 
@@ -343,7 +344,7 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | `risk.var_ewma` | B | simulated heavy-tailed returns | EWMA-normal fails Kupiec (p < 0.05) | — | test_evt_es.py: conditional EVT passes Kupiec and Christoffersen |  |
 | `risk.var_garch` | B | simulated GARCH-t returns | Kupiec p > 0.05; ES >= VaR | — | test_financial_modules.py: GARCH-t VaR has correct coverage |  |
 | `risk.kupiec_pof` | B | 10 hits in 1000 at 1% (exactly the expected rate) | p > 0.99 | — | test_financial_modules.py: Kupiec: 10 hits in 1000 at 1% |  |
-| `risk.christoffersen` | B | simulated GARCH data with a static VaR | used as the comparison for DQ | — | test_evt_es.py: DQ test detects a static historical VaR | its own p-value is not compared with a reference |
+| `risk.christoffersen` | C | — | — | — | test_evt_es.py: DQ test detects a static historical VaR | used only as the comparison for DQ; its p-value is not checked |
 | `risk.dq_test` | B | true VaR (size) and static VaR on GARCH data (power) | size 2%–9% at 5%; power > 85% | — | test_evt_es.py: DQ test size with the true VaR |  |
 | `risk.basel_traffic_light` | A | Basel Committee (1996) zones for 250 days at 99%: 0–4 green, 5–9 yellow, 10+ red | exact | 0 (exact) | test_financial_modules.py: Basel: 4 viol green, 5 yellow, 10 red |  |
 | `risk.backtest_var` | B | simulated returns with correct and wrong VaR models | verdicts per model | — | test_evt_es.py: conditional EVT passes Kupiec and Christoffersen |  |
@@ -369,29 +370,29 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
 | `simulation.monte_carlo` | D | — | — | — | — | exercised by every demo_* function |
-| `simulation.demo_omitted_variable` | A | omitted-variable bias γδ/(δ²+1) (closed form) | 0.02 | not measured (closed form in the test) | test_simulation_ri.py: omitted variable |  |
+| `simulation.demo_omitted_variable` | B | simulated omitted confounder; the bias the function predicts (γδ/(δ²+1)) | 0.02 | — | test_simulation_ri.py: omitted variable | the predicted bias is returned by the function, not computed in the test |
 | `simulation.demo_bad_control` | B | simulated mediator | total effect bias < 0.03; mediator-controlled bias > 0.4 | — | test_simulation_ri.py: bad control |  |
-| `simulation.demo_measurement_error` | A | attenuation β·λ (closed form) | 0.02 | not measured (closed form in the test) | test_simulation_ri.py: measurement error |  |
+| `simulation.demo_measurement_error` | B | simulated classical measurement error; the attenuation factor the function returns | 0.02 | — | test_simulation_ri.py: measurement error | the attenuation factor is returned by the function |
 | `simulation.demo_heteroskedasticity` | B | simulated heteroskedastic errors | classical coverage < 0.90; HC3 >= 0.93 | — | test_simulation_ri.py: heteroskedasticity |  |
 | `simulation.demo_spurious_regression` | B | independent random walks | true null rejected > 60% | — | test_simulation_ri.py: spurious regression |  |
 | `simulation.demo_weak_iv` | B | simulated weak and strong instruments | weak 2SLS biased toward OLS; strong ~ unbiased | — | test_simulation_ri.py: weak IV |  |
 | `simulation.demo_few_clusters` | B | simulated few-cluster design | CR1 size > 15%; wild bootstrap in [2%, 11%] | — | test_simulation_ri.py: few clusters |  |
 | `simulation.demo_staggered_did` | B | simulated staggered adoption | TWFE bias > 1; Callaway-Sant'Anna within 0.3 | — | test_simulation_ri.py: staggered DiD |  |
 | `simulation.demo_did_covariates` | B | simulated drifting covariate effect | TWFE bias > 0.5; CS doubly robust within 0.1 | — | test_did_covariates.py: demo |  |
-| `simulation.power_mde` | A | statsmodels per-group n; design effect 1 + (m − 1)ρ | within 1 unit of n; 1e-12 on the design effect | not measured (closed form in the test) | test_simulation_ri.py: power_mde: total n = 2 x statsmodels per-group n |  |
-| `simulation.mde_did` | A | McKenzie (2012) analytic SE, checked by simulation | simulated SD within 5% of the analytic SE | not measured (closed form in the test) | test_power_did.py: equicorrelated errors |  |
+| `simulation.power_mde` | A | statsmodels per-group n; design effect 1 + (m − 1)ρ | within 1 unit of n; 1e-12 on the design effect | not measured (software run in the test) | test_simulation_ri.py: power_mde: total n = 2 x statsmodels per-group n |  |
+| `simulation.mde_did` | B | its MDE used as the effect size: simulated power ≈ 80% (McKenzie 2012 SE checked against power_did_sim, not against this function) | power within 0.06 of 80% | — | test_power_did.py: equicorrelated errors | the returned MDE is not compared with the formula |
 | `simulation.power_did_sim` | B | equicorrelated and AR(1) panels | power within 0.06 of 80%; size 2.5%–7% | — | test_power_did.py: equicorrelated errors: simulated power |  |
 | `simulation.mde_did_sim` | B | AR(1) panel | power at the MDE in [0.78, 0.85] | — | test_power_did.py: mde_did_sim |  |
 | `simulation.did_power_inputs` | B | simulated AR(1) = 0.6, SD 0.7 | within 0.03 and 0.05 | — | test_power_did.py: did_power_inputs |  |
-| `simulation.demo_clt` | A | σ/√n (closed form) | relative 0.06 | not measured (closed form in the test) | test_v240.py: demo_clt: SD of the mean equals sigma/sqrt(n) |  |
+| `simulation.demo_clt` | B | simulated means against the σ/√n column the function returns | relative 0.06 | — | test_v240.py: demo_clt: SD of the mean equals sigma/sqrt(n) | both columns come from the function |
 | `simulation.demo_ci_coverage` | B | nominal 95% intervals | within 0.015 of 0.95 | — | test_v240.py: demo_ci_coverage |  |
 | `simulation.demo_estimator_mse` | B | known bias of S² and of the uniform MLE | bias within 0.02 to 0.05 | — | test_v240.py: demo_estimator_mse |  |
-| `simulation.demo_multiple_testing` | A | family-wise error 1 − 0.95^20 ≈ 64% (closed form) | in (0.55, 0.73) | not measured (closed form in the test) | test_v240.py: demo_multiple_testing |  |
-| `simulation.demo_simultaneity` | A | hand-derived probability limits of OLS (0, and 0.25 with c = 2) | 0.05 | not measured (closed form in the test) | test_v242.py: simultaneity |  |
+| `simulation.demo_multiple_testing` | B | family-wise error 1 − 0.95^20 ≈ 64% (hand-derived), 300 simulations | in (0.55, 0.73) | — | test_v240.py: demo_multiple_testing | a band around a hand-derived value |
+| `simulation.demo_simultaneity` | A | hand-derived probability limit of OLS (0.25 with c = 2) against the one the function returns; simulated estimates | 1e-12 on the probability limit; 0.05 on the simulated mean | not measured (closed form in the test) | test_v242.py: simultaneity |  |
 | `simulation.demo_lpm_bounds` | B | true average marginal effects | LPM slope within 5% of the AME | — | test_v242.py: LPM bounds |  |
-| `simulation.demo_multicollinearity` | A | SE ratio = √VIF (closed form) | relative 10% | not measured (closed form in the test) | test_v242.py: multicollinearity |  |
-| `simulation.demo_trend_vs_difference` | A | lag-1 ACF of the differenced trend-stationary AR, (φ − 1)/2 | 0.05 | not measured (closed form in the test) | test_v246.py: demo_trend_vs_difference |  |
-| `simulation.demo_ar1_forecast_variance` | A | σ²(1 − φ^2h)/(1 − φ²) and h·σ² (closed forms) | relative 10% | not measured (closed form in the test) | test_v246.py: demo_ar1_forecast_variance |  |
+| `simulation.demo_multicollinearity` | B | SE ratio against √VIF, with the VIF the function returns | relative 10% | — | test_v242.py: multicollinearity |  |
+| `simulation.demo_trend_vs_difference` | B | lag-1 ACF of the differenced trend-stationary AR, (φ − 1)/2 (hand-derived) | 0.05 | — | test_v246.py: demo_trend_vs_difference | a band around a hand-derived value |
+| `simulation.demo_ar1_forecast_variance` | B | simulated forecast variance against the theory column the function returns | relative 10% | — | test_v246.py: demo_ar1_forecast_variance | both columns come from the function |
 | `simulation.demo_unit_root_power` | B | simulated AR(φ) with φ = 1, 0.95, 0.8 | size < 0.1; power ordering | — | test_v246.py: demo_unit_root_power |  |
 | `simulation.demo_break_unit_root` | B | stationary AR with a mean shift | rejection < 0.1 ignoring the break, > 0.9 with the dummy | — | test_v246.py: demo_break_unit_root |  |
 
@@ -399,15 +400,15 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
-| `specification.fgls_het` | A | Wooldridge, Introductory Econometrics, Example 8.7 (log(income) 1.30 (.44), educ −.463 (.120), restaurn −3.46 (.80)) | 0.006 (half the last printed digit) | 0.0048 of 0.006 | test_specification_tools.py: W8.7 FGLS | edition not stated in the test |
+| `specification.fgls_het` | A | Wooldridge, Introductory Econometrics, Example 8.7 (log(income) 1.30 (.44), educ −.463 (.120), restaurn −3.46 (.80)) | 0.006 (looser than half the last printed digit, 0.005) | 0.0048 of 0.006 | test_specification_tools.py: W8.7 FGLS | edition not stated in the test; tolerance looser than the v2.6.7 rule (numpy defaults) |
 | `specification.prediction_intervals` | A | Wooldridge, Introductory Econometrics, Examples 6.5 and 6.6 | 0.005 | 0.0017 of 0.005 | test_specification_tools.py: W6.5 prediction | edition not stated in the test; smearing coverage within 0.01 of 95% by simulation |
 | `specification.long_run_effect` | A | Wooldridge, Introductory Econometrics, Example 10.4 (LRP .101, se .030) | 0.0006 | 0.00028 of 0.0006 | test_specification_tools.py: W10.4 LRP | edition not stated in the test |
 | `specification.standardized_coefficients` | A | Wooldridge, Introductory Econometrics, Example 6.1 | 0.0006 | 0.00045 of 0.0006 | test_specification_tools.py: W6.1 standardized coefficients | edition not stated in the test |
 | `specification.ovb_decomposition` | A | identity short = long + γ·δ | 1e-10 | not measured (closed form in the test) | test_specification_tools.py: OVB identity |  |
-| `specification.oster` | A | R robomit 1.0.7, which follows Stata psacalc (tools/r_reference/oster_v252_reference.R -> output/oster_v252_reference.json; mtcars) | as fixed in test_v252.py for each case | 4.4e-07 of 2e-06 | test_v252.py: replication of robomit | the exact estimator; population checks with n = 400 000 within 0.01 |
+| `specification.oster` | A | R robomit 1.0.7, which follows Stata psacalc (tools/r_reference/oster_v252_reference.R -> output/oster_v252_reference.json; mtcars) | 2e-6 | 4.4e-07 of 2e-06 | test_v252.py: robomit | the exact estimator; population checks with n = 400 000 within 0.01 |
 | `specification.robustness_value` | A | Cinelli & Hazlett (2020), Darfur example (partial R² 2.2%, RV 13.9%, RVa 7.6%) | 0.0006 (half the last printed digit) | 0.00036 of 0.0006 | test_specification_tools.py: Cinelli-Hazlett Darfur | definitional checks to 4 ulp in test_v264.py |
 | `specification.sensitivity` | A | robustness_value on the t and df read from the fit; SSR refit of grouped benchmarks | 1e-12; 1e-10 | not measured (closed form in the test) | test_specification_tools.py: sensitivity() reads t and df from a fitted model | the published Darfur numbers are checked through robustness_value |
-| `specification.ovb_bounds` | A | R sensemakr 0.1.6 (tools/r_reference/ovb_bounds_v26_reference.R -> output/ovb_bounds_v26_reference.json) and the published Darfur table | every column equal to sensemakr (tolerances in test_v26.py) | 1.2e-14 (relative) of 1e-08 | test_v26.py: R <case>: ovb_bounds(res, …) equal to sensemakr on every column | Darfur data (GPL-3) are not in the repository: only the exported statistics |
+| `specification.ovb_bounds` | A | R sensemakr 0.1.6 (tools/r_reference/ovb_bounds_v26_reference.R -> output/ovb_bounds_v26_reference.json) and the published Darfur table | every column equal to sensemakr (tolerances in test_v26.py); 0.01 on the published table | 1.2e-14 (relative) of 1e-08 | test_v26.py: R | the measured differences cover the sensemakr comparisons (some made through private helpers); the published-table check is not measured; Darfur data (GPL-3) are not in the repository |
 | `specification.linear_restriction_test` | A | Wooldridge, Introductory Econometrics, Example 4.9 (F = 9.55); statsmodels f_test and t_test | 0.01 against the book; 1e-8 against statsmodels | 0.00025 of 0.01 | test_v242.py: exclusion F equals statsmodels f_test | the test says 2e |
 | `specification.prais_winsten` | A | Wooldridge, Introductory Econometrics, Example 12.4 (ρ̂ = .293; lchempi 2.94 (.63), lgas 1.05 (.98)) | 0.0006 on ρ̂; half the last printed digit on the coefficients | 0.0036 of 0.006 | test_v242.py: Prais-Winsten reproduces Wooldridge Example 12.4 | the test says 2e |
 | `specification.nonnested_test` | A | J statistic = t of the rival's fitted values, computed in the test | 1e-8 | not measured (closed form in the test) | test_v242.py: J statistic = t of the rival's fitted values |  |
@@ -418,7 +419,7 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 |---|---|---|---|---|---|---|
 | `state_space.kalman_regression` | D | — | — | — | — | exercised through fit_kalman_regression |
 | `state_space.fit_kalman_regression` | B | simulated time-varying beta | tracking error < 0.05; innovations ~ N(0, 1) within 0.1 | — | test_financial_modules.py: Kalman tracks time-varying beta |  |
-| `state_space.half_life` | B | OU process with speed 0.05 (half-life ln 2/0.05 ≈ 13.9) | in (10, 18) | — | test_financial_modules.py: half-life |  |
+| `state_space.half_life` | B | OU process with AR coefficient 0.95 (half-life ln 2 / −ln 0.95 ≈ 13.5) | in (10, 18) | — | test_financial_modules.py: half-life |  |
 | `state_space.hurst_exponent` | B | OU and random walk | < 0.4 and in (0.4, 0.6) | — | test_financial_modules.py: Hurst < 0.5 for OU |  |
 | `state_space.pairs_position` | C | — | — | — | test_financial_modules.py: pairs returns computed, no NaN |  |
 | `state_space.pairs_returns` | C | — | — | — | test_financial_modules.py: pairs returns computed, no NaN |  |
@@ -430,7 +431,7 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 |---|---|---|---|---|---|---|
 | `survival.kaplan_meier` | B | simulated groups with different hazards | median survival ordering | — | test_causal_text_survival.py: KM: x=1 survives less |  |
 | `survival.logrank` | B | simulated groups with different hazards | p < 0.001 | — | test_causal_text_survival.py: log-rank rejects |  |
-| `survival.cox` | A | lifelines 0.30.3 CoxPHFitter(robust=True), with and without cluster_col (tools/py_reference/cox_robust_v267_lifelines.py -> tests/data/cox_robust_lifelines_v267.json) | 1e-6 on coefficients, 1e-6 relative on SEs | 5.1e-07 of 1e-06 | test_show_text.py: cox <design>: coefficients within 1e-6 and SEs within 1e-6 (relative) of lifelines | known HR exp(0.5) and CI coverage (200 samples in the test, 1000 in the v2.6.7 record) |
+| `survival.cox` | A | R survival 3.8.12 coxph(robust) with tied times, Efron and Breslow, strata and clusters (tools/r_reference/cox_v267_reference.R -> output/cox_v267_reference.json); lifelines 0.30.3 without ties (tools/py_reference/cox_robust_v267_lifelines.py -> tests/data/cox_robust_lifelines_v267.json) | 1e-6 on coefficients, 1e-6 relative on SEs | 5.1e-07 of 1e-06 | test_show_text.py: cox R; test_show_text.py: cox | lifelines is not a reference with ties (its score residuals do not handle them); known HR exp(0.5) and CI coverage (200 samples) |
 | `survival.ph_test` | B | true proportional hazards and crossing hazards | p > 0.01 and p < 0.001 | — | test_causal_text_survival.py: PH test detects crossing hazards |  |
 | `survival.person_period` | B | simulated durations | at most one event row per id | — | test_causal_text_survival.py: person-period expansion |  |
 
@@ -440,7 +441,7 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 |---|---|---|---|---|---|---|
 | `systems.sur_system` | A | Breusch-Pagan LM = T·r² of the OLS residuals, computed in the test; SUR = OLS with identical regressors | numpy isclose/allclose defaults | not measured (closed form in the test) | test_v247.py: sur_system | tolerance looser than the v2.6.7 rule (numpy defaults) |
 | `systems.three_sls` | B | exactly identified system (3SLS = 2SLS) and a known over-identified demand equation | numpy allclose defaults; exact refusals | — | test_v247.py: three_sls | the 2SLS column is the function's own; no external reference; tolerance looser than the v2.6.7 rule (numpy defaults) |
-| `systems.dynamic_panel` | A | linearmodels IV2SLS on the stacked differences and IVGMM two-step | numpy allclose defaults | not measured (closed form in the test) | test_v247.py: dynamic_panel (difference GMM, collapsed, identity first step) = linearmodels IV2SLS | known ρ = 0.9 and 0.5 recovered within 0.03; tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `systems.dynamic_panel` | A | linearmodels IV2SLS on the stacked differences and IVGMM two-step | numpy allclose defaults | not measured (software run in the test) | test_v247.py: dynamic_panel (difference GMM, collapsed, identity first step) = linearmodels IV2SLS | known ρ = 0.9 and 0.5 recovered within 0.03; tolerance looser than the v2.6.7 rule (numpy defaults) |
 
 ## `text_data`
 
@@ -464,18 +465,18 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 | `text_data.hf_backend` | C | — | — | — | test_v2501.py: hf_backend without transformers/torch | only the missing-extra message |
 | `text_data.dsl_sampling_probs` | B | expected sample size 300 of 2000; floor and cap | sum equal (isclose); bounds 1e-12 | — | test_llm_annotation_segments.py: inclusion probabilities sum to the expected sample size |  |
 | `text_data.draw_validation_sample` | B | Bernoulli draws with known inclusion probabilities | mean size within 3 of 300 | — | test_llm_annotation_segments.py: Bernoulli draws hit the expected size |  |
-| `text_data.dsl_regression` | A | OLS with HC0 on the true data when every document is hand-coded (statsmodels) | numpy allclose defaults | not measured (closed form in the test) | test_llm_annotation_segments.py: all documents hand-coded (pi = 1) -> OLS on the true data | unbiased and CI coverage in [0.92, 0.98] by simulation; tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `text_data.dsl_regression` | A | OLS with HC0 on the true data when every document is hand-coded (statsmodels) | numpy allclose defaults | not measured (software run in the test) | test_llm_annotation_segments.py: all documents hand-coded (pi = 1) -> OLS on the true data | unbiased and CI coverage in [0.92, 0.98] by simulation; tolerance looser than the v2.6.7 rule (numpy defaults) |
 
 ## `ts_univariate`
 
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
-| `ts_univariate.ts_identify` | A | statsmodels acf; white-noise band 1.96/√n | numpy allclose defaults; 1e-6 | not measured (closed form in the test) | test_v246.py: ts_identify: ACF = statsmodels acf | tolerance looser than the v2.6.7 rule (numpy defaults) |
-| `ts_univariate.detrend` | A | statsmodels hpfilter; Hamilton regression by statsmodels OLS | numpy allclose defaults | not measured (closed form in the test) | test_v246.py: detrend hp: λ = 1600 for quarterly data and trend = statsmodels hpfilter | tolerance looser than the v2.6.7 rule (numpy defaults) |
-| `ts_univariate.adf_lags` | A | AIC minimum and the t ≥ 1.645 rule computed by hand (statsmodels OLS) | exact lag | not measured (closed form in the test) | test_v246.py: adf_lags default (AIC) = the AIC minimum computed by hand |  |
-| `ts_univariate.adf_bootstrap` | A | statsmodels adfuller statistic | numpy isclose defaults | not measured (closed form in the test) | test_v246.py: adf_bootstrap τ = statsmodels adfuller | size <= 15% in 60 replications (below the 200-rep rule); tolerance looser than the v2.6.7 rule (numpy defaults) |
-| `ts_univariate.ar_bootstrap_forecast` | A | statsmodels AutoReg forecasts and prediction SE | numpy allclose defaults; SE relative 0.02 | not measured (closed form in the test) | test_v246.py: ar_bootstrap_forecast: point forecasts = statsmodels AutoReg | interval coverage >= 0.88 in 120 reps; tolerance looser than the v2.6.7 rule (numpy defaults) |
-| `ts_univariate.sup_wald` | A | Chow F at the estimated date (statsmodels OLS); statsmodels breaks_cusumolsresid | numpy isclose defaults | not measured (closed form in the test) | test_v246.py: sup_wald: sup-F = Chow F at the estimated date | tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `ts_univariate.ts_identify` | A | statsmodels acf; white-noise band 1.96/√n | numpy allclose defaults; 1e-6 | not measured (software run in the test) | test_v246.py: ts_identify: ACF = statsmodels acf | tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `ts_univariate.detrend` | A | statsmodels hpfilter; Hamilton regression by statsmodels OLS | numpy allclose defaults | not measured (software run in the test) | test_v246.py: detrend hp: λ = 1600 for quarterly data and trend = statsmodels hpfilter | tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `ts_univariate.adf_lags` | A | AIC minimum and the t ≥ 1.645 rule computed by hand (statsmodels OLS) | exact lag | not measured (software run in the test) | test_v246.py: adf_lags default (AIC) = the AIC minimum computed by hand |  |
+| `ts_univariate.adf_bootstrap` | A | statsmodels adfuller statistic | numpy isclose defaults | not measured (software run in the test) | test_v246.py: adf_bootstrap τ = statsmodels adfuller | size <= 15% in 60 replications (below the 200-rep rule); tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `ts_univariate.ar_bootstrap_forecast` | A | statsmodels AutoReg forecasts and prediction SE | numpy allclose defaults; SE relative 0.02 | not measured (software run in the test) | test_v246.py: ar_bootstrap_forecast: point forecasts = statsmodels AutoReg | interval coverage >= 0.88 in 120 reps; tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `ts_univariate.sup_wald` | A | Chow F at the estimated date (statsmodels OLS); statsmodels breaks_cusumolsresid | numpy isclose defaults | not measured (software run in the test) | test_v246.py: sup_wald: sup-F = Chow F at the estimated date | tolerance looser than the v2.6.7 rule (numpy defaults) |
 | `ts_univariate.long_memory` | B | ARFIMA(0, 0.3, 0) built by its MA(∞) weights; white noise | \|d − 0.3\| < 0.05; \|d\| < 0.05 | — | test_v246.py: long_memory recovers d = 0.3 |  |
 | `ts_univariate.frac_diff` | A | (1 − L)^(−d)(1 − L)^d x = x; d = 1 is the first difference | numpy allclose defaults | not measured (closed form in the test) | test_v246.py: frac_diff | tolerance looser than the v2.6.7 rule (numpy defaults) |
 | `ts_univariate.arfima` | B | ARFIMA with d = 0.3 | \|d − 0.3\| < 0.1 | — | test_v246.py: arfima |  |
@@ -485,6 +486,6 @@ For the level-A rows with an external reference (a published value, or R, Stata,
 
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
-| `volatility.stylized_facts` | A | scipy kurtosis | numpy isclose defaults | not measured (closed form in the test) | test_v247.py: stylized_facts | tolerance looser than the v2.6.7 rule (numpy defaults) |
+| `volatility.stylized_facts` | A | scipy kurtosis | numpy isclose defaults | not measured (software run in the test) | test_v247.py: stylized_facts | tolerance looser than the v2.6.7 rule (numpy defaults) |
 | `volatility.sign_bias_test` | D | — | — | — | — | exercised through garch_fit (its sign_bias block is tested in test_v247.py) |
-| `volatility.garch_fit` | A | asymmetry LR from arch directly; persistence SE √(w'Σw) from arch's covariance | 1e-6 (LR); relative 1e-4 (SE) | not measured (closed form in the test) | test_v2471.py: garch_fit: asymmetry LR = 2·(llf GJR − llf GARCH) computed with arch directly | persistence CI coverage in [0.90, 0.99] over 200 simulations |
+| `volatility.garch_fit` | A | asymmetry LR from arch directly; persistence SE √(w'Σw) from arch's covariance | 1e-6 (LR); relative 1e-4 (SE) | not measured (software run in the test) | test_v2471.py: garch_fit: asymmetry LR = 2·(llf GJR − llf GARCH) computed with arch directly | persistence CI coverage in [0.90, 0.99] over 200 simulations |

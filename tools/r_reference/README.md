@@ -8,6 +8,7 @@ documented origin. The scripts are not part of the skill package.
 |---|---|---|---|
 | `did_v250_reference.R` | `causal.did_imputation` against R `didimputation`; `causal.twfe_weights` against R `TwoWayFEWeights` | `tests/data/did_v250_panel.csv` (built by `make_did_v250_panel.py`, seed fixed, MD5 `7498036256b9e987f01997bc34a57ea0`) | `tests/test_v250.py` |
 | `ovb_bounds_v26_reference.R` | `specification.ovb_bounds` against R `sensemakr` (Cinelli-Hazlett bounds "k times as strong") | Darfur (shipped with `sensemakr`, GPL-3: only summary statistics and bounds are written out, not the data) and `tests/data/ovb_v26.csv` (built by `make_ovb_v26_data.py`, seed fixed, MD5 `6f2c9fedb4c7013f2bda41593c8dc118`) | `tests/test_v26.py` |
+| `cox_v267_reference.R` | `survival.cox` robust and clustered SEs against R `survival::coxph(robust = TRUE)`, with tied event times (Efron, Breslow), strata and clusters | `tests/data/cox_v267_ties.csv` (built by `make_cox_v267_data.py`, seed fixed, MD5 `2f3208abc49008226448c7dab928fc30`); run on R 4.6.2 with survival 3.8.12 | `tests/test_show_text.py`, `tools/validation_diffs.py` |
 
 Run from the repository root:
 

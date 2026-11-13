@@ -8,7 +8,8 @@
   "statsmodels": "0.15.0",
   "linearmodels": "7.1",
   "scikit-learn": "1.9.1",
-  "wooldridge": "0.5.0"
+  "wooldridge": "0.5.0",
+  "csdid": "0.4.5"
  },
  "functions": {
   "causal.att_gt": {
@@ -124,7 +125,7 @@
    "all_within_tolerance": true
   },
   "risk.basel_traffic_light": {
-   "comparisons": 4,
+   "comparisons": 3,
    "worst_diff": 0.0,
    "tolerance": 0.0,
    "kind": "abs",
@@ -204,11 +205,11 @@
    "all_within_tolerance": true
   },
   "survival.cox": {
-   "comparisons": 16,
+   "comparisons": 44,
    "worst_diff": 5.121233854765705e-07,
    "tolerance": 1e-06,
    "kind": "abs",
-   "what": "early_robust coef x",
+   "what": "lifelines early_robust coef x",
    "all_within_tolerance": true
   }
  }

@@ -10,8 +10,12 @@ Two routes:
     modified;
   - the other comparisons are redone below with the same data, calls and references as the test that cites them.
 
-Run from the repository root:  python tools/validation_diffs.py
-Writes tools/validation_diffs.json and prints a table. Needs the packages of requirements-dev.txt (csdid included).
+Data, designs and reference values are read from the tests themselves (by AST or by the test's own lines), so a
+change in a test changes the measurement.
+
+Run from the repository root:  python tools/validation_diffs.py [--check]
+Writes tools/validation_diffs.json and prints a table; with --check it writes nothing and exits 1 if a comparison is
+outside its tolerance (used in CI). Needs the packages of requirements-dev.txt (csdid included).
 """
 import ast
 import contextlib
@@ -31,6 +35,33 @@ sys.path.insert(0, str(ROOT / "econometrics" / "scripts"))
 warnings.filterwarnings("ignore")
 
 OUT = {}   # function -> list of (abs or relative diff, tolerance, kind, what)
+CHECK = "--check" in sys.argv[1:]
+
+
+def test_src(fname):
+    return (ROOT / "tests" / fname).read_text(encoding="utf-8")
+
+
+def literal(fname, var):
+    """The literal value assigned to `var` at the top level of a test."""
+    tree = ast.parse(test_src(fname))
+    return next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                and getattr(n.targets[0], "id", "") == var)
+
+
+def function_src(fname, name):
+    """The source of a top-level function of a test."""
+    src = test_src(fname)
+    return next(ast.get_source_segment(src, n) for n in ast.parse(src).body
+                if isinstance(n, ast.FunctionDef) and n.name == name)
+
+
+def lines_between(fname, first, last):
+    """The test's own lines from the one starting with `first` to the one starting with `last` (both included)."""
+    lines = test_src(fname).splitlines()
+    i = next(k for k, ln in enumerate(lines) if ln.startswith(first))
+    j = next(k for k, ln in enumerate(lines) if k >= i and ln.startswith(last))
+    return "\n".join(lines[i:j + 1])
 
 
 def add(fn, diff, tol, what, kind="abs"):
@@ -72,7 +103,7 @@ def run_instrumented(fname, helper):
     pending, per_check = [], {}
 
     def wrap_helper(f):
-        def inner(a, b, tol=1e-8, *rest):
+        def inner(a, b, tol=1e-8, *rest, **kw):
             try:
                 if helper == "same":
                     a_, b_ = float(a), float(b)
@@ -84,14 +115,14 @@ def run_instrumented(fname, helper):
                     pending.append((float(d), tol, "abs"))
             except (TypeError, ValueError):
                 pass
-            return f(a, b, tol, *rest)
+            return f(a, b, tol, *rest, **kw)
         return inner
 
     def wrap_check(f):
-        def inner(name, cond, *rest):
+        def inner(name, cond, *rest, **kw):
             per_check.setdefault(str(name), []).extend(pending)
             pending.clear()
-            return f(name, cond, *rest)
+            return f(name, cond, *rest, **kw)
         return inner
 
     g = {"__file__": str(path), "__name__": "__main__", "__vd_wrap_helper": wrap_helper, "__vd_wrap_check": wrap_check}
@@ -138,8 +169,7 @@ X = sm.add_constant(cr[xs]).to_numpy(float)
 yv = cr["narr86"].to_numpy(float)
 m_n = est.mle(lambda b, X, y: y * (X @ b) - np.exp(X @ b) - gammaln(y + 1), np.zeros(X.shape[1]), args=(X, yv),
               names=["const"] + xs, method="newton")
-book = {"const": -0.600, "pcnv": -0.402, "avgsen": -0.024, "tottime": 0.024, "ptime86": -0.099,
-        "qemp86": -0.038, "inc86": -0.0081, "black": 0.661, "hispan": 0.500, "born60": -0.051}
+book = literal("test_estimation.py", "book")
 for k, v in book.items():
     add("estimation.mle", abs(m_n["params"][k] - v), 0.0011, f"test_estimation.py: W17.3 {k}")
 
@@ -199,14 +229,11 @@ from sklearn.linear_model import LinearRegression  # noqa: E402
 
 LIN = dict(learner_y=LinearRegression(), learner_d=LinearRegression())
 dref = json.loads((ROOT / "tests" / "data" / "doubleml_benchmark_v262.json").read_text())
-g = np.random.default_rng(20261111)
-n = 20000
-x1, x2, x3 = g.normal(size=(3, n))
-d = 0.8 * x1 + 0.5 * x2 + g.normal(size=n)
-y = 1.0 * d + 1.5 * x1 + 0.7 * x2 + 0.5 * x3 + g.normal(size=n)
-DR = pd.DataFrame(dict(y=y, d=d, x1=x1, x2=x2, x3=x3))
-src262 = (ROOT / "tests" / "test_v262.py").read_text(encoding="utf-8")
-assert "LIN = dict(learner_y=LinearRegression(), learner_d=LinearRegression())" in src262, "learners of test_v262"
+ns262 = {"np": np, "pd": pd}
+exec(lines_between("test_v262.py", "rng = np.random.default_rng(20261111)", "DR = pd.DataFrame("), ns262)
+DR = ns262["DR"]
+assert "LIN = dict(learner_y=LinearRegression(), learner_d=LinearRegression())" in test_src("test_v262.py"), \
+    "learners of test_v262"
 RR = quiet(ca.dml_plr, DR, "y", "d", ["x1", "x2", "x3"], n_folds=5, n_rep=3, seed=0, **LIN)
 BR = quiet(ca.dml_benchmark, DR, "y", "d", ["x1", "x2", "x3"], ["x1", "x2", "x3"], res=RR, n_folds=5, n_rep=3,
            seed=0, **LIN)
@@ -240,20 +267,28 @@ for case, beta, rmax, dstar in RD:
 
 # survival.cox: lifelines (test_show_text.py)
 LREF = json.loads((ROOT / "tests" / "data" / "cox_robust_lifelines_v267.json").read_text(encoding="utf-8"))
+nsc = {"np": np, "pd": pd}
+exec(function_src("test_show_text.py", "cox_design"), nsc)
 for key, ref in LREF["designs"].items():
-    gg = np.random.default_rng(ref["seed"])
-    xx, ww = gg.normal(size=400), gg.normal(size=400)
-    TT = gg.exponential(1 / np.exp(0.5 * xx - 0.3 * ww))
-    CC = gg.exponential(2, size=400)
-    dd = pd.DataFrame({"t": np.minimum(TT, CC), "e": (TT <= CC).astype(int), "x": xx, "w": ww,
-                       "g": gg.integers(0, 40, 400)})
+    dd = nsc["cox_design"](ref["seed"])
     _, tab = quiet(survival.cox, dd, "x + w", "t", "e", **({"cluster": "g"} if key.endswith("cluster") else {}))
     for c in ("x", "w"):
-        add("survival.cox", abs(tab.loc[c, "coef"] - ref["coef"][c]), 1e-6, f"{key} coef {c}")
-        add("survival.cox", abs(tab.loc[c, "se"] / ref["se"][c] - 1), 1e-6, f"{key} SE {c}", "rel")
+        add("survival.cox", abs(tab.loc[c, "coef"] - ref["coef"][c]), 1e-6, f"lifelines {key} coef {c}")
+        add("survival.cox", abs(tab.loc[c, "se"] / ref["se"][c] - 1), 1e-6, f"lifelines {key} SE {c}", "rel")
+RREF = json.loads((ROOT / "tools" / "r_reference" / "output" / "cox_v267_reference.json").read_text(encoding="utf-8"))
+dties = pd.read_csv(ROOT / "tests" / "data" / "cox_v267_ties.csv")
+for key, ref in RREF.items():
+    if not isinstance(ref, dict):
+        continue
+    kw = {"ties": ref["ties"], **({"cluster": "g"} if ref["cluster"] == "g" else {}),
+          **({"strata": "s"} if "strata" in key else {})}
+    _, tab = quiet(survival.cox, dties, "x + w", "tc" if key.startswith("continuous") else "t", "e", **kw)
+    for i, c in enumerate(("x", "w")):
+        add("survival.cox", abs(tab.loc[c, "coef"] - ref["coef"][i]), 1e-6, f"R {key} coef {c}")
+        add("survival.cox", abs(tab.loc[c, "se"] / ref["robust_se"][i] - 1), 1e-6, f"R {key} SE {c}", "rel")
 
 # exact published values
-for nv, zone in ((4, "green"), (5, "yellow"), (9, "yellow"), (10, "red")):
+for nv, zone in ((4, "green"), (5, "yellow"), (10, "red")):          # the cases of test_financial_modules.py
     add("risk.basel_traffic_light", float(risk.basel_traffic_light(nv) != zone), 0, f"{nv} violations -> {zone}")
 add("inference.n_for_proportion", abs(quiet(inf.n_for_proportion, 0.03)["n"] - 1068), 0, "±3 points, 95%")
 add("inference.n_for_proportion", abs(quiet(inf.n_for_proportion, 0.03, population=10_000)["n"] - 965), 0, "N = 10,000")
@@ -265,12 +300,21 @@ for fn, rows in sorted(OUT.items()):
     within = all((r[0] <= r[1]) if r[1] > 0 else r[0] == 0 for r in rows)
     summary[fn] = {"comparisons": len(rows), "worst_diff": worst[0], "tolerance": worst[1], "kind": worst[2],
                    "what": worst[3], "all_within_tolerance": within}
-pkgs = {p: metadata.version(p) for p in ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "scikit-learn",
-                                         "wooldridge")}
+pkgs = {}
+for p in ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "scikit-learn", "wooldridge", "csdid"):
+    try:
+        pkgs[p] = metadata.version(p)
+    except metadata.PackageNotFoundError:
+        pkgs[p] = None
 res = {"date": datetime.date.today().isoformat(), "python": sys.version.split()[0], "packages": pkgs,
        "functions": summary}
-(ROOT / "tools" / "validation_diffs.json").write_text(json.dumps(res, indent=1, ensure_ascii=False) + "\n",
-                                                      encoding="utf-8")
+if not CHECK:
+    (ROOT / "tools" / "validation_diffs.json").write_text(json.dumps(res, indent=1, ensure_ascii=False) + "\n",
+                                                          encoding="utf-8")
 for fn, s in summary.items():
     print(f"{fn:42s} {s['comparisons']:3d}  worst {s['worst_diff']:.3g} ({s['kind']}) vs tol {s['tolerance']:g}"
           f"  {'ok' if s['all_within_tolerance'] else 'OUTSIDE'}  [{s['what'][:60]}]")
+outside = [fn for fn, s_ in summary.items() if not s_["all_within_tolerance"]]
+if outside:
+    print("OUTSIDE TOLERANCE:", ", ".join(outside))
+sys.exit(1 if (CHECK and outside) else 0)

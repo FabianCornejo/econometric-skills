@@ -8,7 +8,8 @@ What is checked:
      is the module imported in that test, or by importing the function itself (AST, so a word in a comment or a
      function of the same name in another module does not count);
   4. for levels A-C, every test file in the row exists and refers to the function (so when a function gains or
-     loses a test, its row has to change);
+     loses a test, its row has to change), and the check named after each file is in that file (the name up to a
+     placeholder such as <case>);
   5. every repository path cited in a row (tools/..., tests/data/...) exists;
   6. the "largest observed difference" column: a row has a number there exactly when the function is in
      tools/validation_diffs.json, the number is the one measured, and every measured comparison is within its
@@ -115,6 +116,17 @@ for k, c in rows.items():
         elif t not in refs.get(k, set()):
             bad_cite.append((k, f"{t} does not refer to it"))
 check("levels A-C: each cited test file exists and refers to the function", not bad_cite, bad_cite[:8])
+bad_name = []
+for k, c in rows.items():
+    for seg in re.split(r";\s*(?=test_[A-Za-z0-9_]+\.py)", c[5]):
+        m = re.match(r"(test_[A-Za-z0-9_]+\.py)(?::\s*(.*))?$", seg.strip().replace("\\|", "|"))
+        if not m or not m.group(2) or not (ROOT / "tests" / m.group(1)).exists():
+            continue
+        name = re.split(r"[<…]|\(called", m.group(2))[0].strip().rstrip(":").strip()
+        src = (ROOT / "tests" / m.group(1)).read_text(encoding="utf-8")
+        if len(name) >= 4 and name not in src:
+            bad_name.append((k, m.group(1), name))
+check("levels A-C: the check named after each test file is in that file", not bad_name, bad_name[:8])
 
 # 5. cited repository paths exist
 paths = set()
@@ -139,7 +151,8 @@ for k, c in rows.items():
                 if s["tolerance"] else f"{fmt(s['worst_diff'])} (exact)")
         if c[1] != "A" or c[4] != want:
             cell_bad.append((k, c[1], c[4], want))
-    elif c[1] == "A" and c[4] != "not measured (closed form in the test)":
+    elif c[1] == "A" and c[4] not in ("not measured (closed form in the test)",
+                                      "not measured (software run in the test)"):
         cell_bad.append((k, c[4]))
     elif c[1] != "A" and c[4] != "—":
         cell_bad.append((k, c[4]))

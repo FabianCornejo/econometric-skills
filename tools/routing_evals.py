@@ -275,7 +275,10 @@ def save_responses(result: dict, dest: Path) -> list[dict]:
             graders = {g.get("name"): g.get("passed") for g in r.get("graders", [])}
             rec = {"case": name, "run": i, "readable": msg is not None, "graders": graders, "file": None}
             if msg is not None:
-                f = dest / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', name)}__run{i}.md"
+                stem = f"{re.sub(r'[^A-Za-z0-9_.-]', '_', name)}__run{i}"
+                f, k = dest / f"{stem}.md", 2
+                while f.exists():                      # two case names that clean to the same file name
+                    f, k = dest / f"{stem}_{k}.md", k + 1
                 head = "\n".join(f"- {k}: {'pass' if v else 'FAIL'}" for k, v in graders.items())
                 f.write_text(f"# {name}, run {i}\n\n{head}\n\n---\n\n{msg}\n", encoding="utf-8")
                 rec["file"] = f.name
@@ -565,7 +568,11 @@ def main(argv=None) -> int:
             records = annotate_nameonly(result)
             (a.out / "nameonly-diagnostics.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
         if keep and not a.no_responses:
-            resp = save_responses(result, a.out / "responses")
+            try:
+                resp = save_responses(result, a.out / "responses")
+            except Exception as exc:                  # a paid run must still get its summary
+                resp = []
+                print(f"WARNING: answers not saved ({type(exc).__name__}: {exc})")
             (a.out / "responses.json").write_text(json.dumps(resp, indent=2) + "\n", encoding="utf-8")
             unread = sum(not x["readable"] for x in resp)
             print(f"Answers of {len(resp) - unread} run(s) saved in {(a.out / 'responses').resolve()}"

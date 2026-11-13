@@ -12,6 +12,7 @@ tests/test_validation_md.py (one file per subject, T4). This file keeps what bel
 
 Run from the repository root:  python3 tests/test_v267.py
 """
+import atexit
 import importlib.util
 import json
 import re
@@ -52,7 +53,8 @@ check("CHANGELOG: the level counts are those of VALIDATION.md",
       and f"B known truth: {lv['B']}" in entry and f"C execution only: {lv['C']}" in entry
       and f"D no test: {lv['D']}" in entry, dict(lv))
 check("CHANGELOG: the number of measured functions is that of tools/validation_diffs.json",
-      f"For the {len(diffs)} level-A functions with an external reference" in entry, len(diffs))
+      f"For the {len(diffs)} level-A functions whose reference is outside the Python scientific stack" in entry,
+      len(diffs))
 worst = max(diffs.items(), key=lambda kv: kv[1]["worst_diff"] / kv[1]["tolerance"] if kv[1]["tolerance"] else 0)
 check("CHANGELOG: the closest comparison named is the one with the largest difference/tolerance ratio",
       worst[0] == "causal.did_imputation"
@@ -80,9 +82,14 @@ rt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rt)
 
 
+CREATED = []
+atexit.register(lambda: [shutil.rmtree(p_, ignore_errors=True) for p_ in CREATED])   # also when a check raises
+
+
 def kept_run(answer_lines):
     """A kept run directory as the eval tool leaves it: claude-eval-*/out/, with a trace two levels below."""
     d = Path(tempfile.mkdtemp(prefix="claude-eval-", dir=tempfile.gettempdir()))
+    CREATED.append(d)
     (d / "out").mkdir()
     tr = d / "out" / "trace.jsonl"
     tr.write_text("\n".join(json.dumps(x) for x in answer_lines) + "\n", encoding="utf-8")
@@ -93,6 +100,7 @@ good, tr_g = kept_run([{"type": "assistant", "message": "thinking"}, {"type": "r
                        {"type": "tool", "x": 1}, {"type": "result", "result": "Use a dummy."}, {"other": 2}])
 none_, tr_n = kept_run([{"type": "assistant", "message": "no result"}])
 outside = Path(tempfile.mkdtemp(prefix="not-eval-"))
+CREATED.append(outside)
 (outside / "out").mkdir()
 tr_o = outside / "out" / "trace.jsonl"
 tr_o.write_text(json.dumps({"result": "should not be read"}) + "\n", encoding="utf-8")
@@ -152,8 +160,44 @@ check("main(): the answer is saved and indexed (responses.json) by default, noth
                  "file": "clean-a__run0.md"}] and d_file.rstrip().endswith("answer 1") and not n_has, (d_idx, n_has))
 check("main(): the kept run directory is removed after the answer is saved", not dirs[0].exists(), dirs[0])
 check("main(): no name-only diagnostics file without the name-only arm", not diag)
-for p_ in (good, none_, outside, *dirs):
-    shutil.rmtree(p_, ignore_errors=True)
+
+# two case names that clean to the same file name are both kept
+_, tr_a = kept_run([{"result": "A"}])
+_, tr_b = kept_run([{"result": "B"}])
+with tempfile.TemporaryDirectory() as tmp:
+    recs2 = rt.save_responses({"cases": [{"name": "a/b", "arms": {"with": [{"tracePath": str(tr_a)}]}},
+                                         {"name": "a_b", "arms": {"with": [{"tracePath": str(tr_b)}]}}]},
+                              Path(tmp) / "r")
+    texts = {p_.name: p_.read_text(encoding="utf-8").rstrip()[-1] for p_ in (Path(tmp) / "r").iterdir()}
+check("save_responses: two case names that clean to the same file name do not overwrite each other",
+      texts == {"a_b__run0.md": "A", "a_b__run0_2.md": "B"} and [r_["file"] for r_ in recs2]
+      == ["a_b__run0.md", "a_b__run0_2.md"], texts)
+
+# an error while saving the answers does not cost the run its summary
+calls.clear()
+
+
+def boom(*a, **k):
+    raise OSError("disk full")
+
+
+orig_save = rt.save_responses
+rt.shutil.which, rt.subprocess.run, rt.save_responses = (lambda name: "/usr/bin/claude"), fake_run, boom
+try:
+    with tempfile.TemporaryDirectory() as tmp:
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rt.main(["--arm", "both", "--runs", "1", "--case", "two-groups", "--out", str(Path(tmp) / "x")])
+        summ = (Path(tmp) / "x" / "summary.md").exists()
+        idx = json.loads((Path(tmp) / "x" / "responses.json").read_text(encoding="utf-8"))
+finally:
+    rt.shutil.which, rt.subprocess.run = orig
+    rt.save_responses = orig_save
+check("main(): an error in save_responses is reported, the summary is still written and the kept directory removed",
+      "WARNING: answers not saved (OSError: disk full)" in buf.getvalue() and summ and idx == []
+      and not calls[1].exists(), buf.getvalue()[-300:])
 
 passed = sum(ok)
 print(f"\n{passed}/{len(ok)} checks passed")
