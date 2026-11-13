@@ -72,7 +72,9 @@ def _cox_score_residuals(time: np.ndarray, status: np.ndarray, X: np.ndarray, be
     weight 1 - j/d to the tied events. A row censored before the first event of its stratum gets 0 (no event time
     at or before it). The residuals add up to the score of the same likelihood (0 at its maximum).
     (statsmodels' PHReg.score_residuals uses Breslow increments with any ties setting and returns NaN for rows
-    censored before the first event; v2.6.7 computes them here.)"""
+    censored before the first event; v2.6.7 computes them here.) Times are tied when exactly equal (R's coxph
+    also merges times that differ only by floating-point error, timefix = TRUE). With a linear predictor that
+    spans more than about 700 within a stratum (a degenerate fit) the risk-set sums underflow."""
     n, p = X.shape
     out = np.zeros((n, p))
     strata = np.zeros(n) if strata is None else np.asarray(strata)
@@ -80,6 +82,8 @@ def _cox_score_residuals(time: np.ndarray, status: np.ndarray, X: np.ndarray, be
     for s in pd.unique(strata):
         ix = np.flatnonzero(strata == s)
         t, e, x = time[ix], status[ix].astype(bool), X[ix]
+        x = x - x.mean(axis=0)                             # residuals do not depend on a shift of x; centring
+                                                           # keeps exp(eta) and the sums well scaled
         u_times = np.unique(t[e])
         if len(u_times) == 0:
             continue
@@ -92,10 +96,13 @@ def _cox_score_residuals(time: np.ndarray, status: np.ndarray, X: np.ndarray, be
         K = len(u_times)
         a_r, a_d = np.zeros(K), np.zeros(K)
         b_r, b_d, xbar_ev = np.zeros((K, p)), np.zeros((K, p)), np.zeros((K, p))
+        lo = np.searchsorted(ts, u_times, side="left")
+        hi = np.searchsorted(ts, u_times, side="right")
         for k, u in enumerate(u_times):
-            j0 = np.searchsorted(ts, u, side="left")
-            tied = (t == u) & e
-            dd = int(tied.sum())
+            j0 = lo[k]
+            blk = o[lo[k]:hi[k]]                           # rows with time u (sorted order)
+            tied = blk[e[blk]]                             # the events among them
+            dd = len(tied)
             s0_d, s1_d = w[tied].sum(), (w[tied, None] * x[tied]).sum(axis=0)
             f = np.arange(dd) / dd if efron else np.zeros(dd)
             s0 = cw[j0] - f * s0_d
@@ -160,7 +167,9 @@ def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "
         fit_kw["groups"] = np.arange(len(d))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = mod.fit(**fit_kw)
+        # statsmodels' own robust covariance (fit(groups=...)) is NaN or wrong in the cases above and roughly
+        # quadratic in n; the skill builds the sandwich itself, so the model is fitted without groups
+        res = mod.fit()
         if "groups" in fit_kw:
             res = _cox_sandwich(mod, res, np.asarray(fit_kw["groups"]), ties)
     names = mod.exog_names

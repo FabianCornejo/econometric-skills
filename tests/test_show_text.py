@@ -153,7 +153,7 @@ e3 = e1 + 0.01 * rng.normal(size=120)
 r, t = run(dg.diebold_mariano, e1, e3)
 check("diebold_mariano: indistinguishable errors -> 'no significant difference', no direction",
       r["p"] >= 0.05 and has(t, "no significant difference") and "more accurate" not in t, t)
-# the design of claude/scripts/sonda_v267.py (seed 7): the long-run variance with h = 4 is not positive
+# the design of claude/scripts/sonda_v267.py in the dev repository (seed 7): the long-run variance with h = 4 is not positive
 g7 = np.random.default_rng(7)
 a7, b7 = g7.normal(size=20), g7.normal(size=20)
 a7 = a7 * np.where(np.arange(20) % 2, 1.6, 0.4)
@@ -169,6 +169,9 @@ e_nan[5] = np.nan
 r, t = run(dg.diebold_mariano, e1, e_nan)
 check("diebold_mariano: a missing forecast error -> 'not computed' because of the missing value, not the variance",
       not np.isfinite(r["p"]) and has(t, "1 missing or infinite forecast error(s)") and "variance" not in t, t)
+r, t = run(dg.diebold_mariano, a7 * 1e-5, b7 * 1e-5, h=4)
+check("diebold_mariano: tiny losses with a non-positive variance are not called identical (no absolute tolerance)",
+      has(t, "long-run variance of the loss difference is not positive") and "identical" not in t, t)
 r, t = run(dg.diebold_mariano, e1, e1.copy())
 check("diebold_mariano: identical errors with h = 1 -> 'identical losses', and no advice to use h = 1",
       not np.isfinite(r["p"]) and has(t, "identical losses") and "h = 1" not in t, t)
@@ -222,6 +225,13 @@ r, t = run(dg.endogeneity_test, pd.Series(1 + x1r + x2r + u, name="y"), None, pd
 check("endogeneity_test: two endogenous regressors with strong separate F -> no 'use IV/2SLS'; points to joint "
       "identification (Shea, Sanderson-Windmeijer)", all(f > 104.7 for f in r["first_stage_F"].values())
       and "use IV/2SLS" not in t and has(t, "jointly identified") and has(t, "Sanderson-Windmeijer"), t)
+check("endogeneity_test: the joint-identification sentence starts a new sentence after the verdict",
+      has(t, "endogenous. With 2 endogenous regressors") and not re.search(r"[a-z] With \d endogenous", t), t)
+r, t = run(dg.endogeneity_test, pd.Series(1 + x1r + x2r + u, name="y"), None, pd.DataFrame({"x1": x1r, "x2": x2r}),
+           Zdf[["z1"]])
+check("endogeneity_test: one instrument for two endogenous regressors -> 'not identified', no IV advice",
+      has(t, "not identified: 1 excluded instrument(s) for 2 endogenous regressors") and "use IV/2SLS" not in t
+      and "jointly identified" not in t, t)
 x2w = 0.03 * Z[:, 0] + 0.03 * Z[:, 1] + v2               # one strong, one weak first stage
 r, t = run(dg.endogeneity_test, pd.Series(1 + x1r + x2w + u, name="y"), None, pd.DataFrame({"x1": x1r, "x2": x2w}), Zdf)
 fs2 = r["first_stage_F"]
@@ -309,7 +319,7 @@ check("evaluate: identical forecasts (DM p = NaN) -> no accuracy verdict; says t
 # =============================================================================
 # dag
 # =============================================================================
-# own generator: seed 400 is the first of claude/scripts/seed_dag_v267.py where the true graph is not rejected at
+# own generator: seed 400 is the first of claude/scripts/seed_dag_v267.py (dev repository) where the true graph is not rejected at
 # 10% (a false rejection happens in about 10% of seeds) and the contaminated w is rejected
 n4 = 500
 gdag = np.random.default_rng(400)
@@ -348,7 +358,7 @@ r10, t10 = run(dag.test_implications, G, dfc, alpha=0.10)
 check("test_implications: alpha = 0.10 -> the sentence says 10%, never 5%",
       has(t10, "(Holm, 10%)") and "5%" not in t10, t10)
 # one case on each side of alpha, on the same data: a weak violation (w = noise + 0.1 x, seed 103, found by search
-# in claude/scripts) gives Holm p values strictly inside (0, 1); put alpha just above and just below the smallest
+# in claude/scripts/busca_dag_alpha_v267.py, dev repository) gives Holm p values strictly inside (0, 1); put alpha just above and just below the smallest
 g103 = np.random.default_rng(103)
 zb = g103.normal(size=500)
 xb = zb + g103.normal(size=500)
@@ -367,7 +377,7 @@ check("test_implications: no testable implication among the columns -> says so",
 # data_prep.missing_report
 # =============================================================================
 # own generator: b is missing when a > 1 (predicted by a), c and the second b are missing completely at random.
-# Seed 200 is the first of claude/scripts/seed_missing_v267.py where the MCAR columns do not reject at 5% (a false
+# Seed 200 is the first of claude/scripts/seed_missing_v267.py (dev repository) where the MCAR columns do not reject at 5% (a false
 # rejection happens in about 5% of seeds and would be a correct "Rejected at 5%: c").
 gm = np.random.default_rng(200)
 dm = pd.DataFrame({"a": gm.normal(size=300), "b": gm.normal(size=300), "c": gm.normal(size=300)})
@@ -430,9 +440,24 @@ check("fit_copulas: Student t (nu = 3) best -> both tails named with their lambd
       and has(t, "understates joint tail risk"), t)
 uv_n = dependence.simulate_copula("student_t", [-0.6, 3.0], n=3000, seed=13)      # negative dependence
 r, t = run(dependence.fit_copulas, uv_n[:, 0], uv_n[:, 1])
-check("fit_copulas: negative dependence -> the gain is about the opposite corners, not evidence of joint tail risk",
-      r.index[0] != "gaussian" and has(t, "opposite corners") and has(t, "this is not evidence")
-      and "is strong evidence" not in t, t)
+rho_t, nu_t = np.ravel(r.loc["student_t", "params"])[:2]
+opp = 2 * stats.t.cdf(-np.sqrt((nu_t + 1) * (1 + rho_t) / (1 - rho_t)), nu_t + 1)    # same-corner formula at -rho
+pu, pv = stats.rankdata(uv_n[:, 0]) / 3001, stats.rankdata(uv_n[:, 1]) / 3001
+emp_same = np.mean((pu <= 0.05) & (pv <= 0.05)) / 0.05
+emp_opp = np.mean((pu <= 0.05) & (pv >= 0.95)) / 0.05
+check("fit_copulas: negative dependence (t best) -> the printed lambdas are called same-corner and equal the table's, "
+      "the opposite-corner coefficient is the t formula at -rho, and no joint-loss claim",
+      r.index[0] == "student_t" and has(t, f"its lambda_L = {r.loc['student_t', 'lambda_L']:.2f} and lambda_U = "
+                                           f"{r.loc['student_t', 'lambda_U']:.2f} are same-corner coefficients")
+      and has(t, f"the opposite-corner coefficient (one low while the other is high) is {opp:.2f}")
+      and has(t, "is not evidence that the Gaussian copula understates") and "is strong evidence" not in t, t)
+check("fit_copulas: ... and in the data the extremes are in the opposite corners (empirical co-exceedance at 5%)",
+      emp_opp > 0.2 > emp_same and opp > float(r.loc["student_t", "lambda_L"]), (emp_opp, emp_same, opp))
+th = -6.0                                                                                # Frank, negative
+vfn = -1 / th * np.log(1 + tt2 * np.expm1(-th) / (tt2 + (1 - tt2) * np.exp(-th * uu)))
+r, t = run(dependence.fit_copulas, uu, vfn)
+check("fit_copulas: Frank with negative dependence -> 'no tail dependence in any corner'",
+      r.index[0] == "frank" and has(t, "frank has no tail dependence in any corner") and "same-corner" not in t, t)
 check("fit_copulas: tail dependence counts from lambda = 0.005 (prints as 0.01), not below; NaN is none",
       not dependence._has_tail_dependence(0.0049) and dependence._has_tail_dependence(0.005)
       and not dependence._has_tail_dependence(np.nan))
@@ -531,7 +556,7 @@ for key, ref in LREF["designs"].items():
     check(f"cox {key}: the returned result carries the same covariance as the table",
           np.allclose(np.asarray(res.bse), tab["se"].to_numpy(), rtol=1e-12, atol=0))
 
-# coverage of the robust 95% CI at the true log-HR 0.5, 200 samples (1000 in claude/scripts/cobertura_cox_v267.py:
+# coverage of the robust 95% CI at the true log-HR 0.5, 200 samples (1000 in claude/scripts/cobertura_cox_v267.py, dev repository:
 # 94.6%, no NaN); band fixed before running: [0.91, 0.985], which a doubled error rate (90%) fails
 hits, n_nan, n_early = 0, 0, 0
 for s_ in range(200):
@@ -570,6 +595,31 @@ for key, ref in RREF.items():
 sm_eff = smf.phreg("t ~ x + w", dties, status=dties["e"].to_numpy(), ties="efron").fit(groups=np.arange(len(dties)))
 check("cox: with ties and efron, statsmodels' own robust SE differs from R by more than 5% (the defect fixed here)",
       np.max(np.abs(np.asarray(sm_eff.bse) / np.array(RREF["efron_robust"]["robust_se"]) - 1)) > 0.05)
+tt_, ee_, X_ = dties["t"].to_numpy(float), dties["e"].to_numpy(), dties[["x", "w"]].to_numpy(float)
+for tie in ("efron", "breslow"):
+    mdl = smf.phreg("t ~ x + w", dties, status=ee_, ties=tie, strata=dties["s"].to_numpy())
+    bh = np.asarray(mdl.fit().params)
+    sr_ = survival._cox_score_residuals(tt_, ee_, X_, bh, dties["s"].to_numpy(), tie)
+    check(f"cox residuals ({tie}, 3 strata): they add up to the score, 0 at the maximum (1e-8)",
+          np.abs(sr_.sum(axis=0)).max() < 1e-8, sr_.sum(axis=0))
+    sr_shift = survival._cox_score_residuals(tt_, ee_, X_ + 1e6, bh, dties["s"].to_numpy(), tie)
+    check(f"cox residuals ({tie}): a shift of x by 1e6 does not change them (1e-9)", np.abs(sr_shift - sr_).max() < 1e-9,
+          np.abs(sr_shift - sr_).max())
+st_ = np.where(np.arange(len(dties)) < 30, 9, dties["s"].to_numpy())     # stratum 9: 30 rows
+ev_ = ee_.copy()
+ev_[:30] = 0                                                             # ... with no event
+sr0 = survival._cox_score_residuals(tt_, ev_, X_, np.array([0.5, -0.3]), st_, "efron")
+check("cox residuals: a stratum with no event gets 0 on every row", np.all(sr0[:30] == 0) and np.isfinite(sr0).all())
+ev_[0] = 1                                                               # ... with a single event
+sr1 = survival._cox_score_residuals(tt_, ev_, X_, np.array([0.5, -0.3]), st_, "efron")
+x9 = X_[:30] - X_[:30].mean(axis=0)
+w9 = np.exp(x9 @ np.array([0.5, -0.3]))
+at_risk = tt_[:30] >= tt_[0]
+xb9 = (w9[at_risk, None] * x9[at_risk]).sum(axis=0) / w9[at_risk].sum()
+manual = -(w9[:, None] * (x9 - xb9) / w9[at_risk].sum()) * (tt_[:30] >= tt_[0])[:, None]
+manual[0] += x9[0] - xb9
+check("cox residuals: a stratum with a single event equals the hand formula (x_i - x̄) δ_i - w_i (x_i - x̄)/S0 at risk",
+      np.allclose(sr1[:30], manual, rtol=0, atol=1e-12), np.abs(sr1[:30] - manual).max())
 lab = dties.assign(g=np.where(dties["g"] % 2 == 0, dties["g"], dties["g"].astype(str)).astype(object))
 (res, tab_m), _ = run(survival.cox, lab, "x + w", "t", "e", cluster="g")
 (res, tab_s), _ = run(survival.cox, dties.assign(g=dties["g"].astype(str)), "x + w", "t", "e", cluster="g")

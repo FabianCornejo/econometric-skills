@@ -1,7 +1,7 @@
 """Data for the R reference of survival.cox's robust SEs with tied event times (v2.6.7).
 
 n = 400, seed 3: x and w with log hazard ratios 0.5 and -0.3, exponential censoring; `t` is the observed time
-rounded UP to a grid of 1/4 (heavy ties: about 15 distinct event times), `tc` the same time without rounding (no
+rounded UP to a grid of 1/4 (heavy ties: 14 distinct event times), `tc` the same time without rounding (no
 ties); `s` three strata, `g` 40 clusters, `id` the row. Run from the repository root:
     python tools/r_reference/make_cox_v267_data.py
 It writes tests/data/cox_v267_ties.csv (and prints its MD5).

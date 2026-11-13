@@ -472,15 +472,20 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
         joint = (f" With {len(f_first)} endogenous regressors, each first-stage F above does not show that they are "
                  "jointly identified: check Shea's partial R² (linearmodels IV2SLS(...).fit().first_stage) or the "
                  "Sanderson-Windmeijer F before using 2SLS.") if multi else ""
-        if out["p"] < ALPHA:
-            verdict = ("endogenous, but with weak instruments (first-stage F <= 10) 2SLS is unreliable: use "
-                       "weak-instrument-robust inference (Anderson-Rubin) or LIML" if weak else
-                       "endogenous" + ("." if multi else ": use IV/2SLS"))
+        n_z, n_x = len(Z.columns), len(f_first)
+        if n_z < n_x:
+            verdict = (f"not identified: {n_z} excluded instrument(s) for {n_x} endogenous regressors, so IV/2SLS "
+                       "is impossible and this test is not informative.")
         else:
-            verdict = ("no evidence of endogeneity, but with weak instruments (first-stage F <= 10) the test has "
-                       "little power" if weak else
-                       "no evidence of endogeneity (not proof of exogeneity): OLS is more efficient")
-        verdict += joint
+            if out["p"] < ALPHA:
+                verdict = ("endogenous, but with weak instruments (first-stage F <= 10) 2SLS is unreliable: use "
+                           "weak-instrument-robust inference (Anderson-Rubin) or LIML." if weak else
+                           "endogenous" + ("." if multi else ": use IV/2SLS."))
+            else:
+                verdict = ("no evidence of endogeneity, but with weak instruments (first-stage F <= 10) the test has "
+                           "little power." if weak else
+                           "no evidence of endogeneity (not proof of exogeneity): OLS is more efficient.")
+            verdict += joint
         print(f"Durbin-Wu-Hausman (control function, {cov_type}): F = {out['statistic']:.3f}, p = {out['p']:.4f} → "
               + verdict)
     return out
@@ -897,7 +902,7 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
         if not np.isfinite(p):
             if not np.isfinite(d).all():
                 why = f"{int((~np.isfinite(d)).sum())} missing or infinite forecast error(s); align and drop them first"
-            elif np.allclose(d, d[0]):
+            elif np.ptp(d) == 0:
                 why = "the loss difference is constant (identical losses): there is nothing to test"
             else:
                 why = (f"the long-run variance of the loss difference is not positive (h = {h}, {T} periods); "
