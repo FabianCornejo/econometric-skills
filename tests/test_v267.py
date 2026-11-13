@@ -191,7 +191,8 @@ try:
         with contextlib.redirect_stdout(buf):
             rt.main(["--arm", "both", "--runs", "1", "--case", "two-groups", "--out", str(Path(tmp) / "x")])
         summ = (Path(tmp) / "x" / "summary.md").exists()
-        idx = json.loads((Path(tmp) / "x" / "responses.json").read_text(encoding="utf-8"))
+        px = Path(tmp) / "x" / "responses.json"
+        idx = json.loads(px.read_text(encoding="utf-8")) if px.exists() else None
 finally:
     rt.shutil.which, rt.subprocess.run = orig
     rt.save_responses = orig_save
