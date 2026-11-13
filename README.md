@@ -40,7 +40,7 @@ The mode changes the form of the answer, never the computations: every number co
 
 ### How it is validated
 
-- **2282 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, a curriculum map whose every function and section must exist, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
+- **2469 checks** in `tests/`: replications of published results (Wooldridge's *Introductory Econometrics* examples, Cinelli-Hazlett's Darfur example), agreement with statsmodels, scipy and the `csdid`/DRDID port, a curriculum map whose every function and section must exist, recovery of known parameters, and Monte Carlo checks of bias, CI coverage and test size.
 - **Validation diary** ([VALIDATION.md](VALIDATION.md), since v2.6.7): one row per public function (289), with its level (replicated against a fixed reference, known truth, execution only, no test), the reference, the tolerance its test uses, the largest difference observed against external references (`tools/validation_diffs.py`), and what is not covered; `tests/test_validation_md.py` keeps it in sync with the code and the tests.
 - **Continuous integration** runs every test suite and worked example on the minimum (core packages and optional extras pinned at their minimums) and the latest supported dependency versions, on Python 3.12, 3.13 and 3.14 and on Windows, and checks that `dist/econometrics.skill` matches the source.
 - **Blind evals** (`evals/`): plain-language prompts with objective must / must-not criteria, run in a fresh conversation before each release.
