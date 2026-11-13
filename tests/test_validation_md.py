@@ -8,12 +8,15 @@ What is checked:
      is the module imported in that test, or by importing the function itself (AST, so a word in a comment or a
      function of the same name in another module does not count);
   4. for levels A-C, every test file in the row exists and refers to the function (so when a function gains or
-     loses a test, its row has to change), and the check named after each file is in that file (the name up to a
-     placeholder such as <case>);
+     loses a test, its row has to change), and each file is followed by the name of a check(...) call in it: the
+     cited text is the start of the first argument of a check call (AST; parts of an f-string known only at run
+     time match anything, a <placeholder> in the row matches only those parts, "…" ends the cited text) and ends at
+     a word boundary of that name;
   5. every repository path cited in a row (tools/..., tests/data/...) exists;
   6. the "largest observed difference" column: a row has a number there exactly when the function is in
-     tools/validation_diffs.json, the number is the one measured, and every measured comparison is within its
-     tolerance.
+     tools/validation_diffs.json, the number is the one measured, every level-A row whose reference is external
+     (published values, R, Stata, DoubleML, csdid, lifelines, robomit, sensemakr; not "on the data of" a book) is
+     measured, and every measured comparison is within its tolerance.
 
 Run from the repository root:  python3 tests/test_validation_md.py
 """
@@ -117,14 +120,65 @@ for k, c in rows.items():
             bad_cite.append((k, f"{t} does not refer to it"))
 check("levels A-C: each cited test file exists and refers to the function", not bad_cite, bad_cite[:8])
 bad_name = []
+WILD = None
+
+
+def _pieces(node):
+    """The first argument of a check(...) call as literal pieces and WILD for the parts known only at run time."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.JoinedStr):
+        return [v.value if isinstance(v, ast.Constant) else WILD for v in node.values]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _pieces(node.left) + _pieces(node.right)
+    return [WILD]
+
+
+def _match(c, ps):
+    """Literal characters matched when c (\\x00 for a <placeholder>) is a prefix of a name the pieces can produce and
+    ends at a word boundary of that name; -1 if it is not. A run-time part absorbs at most 40 characters."""
+    if not c:
+        return 0
+    if not ps:
+        return -1
+    head, rest = ps[0], ps[1:]
+    if head is WILD:
+        best = -1
+        for k in range(min(len(c), 40) + 1):
+            r = 0 if k == len(c) else _match(c[k:], rest)
+            best = max(best, r)
+        return best
+    lit = head.replace("\x00", "")
+    if c.startswith(head):
+        if len(c) == len(head):
+            nxt = next((p for p in rest if p != ""), "")
+            ok_end = not c[-1].isalnum() or nxt is WILD or not nxt or not nxt[0].isalnum()
+            return len(lit) if ok_end else -1
+        r = _match(c[len(head):], rest)
+        return -1 if r < 0 else r + len(lit)
+    if head.startswith(c) and (not c[-1].isalnum() or not head[len(c)].isalnum()):
+        return len(c)
+    return -1
+
+
+checks_in = {}
 for k, c in rows.items():
     for seg in re.split(r";\s*(?=test_[A-Za-z0-9_]+\.py)", c[5]):
         m = re.match(r"(test_[A-Za-z0-9_]+\.py)(?::\s*(.*))?$", seg.strip().replace("\\|", "|"))
-        if not m or not m.group(2) or not (ROOT / "tests" / m.group(1)).exists():
+        if not m or not (ROOT / "tests" / m.group(1)).exists():
             continue
-        name = re.split(r"[<…]|\(called", m.group(2))[0].strip().rstrip(":").strip()
-        src = (ROOT / "tests" / m.group(1)).read_text(encoding="utf-8")
-        if len(name) >= 4 and name not in src:
+        if not m.group(2):
+            bad_name.append((k, m.group(1), "no check named"))
+            continue
+        if m.group(1) not in checks_in:
+            tree = ast.parse((ROOT / "tests" / m.group(1)).read_text(encoding="utf-8"))
+            checks_in[m.group(1)] = [_pieces(n.args[0]) for n in ast.walk(tree)
+                                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                                     and n.func.id == "check" and n.args]
+        name = re.split(r"…|\(called", m.group(2))[0].strip().rstrip(":").strip()
+        name = re.sub(r"<[A-Za-z_]+>", "\x00", name)
+        need = min(8, len(name.replace("\x00", "")))
+        if not name or not any(_match(name, ps) >= max(need, 1) for ps in checks_in[m.group(1)]):
             bad_name.append((k, m.group(1), name))
 check("levels A-C: the check named after each test file is in that file", not bad_name, bad_name[:8])
 
@@ -158,6 +212,11 @@ for k, c in rows.items():
         cell_bad.append((k, c[4]))
 check("difference column: the measured value for the functions in tools/validation_diffs.json, level A only",
       not cell_bad, cell_bad[:6])
+EXT = re.compile(r"\b(R|Stata|DoubleML|csdid|lifelines|robomit|sensemakr|Wooldridge|published)\b")
+unmeasured = [k for k, c in rows.items() if c[1] == "A" and k not in diffs
+              and EXT.search(re.sub(r"on the data of [^;]*", "", c[2]))]
+check("level A rows whose reference is external (published values, R, Stata, DoubleML, csdid, lifelines, robomit, "
+      "sensemakr) are measured in tools/validation_diffs.json", not unmeasured, unmeasured)
 check("every measured comparison is within the tolerance of its test",
       all(s["all_within_tolerance"] for s in diffs.values()),
       [k for k, s in diffs.items() if not s["all_within_tolerance"]])

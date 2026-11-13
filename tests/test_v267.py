@@ -172,6 +172,14 @@ with tempfile.TemporaryDirectory() as tmp:
 check("save_responses: two case names that clean to the same file name do not overwrite each other",
       texts == {"a_b__run0.md": "A", "a_b__run0_2.md": "B"} and [r_["file"] for r_ in recs2]
       == ["a_b__run0.md", "a_b__run0_2.md"], texts)
+with tempfile.TemporaryDirectory() as tmp:
+    (Path(tmp) / "r").mkdir()
+    (Path(tmp) / "r" / "a_b__run0.md").write_text("old run\n", encoding="utf-8")   # left by an earlier run
+    recs3 = rt.save_responses({"cases": [{"name": "a_b", "arms": {"with": [{"tracePath": str(tr_b)}]}}]}, Path(tmp) / "r")
+    files3 = sorted(p_.name for p_ in (Path(tmp) / "r").iterdir())
+    text3 = (Path(tmp) / "r" / "a_b__run0.md").read_text(encoding="utf-8").rstrip()[-1]
+check("save_responses: a file left by an earlier run in the same folder is replaced, not kept next to a '_2' copy",
+      files3 == ["a_b__run0.md"] and text3 == "B" and recs3[0]["file"] == "a_b__run0.md", files3)
 
 # an error while saving the answers does not cost the run its summary
 calls.clear()
@@ -197,8 +205,23 @@ finally:
     rt.shutil.which, rt.subprocess.run = orig
     rt.save_responses = orig_save
 check("main(): an error in save_responses is reported, the summary is still written and the kept directory removed",
-      "WARNING: answers not saved (OSError: disk full)" in buf.getvalue() and summ and idx == []
+      "WARNING: answers not saved (OSError: disk full)" in buf.getvalue() and summ and idx is None
       and not calls[1].exists(), buf.getvalue()[-300:])
+
+# ... and an error while writing responses.json does not cost it either
+calls.clear()
+rt.shutil.which, rt.subprocess.run = (lambda name: "/usr/bin/claude"), fake_run
+try:
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / "x" / "responses.json").mkdir(parents=True)          # a directory where the file should go
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rt.main(["--arm", "both", "--runs", "1", "--case", "two-groups", "--out", str(Path(tmp) / "x")])
+        summ = (Path(tmp) / "x" / "summary.md").exists()
+finally:
+    rt.shutil.which, rt.subprocess.run = orig
+check("main(): an error while writing responses.json is reported and the summary is still written",
+      "WARNING: answers not saved (" in buf.getvalue() and summ and not calls[1].exists(), buf.getvalue()[-300:])
 
 passed = sum(ok)
 print(f"\n{passed}/{len(ok)} checks passed")

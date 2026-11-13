@@ -266,7 +266,7 @@ def save_responses(result: dict, dest: Path) -> list[dict]:
     one index record per run. Only traces inside an eval run directory under the temp folder are read; any other
     run is recorded with readable False (and no file)."""
     dest.mkdir(parents=True, exist_ok=True)
-    records = []
+    records, used = [], set()
     for c in result.get("cases", []):
         name = c.get("name", "")
         for i, r in enumerate(c.get("arms", {}).get("with", [])):
@@ -277,8 +277,9 @@ def save_responses(result: dict, dest: Path) -> list[dict]:
             if msg is not None:
                 stem = f"{re.sub(r'[^A-Za-z0-9_.-]', '_', name)}__run{i}"
                 f, k = dest / f"{stem}.md", 2
-                while f.exists():                      # two case names that clean to the same file name
-                    f, k = dest / f"{stem}_{k}.md", k + 1
+                while f.name.lower() in used:          # two case names that clean to the same file name (in this call;
+                    f, k = dest / f"{stem}_{k}.md", k + 1  # a file left by an earlier run in the same --out is replaced)
+                used.add(f.name.lower())
                 head = "\n".join(f"- {k}: {'pass' if v else 'FAIL'}" for k, v in graders.items())
                 f.write_text(f"# {name}, run {i}\n\n{head}\n\n---\n\n{msg}\n", encoding="utf-8")
                 rec["file"] = f.name
@@ -568,15 +569,14 @@ def main(argv=None) -> int:
             records = annotate_nameonly(result)
             (a.out / "nameonly-diagnostics.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
         if keep and not a.no_responses:
-            try:
+            try:                                      # a paid run must still get its summary
                 resp = save_responses(result, a.out / "responses")
-            except Exception as exc:                  # a paid run must still get its summary
-                resp = []
+                (a.out / "responses.json").write_text(json.dumps(resp, indent=2) + "\n", encoding="utf-8")
+                unread = sum(not x["readable"] for x in resp)
+                print(f"Answers of {len(resp) - unread} run(s) saved in {(a.out / 'responses').resolve()}"
+                      + (f"; {unread} run(s) had no readable trace" if unread else ""))
+            except Exception as exc:
                 print(f"WARNING: answers not saved ({type(exc).__name__}: {exc})")
-            (a.out / "responses.json").write_text(json.dumps(resp, indent=2) + "\n", encoding="utf-8")
-            unread = sum(not x["readable"] for x in resp)
-            print(f"Answers of {len(resp) - unread} run(s) saved in {(a.out / 'responses').resolve()}"
-                  + (f"; {unread} run(s) had no readable trace" if unread else ""))
     finally:
         if keep:
             left = remove_kept_dirs(result)

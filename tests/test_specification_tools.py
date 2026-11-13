@@ -125,6 +125,11 @@ ovb = sp.ovb_decomposition(gp, y="colGPA", focal="ACT", omitted="hsGPA")
 check("OVB identity: short = long + gamma·delta", close(ovb["beta_short"], ovb["beta_long"] + ovb["bias"], 1e-10),
       f"short {ovb['beta_short']:.4f} = {ovb['beta_long']:.4f} + {ovb['bias']:.4f}")
 ovb_c = sp.ovb_decomposition(gp, y="colGPA", focal="ACT", omitted="hsGPA", included=["skipped"])
+b_s = smf.ols("colGPA ~ ACT", gp).fit().params["ACT"]
+b_l = smf.ols("colGPA ~ ACT + hsGPA", gp).fit().params["ACT"]
+check("OVB: short and long coefficients equal two separate statsmodels OLS fits (1e-10)",
+      close(ovb["beta_short"], b_s, 1e-10) and close(ovb["beta_long"], b_l, 1e-10),
+      f"{ovb['beta_short']:.6f} vs {b_s:.6f}; {ovb['beta_long']:.6f} vs {b_l:.6f}")
 check("OVB identity with other controls", close(ovb_c["beta_short"], ovb_c["beta_long"] + ovb_c["bias"], 1e-10))
 
 # ---------------------------------------------------------------------------------------------
