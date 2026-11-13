@@ -54,7 +54,7 @@ Costs of IV: less efficient than OLS (larger variance); biased in finite samples
 **Endogeneity (Durbin-Wu-Hausman, regression version)**:
 1. Regress the suspect endogenous variable on all exogenous variables and instruments; keep the residual v̂.
 2. Add v̂ to the structural equation estimated by OLS (with robust errors if needed).
-3. If v̂'s coefficient is significant, the variable is endogenous → use IV; if not, there is no evidence of endogeneity (not proof of exogeneity) and OLS is more efficient. With weak instruments (first-stage F ≤ 10), a rejection still points to endogeneity but 2SLS is unreliable (use weak-instrument-robust inference, Anderson-Rubin, or LIML), and a non-rejection has little power. With several endogenous regressors, a strong first-stage F for each one does not show that they are jointly identified: check Shea's partial R² or the Sanderson-Windmeijer F.
+3. If v̂'s coefficient is significant, the variable is endogenous → use IV; if not, there is no evidence of endogeneity (not proof of exogeneity) and OLS is more efficient. With weak instruments (first-stage F ≤ 10), a rejection still points to endogeneity but 2SLS is unreliable (use weak-instrument-robust inference, Anderson-Rubin; LIML only with more instruments than endogenous regressors, since in an exactly identified model it equals 2SLS), and a non-rejection has little power. With several endogenous regressors, a strong first-stage F for each one does not show that they are jointly identified: check Shea's partial R² or the Sanderson-Windmeijer F.
 `scripts/diagnostics.py` has `endogeneity_test` with this procedure.
 
 **Overidentification** (only with more instruments than endogenous regressors; q = number of instruments − number of endogenous regressors):

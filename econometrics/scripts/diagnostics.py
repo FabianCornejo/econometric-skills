@@ -478,8 +478,13 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
                        "is impossible and this test is not informative.")
         else:
             if out["p"] < ALPHA:
+                # v2.6.8: LIML equals 2SLS when the model is exactly identified, so it is offered only with more
+                # instruments than endogenous regressors (v2.6.7 validation, notebook 1)
+                robust = ("weak-instrument-robust inference (Anderson-Rubin) or LIML." if n_z > n_x else
+                          "weak-instrument-robust inference (Anderson-Rubin); LIML does not help here: with as many "
+                          "instruments as endogenous regressors it equals 2SLS.")
                 verdict = ("endogenous, but with weak instruments (first-stage F <= 10) 2SLS is unreliable: use "
-                           "weak-instrument-robust inference (Anderson-Rubin) or LIML." if weak else
+                           + robust if weak else
                            "endogenous" + ("." if multi else ": use IV/2SLS."))
             else:
                 verdict = ("no evidence of endogeneity, but with weak instruments (first-stage F <= 10) the test has "
@@ -572,8 +577,11 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     if q_instr > 1:
         fs["strength"] += " [104.7 is the one-instrument threshold of Lee et al.]"
     if (fs["partial F"] < 10).any():
+        # v2.6.8: LIML only when overidentified (exactly identified, LIML equals 2SLS)
+        exact_id = len(instr_names) == len(endog_names)
         warn.append("weak instrument(s): 2SLS is biased toward OLS and its t-intervals undercover; use the "
-                    "Anderson-Rubin set (or LIML) and say so")
+                    + ("Anderson-Rubin set and say so (LIML does not help here: exactly identified, it equals 2SLS)"
+                       if exact_id else "Anderson-Rubin set (or LIML) and say so"))
     tests = []
     endo = iv.wooldridge_regression if robust else iv.wu_hausman()
     tests.append({"test": "endogeneity (" + ("Wooldridge robust regression" if robust else "Wu-Hausman") + ")",
