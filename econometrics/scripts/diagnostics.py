@@ -257,7 +257,7 @@ def chow(y, X, point, show: bool = True) -> dict:
            "n1": int(n1), "n2": int(n2)}
     if show:
         print(f"\nChow at {point}: F({k},{n1+n2-2*k}) = {F:.3f}, p = {p:.4f}; "
-              f"robust Wald (HC3) = {out['robust_wald']:.3f}, p = {out['robust_p']:.4f} → "
+              f"robust Wald (HC3) = {out['robust_wald']:.3f}, p = {out['robust_p']:.4f} → robust test: "
               + ("structural break" if out["robust_p"] < ALPHA else "no evidence of a break"))
     return out
 
@@ -433,6 +433,12 @@ def cointegration(df: pd.DataFrame, k_ar_diff: int = 1, det_order: int = 0, show
 # =============================================================================
 # Endogeneity and IV
 # =============================================================================
+def _first_stage_label(f: float) -> str:
+    """Label of a first-stage F in endogeneity_test: > 104.7 strong (Lee, McCrary, Moreira & Porter 2022, the
+    tF threshold for a 5% test without adjustment), > 10 acceptable, otherwise weak."""
+    return "strong" if f > 104.7 else ("acceptable (>10); also report Anderson-Rubin" if f > 10 else "WEAK")
+
+
 def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = True) -> dict:
     """Regression-based Durbin-Wu-Hausman test (control function), as in Wooldridge.
 
@@ -460,11 +466,28 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     out = {"first_stage_F": f_first, "statistic": float(w.statistic), "p": float(w.pvalue)}
     if show:
         for c, f in f_first.items():
-            note = "strong" if f > 104.7 else ("acceptable (>10); also report Anderson-Rubin" if f > 10 else "WEAK")
-            print(f"\nFirst stage for {c}: F of excluded instruments = {f:.2f} → {note}")
+            print(f"\nFirst stage for {c}: F of excluded instruments = {f:.2f} → {_first_stage_label(f)}")
+        weak = any(not f > 10 for f in f_first.values())          # NaN counts as weak, as its label says
+        multi = len(f_first) > 1
+        joint = (f" With {len(f_first)} endogenous regressors, each first-stage F above does not show that they are "
+                 "jointly identified: check Shea's partial R² (linearmodels IV2SLS(...).fit().first_stage) or the "
+                 "Sanderson-Windmeijer F before using 2SLS.") if multi else ""
+        n_z, n_x = len(Z.columns), len(f_first)
+        if n_z < n_x:
+            verdict = (f"not identified: {n_z} excluded instrument(s) for {n_x} endogenous regressors, so IV/2SLS "
+                       "is impossible and this test is not informative.")
+        else:
+            if out["p"] < ALPHA:
+                verdict = ("endogenous, but with weak instruments (first-stage F <= 10) 2SLS is unreliable: use "
+                           "weak-instrument-robust inference (Anderson-Rubin) or LIML." if weak else
+                           "endogenous" + ("." if multi else ": use IV/2SLS."))
+            else:
+                verdict = ("no evidence of endogeneity, but with weak instruments (first-stage F <= 10) the test has "
+                           "little power." if weak else
+                           "no evidence of endogeneity (not proof of exogeneity): OLS is more efficient.")
+            verdict += joint
         print(f"Durbin-Wu-Hausman (control function, {cov_type}): F = {out['statistic']:.3f}, p = {out['p']:.4f} → "
-              + ("endogenous: use IV/2SLS" if out["p"] < ALPHA
-                 else "no evidence of endogeneity: OLS is consistent and more efficient"))
+              + verdict)
     return out
 
 
@@ -876,8 +899,18 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
     p = 2 * (1 - stats.t.cdf(abs(hln), T - 1))
     if show:
         better = "model 1" if dbar < 0 else "model 2"
-        print(f"\nDiebold-Mariano (HLN): {hln:.3f}, p = {p:.4f} → "
-              + (f"significant difference, {better} more accurate" if p < ALPHA else "no significant difference"))
+        if not np.isfinite(p):
+            if not np.isfinite(d).all():
+                why = f"{int((~np.isfinite(d)).sum())} missing or infinite forecast error(s); align and drop them first"
+            elif np.ptp(d) == 0:
+                why = "the loss difference is constant (identical losses): there is nothing to test"
+            else:
+                why = (f"the long-run variance of the loss difference is not positive (h = {h}, {T} periods); "
+                       "use a longer sample" + (" or h = 1" if h > 1 else ""))
+            print(f"\nDiebold-Mariano (HLN): not computed: {why}.")
+        else:
+            print(f"\nDiebold-Mariano (HLN): {hln:.3f}, p = {p:.4f} → "
+                  + (f"significant difference, {better} more accurate" if p < ALPHA else "no significant difference"))
     return {"DM_HLN": hln, "p": p, "mean_loss_diff": dbar}
 
 

@@ -36,6 +36,11 @@ Usage (from the repository root; needs Claude Code >= 2.1.269 and runs on your a
 
 The cases grant only read-only tools (no Bash), so they run on native Windows too. Results go to
 routing-results/<timestamp>/ (summary.md, routing.json, the harness's report.html).
+
+Since v2.6.7 the answers are kept: every arm runs with `--keep-temp`, the last message of each run (the `result`
+field of the last line of its trace) is written to responses/<case>__run<i>.md with the graders' verdicts, an index
+goes to responses.json, and the kept directories are removed. A failed answer can then be read without running the
+case again. `--no-responses` turns this off (the name-only arm still keeps its directories to read the listing).
 """
 from __future__ import annotations
 
@@ -237,6 +242,48 @@ def annotate_nameonly(result: dict) -> list[dict]:
             r["harnessUnreadable"] = not readable
             records.append({"case": c["name"], "run": i, "readable": readable,
                             "kept_dir": str(kept) if kept else None, **diag})
+    return records
+
+
+def _last_message(trace: Path) -> str | None:
+    """The final answer of a run: the `result` field of the last trace line that has one."""
+    try:
+        lines = trace.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and isinstance(rec.get("result"), str):
+            return rec["result"]
+    return None
+
+
+def save_responses(result: dict, dest: Path) -> list[dict]:
+    """Write the last message of every run to dest/<case>__run<i>.md, with the graders' verdicts on top, and return
+    one index record per run. Only traces inside an eval run directory under the temp folder are read; any other
+    run is recorded with readable False (and no file)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    records, used = [], set()
+    for c in result.get("cases", []):
+        name = c.get("name", "")
+        for i, r in enumerate(c.get("arms", {}).get("with", [])):
+            kept, tp = _kept_dir(r), r.get("tracePath")
+            msg = _last_message(Path(tp)) if tp and kept is not None and _is_eval_sandbox(kept) else None
+            graders = {g.get("name"): g.get("passed") for g in r.get("graders", [])}
+            rec = {"case": name, "run": i, "readable": msg is not None, "graders": graders, "file": None}
+            if msg is not None:
+                stem = f"{re.sub(r'[^A-Za-z0-9_.-]', '_', name)}__run{i}"
+                f, k = dest / f"{stem}.md", 2
+                while f.name.lower() in used:          # two case names that clean to the same file name (in this call;
+                    f, k = dest / f"{stem}_{k}.md", k + 1  # a file left by an earlier run in the same --out is replaced)
+                used.add(f.name.lower())
+                head = "\n".join(f"- {k}: {'pass' if v else 'FAIL'}" for k, v in graders.items())
+                f.write_text(f"# {name}, run {i}\n\n{head}\n\n---\n\n{msg}\n", encoding="utf-8")
+                rec["file"] = f.name
+            records.append(rec)
     return records
 
 
@@ -475,6 +522,8 @@ def main(argv=None) -> int:
                     help="both = clean and crowded (default); nameonly = the ~850-skill listing in which econometrics "
                          "keeps only its name; all = the three")
     ap.add_argument("--build-only", type=Path, metavar="DIR", help="write the harness to DIR and stop")
+    ap.add_argument("--no-responses", action="store_true",
+                    help="do not keep the answers (runs without --keep-temp, except the name-only arm)")
     ap.add_argument("--no-hooks", action="store_true",
                     help="leave the plugin's hooks out of the copies (baseline for measuring the SessionStart note)")
     a = ap.parse_args(argv)
@@ -501,8 +550,8 @@ def main(argv=None) -> int:
         out_json = (a.out / "routing.json").resolve()
         cmd = [exe, "plugin", "eval", str(harness), "--trust-plugin", "--ablation", "none", "--runs", str(a.runs),
                "--no-publish", "-j", str(a.concurrency), "--output-dir", str(a.out.resolve()), "--json", str(out_json)]
-        if "nameonly" in ARM_CHOICES[a.arm]:
-            cmd.append("--keep-temp")             # the listing is read from each run's transcript, then removed
+        if "nameonly" in ARM_CHOICES[a.arm] or not a.no_responses:
+            cmd.append("--keep-temp")             # answers and listing are read from each run's directory, then removed
         if a.model:
             cmd += ["--model", a.model]
         if a.max_cost_usd:
@@ -516,9 +565,18 @@ def main(argv=None) -> int:
         return proc.returncode or 1
     result = json.loads(out_json.read_text(encoding="utf-8"))
     try:
-        if keep:
+        if keep and "nameonly" in ARM_CHOICES[a.arm]:
             records = annotate_nameonly(result)
             (a.out / "nameonly-diagnostics.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+        if keep and not a.no_responses:
+            try:                                      # a paid run must still get its summary
+                resp = save_responses(result, a.out / "responses")
+                (a.out / "responses.json").write_text(json.dumps(resp, indent=2) + "\n", encoding="utf-8")
+                unread = sum(not x["readable"] for x in resp)
+                print(f"Answers of {len(resp) - unread} run(s) saved in {(a.out / 'responses').resolve()}"
+                      + (f"; {unread} run(s) had no readable trace" if unread else ""))
+            except Exception as exc:
+                print(f"WARNING: answers not saved ({type(exc).__name__}: {exc})")
     finally:
         if keep:
             left = remove_kept_dirs(result)

@@ -192,6 +192,18 @@ def fit_copula(u, v, family: str = "student_t") -> dict:
             "converged": bool(res.success)}
 
 
+def _opposite_corner_t(rho: float, nu: float) -> float:
+    """Tail coefficient of a Student t copula in the opposite corners (one variable low while the other is high):
+    the same-corner formula with -rho, 2 t_{nu+1}(-sqrt((nu+1)(1+rho)/(1-rho)))."""
+    return float(2 * stats.t.cdf(-np.sqrt((nu + 1) * (1 + rho) / (1 - rho)), nu + 1))
+
+
+def _has_tail_dependence(lam) -> bool:
+    """A tail coefficient counts as tail dependence in fit_copulas' sentence when it is at least 0.005 (it prints as
+    0.01 or more); Frank and the Gaussian have 0, and a Student t with large nu has almost 0."""
+    return pd.notna(lam) and float(lam) >= 0.005
+
+
 def fit_copulas(x, y, families: list[str] | None = None, show: bool = True) -> pd.DataFrame:
     """Fit all families on pseudo-observations of (x, y), rank by AIC."""
     d = pd.concat([pd.Series(np.asarray(x, float)), pd.Series(np.asarray(y, float))], axis=1).dropna()
@@ -208,10 +220,38 @@ def fit_copulas(x, y, families: list[str] | None = None, show: bool = True) -> p
         print(tab[[c for c in cols if c in tab]].to_string(float_format=lambda v: f"{v:.4f}"))
         best = tab.index[0]
         g = tab.loc["gaussian", "AIC"] if "gaussian" in tab.index else np.nan
-        print(f"Best by AIC: {best}. "
-              + (f"AIC gain over Gaussian = {g - tab.loc[best, 'AIC']:.1f} "
-                 "(>10 is strong evidence that the Gaussian copula understates joint tail risk)."
-                 if best != "gaussian" and pd.notna(g) else ""))
+        tail = ""
+        if best != "gaussian" and pd.notna(g) and pd.notna(tau) and tau < 0:
+            # lambda_L and lambda_U in the table are same-corner coefficients (both low, both high); with negative
+            # dependence the extremes go to the opposite corners (one low while the other is high)
+            same = (f"its lambda_L = {float(tab.loc[best, 'lambda_L']):.2f} and lambda_U = "
+                    f"{float(tab.loc[best, 'lambda_U']):.2f} are same-corner coefficients (both variables low, or both "
+                    "high)") if {"lambda_L", "lambda_U"} <= set(tab.columns) else "its tail coefficients are same-corner"
+            opp = ""
+            if best == "student_t":
+                rho, nu = np.ravel(tab.loc[best, "params"])[:2]
+                opp = (f"; the opposite-corner coefficient (one low while the other is high) is "
+                       f"{_opposite_corner_t(float(rho), float(nu)):.2f}")
+            elif best == "frank":
+                same, opp = "frank has no tail dependence in any corner", ""
+            tail = (f"AIC gain over Gaussian = {g - tab.loc[best, 'AIC']:.1f}; with negative dependence (Kendall tau = "
+                    f"{tau:.3f}), {same}{opp}. The gain is not evidence that the Gaussian copula understates the risk "
+                    "of joint losses.")
+        elif best != "gaussian" and pd.notna(g):
+            # a tail claim only for a best family that has tail dependence (lambda >= 0.005, i.e. not 0.00 printed);
+            # Frank, like the Gaussian, has none, and a t with large nu has almost none
+            lam = [(s, float(tab.loc[best, c])) for s, c in (("lower", "lambda_L"), ("upper", "lambda_U"))
+                   if c in tab and _has_tail_dependence(tab.loc[best, c])]
+            gain = f"AIC gain over Gaussian = {g - tab.loc[best, 'AIC']:.1f}"
+            if lam:
+                which = " and ".join(s for s, _ in lam)
+                vals = ", ".join(f"lambda_{s[0].upper()} = {v:.2f}" for s, v in lam)
+                tail = (f"{gain}; {best} has {which}-tail dependence ({vals}) and the Gaussian copula has none "
+                        "(>10 is strong evidence that the Gaussian copula understates joint tail risk).")
+            else:
+                tail = (f"{gain}; {best}, like the Gaussian copula, has no tail dependence: the gain comes from the "
+                        "body of the distribution and says nothing about joint tail risk.")
+        print(f"Best by AIC: {best}. " + tail)
     return tab
 
 

@@ -341,6 +341,10 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
             if k == benchmark:
                 continue
             p = tab.loc[k, "DM_p"]
+            if not np.isfinite(p):
+                print(f"  {k}: DM test not computed (the loss difference with {benchmark} has no positive "
+                      "variance, e.g. identical forecasts); compare the RMSE column")
+                continue
             better = tab.loc[k, "RMSE"] < tab.loc[benchmark, "RMSE"]
             print(f"  {k}: " + ("significantly " if p < ALPHA else "not significantly ")
                   + ("more" if better else "less") + f" accurate than {benchmark} (DM p = {p:.3f})")

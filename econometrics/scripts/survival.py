@@ -63,12 +63,97 @@ def logrank(df: pd.DataFrame, duration: str, event: str, group: str, strata: str
             "conclusion": "survival differs across groups" if p < 0.05 else "no significant difference"}
 
 
+def _cox_score_residuals(time: np.ndarray, status: np.ndarray, X: np.ndarray, beta: np.ndarray,
+                         strata: np.ndarray | None = None, ties: str = "efron") -> np.ndarray:
+    """Score residuals of the Cox partial likelihood (Therneau & Grambsch 2000, sec. 3.7), by stratum, with Efron or
+    Breslow handling of tied event times. For an event time u with d tied events, risk-set sums S0_j, S1_j for
+    j = 0..d-1 remove the fraction j/d of the tied events (Efron; j/d = 0 for Breslow). A tied event's own term is
+    x_i minus the mean of the d weighted means; the compensator gives full weight to the rest of the risk set and
+    weight 1 - j/d to the tied events. A row censored before the first event of its stratum gets 0 (no event time
+    at or before it). The residuals add up to the score of the same likelihood (0 at its maximum).
+    (statsmodels' PHReg.score_residuals uses Breslow increments with any ties setting and returns NaN for rows
+    censored before the first event; v2.6.7 computes them here.) Times are tied when exactly equal (R's coxph
+    also merges times that differ only by floating-point error, timefix = TRUE). With a linear predictor that
+    spans more than about 700 within a stratum (a degenerate fit) the risk-set sums underflow."""
+    n, p = X.shape
+    out = np.zeros((n, p))
+    strata = np.zeros(n) if strata is None else np.asarray(strata)
+    efron = ties == "efron"
+    for s in pd.unique(strata):
+        ix = np.flatnonzero(strata == s)
+        t, e, x = time[ix], status[ix].astype(bool), X[ix]
+        x = x - x.mean(axis=0)                             # residuals do not depend on a shift of x; centring
+                                                           # keeps exp(eta) and the sums well scaled
+        u_times = np.unique(t[e])
+        if len(u_times) == 0:
+            continue
+        eta = x @ beta
+        w = np.exp(eta - eta.max())                        # the scale cancels in every ratio below
+        o = np.argsort(t, kind="mergesort")
+        ts = t[o]
+        cw = np.cumsum(w[o][::-1])[::-1]                   # sum of w over t >= ts[k]
+        cwx = np.cumsum((w[o, None] * x[o])[::-1], axis=0)[::-1]
+        K = len(u_times)
+        a_r, a_d = np.zeros(K), np.zeros(K)
+        b_r, b_d, xbar_ev = np.zeros((K, p)), np.zeros((K, p)), np.zeros((K, p))
+        lo = np.searchsorted(ts, u_times, side="left")
+        hi = np.searchsorted(ts, u_times, side="right")
+        for k, u in enumerate(u_times):
+            j0 = lo[k]
+            blk = o[lo[k]:hi[k]]                           # rows with time u (sorted order)
+            tied = blk[e[blk]]                             # the events among them
+            dd = len(tied)
+            s0_d, s1_d = w[tied].sum(), (w[tied, None] * x[tied]).sum(axis=0)
+            f = np.arange(dd) / dd if efron else np.zeros(dd)
+            s0 = cw[j0] - f * s0_d
+            xb = (cwx[j0][None, :] - f[:, None] * s1_d[None, :]) / s0[:, None]
+            a_r[k], b_r[k] = (1 / s0).sum(), (xb / s0[:, None]).sum(axis=0)
+            a_d[k], b_d[k] = ((1 - f) / s0).sum(), ((1 - f)[:, None] * xb / s0[:, None]).sum(axis=0)
+            xbar_ev[k] = xb.mean(axis=0)
+        ca, cb = np.cumsum(a_r), np.cumsum(b_r, axis=0)
+        kk = np.searchsorted(u_times, t, side="right")    # number of event times <= t_i
+        has = kk > 0
+        A = np.where(has, ca[np.maximum(kk - 1, 0)], 0.0)
+        B = np.where(has[:, None], cb[np.maximum(kk - 1, 0)], 0.0)
+        ke = kk[e] - 1                                     # an event's own time
+        A[e] += a_d[ke] - a_r[ke]
+        B[e] += b_d[ke] - b_r[ke]
+        r = -(w[:, None] * (x * A[:, None] - B))
+        r[e] += x[e] - xbar_ev[ke]
+        out[ix] = r
+    return out
+
+
+def _cox_sandwich(mod, res, groups, ties: str):
+    """Lin-Wei sandwich I^-1 (sum over groups of s_g s_g') I^-1 from _cox_score_residuals. Clusters are coded with
+    pd.factorize (labels of any type); a missing cluster label is an error, not a cluster of its own."""
+    from statsmodels.duration.hazard_regression import PHRegResults
+    codes, _ = pd.factorize(pd.Series(np.asarray(groups, dtype=object)), sort=False)
+    if (codes < 0).any():
+        raise ValueError(f"cluster has {(codes < 0).sum()} missing label(s): drop those rows or fill the cluster id")
+    params = np.asarray(res.params)
+    strata = np.asarray(mod.strata) if getattr(mod, "strata", None) is not None else None
+    sr = _cox_score_residuals(np.asarray(mod.endog, float), np.asarray(mod.status), np.asarray(mod.exog, float),
+                              params, strata, ties)
+    sg = np.zeros((codes.max() + 1, sr.shape[1]))
+    np.add.at(sg, codes, sr)
+    h_inv = np.linalg.inv(mod.hessian(params))
+    cov = h_inv @ (sg.T @ sg) @ h_inv
+    return PHRegResults(mod, params, cov, covariance_type="robust")
+
+
 def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "efron",
         strata: str | None = None, cluster: str | None = None, robust: bool = True, show: bool = True):
     """Cox proportional hazards. formula = right-hand side only, e.g. "age + C(sex) + C(region)".
     No intercept is estimated (the baseline hazard absorbs it), so do not add '0 +'.
     cluster: groups for a sandwich (Lin-Wei) variance; robust=True uses each row as its
-    own group when no cluster is given. Returns (result, hazard-ratio table)."""
+    own group when no cluster is given. Returns (result, hazard-ratio table).
+
+    The sandwich is computed here from score residuals of the same likelihood (v2.6.7, _cox_score_residuals):
+    statsmodels' own robust covariance was NaN whenever a row is censored before the first event of its stratum
+    (about a quarter of samples with early censoring) and, with tied event times and ties="efron", too small
+    (it uses Breslow increments). Checked against R survival::coxph(robust = TRUE) with ties, strata and clusters
+    (tools/r_reference/cox_v267_reference.R). A missing cluster label raises an error."""
     import statsmodels.formula.api as smf
     d = df.dropna(subset=[duration, event]).copy()
     kw = {"status": d[event].astype(int), "ties": ties}
@@ -82,7 +167,11 @@ def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "
         fit_kw["groups"] = np.arange(len(d))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = mod.fit(**fit_kw)
+        # statsmodels' own robust covariance (fit(groups=...)) is NaN or wrong in the cases above and roughly
+        # quadratic in n; the skill builds the sandwich itself, so the model is fitted without groups
+        res = mod.fit()
+        if "groups" in fit_kw:
+            res = _cox_sandwich(mod, res, np.asarray(fit_kw["groups"]), ties)
     names = mod.exog_names
     b = np.asarray(res.params)
     se = np.asarray(res.bse)

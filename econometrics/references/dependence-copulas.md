@@ -40,7 +40,7 @@ tab = fit_copulas(std_resid_a, std_resid_b)     # ranked by AIC
 The output reports for each family the parameters, log-likelihood, AIC/BIC, implied τ (compare with the empirical τ) and the implied tail coefficients, plus the empirical tail co-exceedance P(V ≤ q | U ≤ q) at q = 5% (independence gives 0.05).
 
 Reading:
-- An AIC gain of more than 10 over the Gaussian copula is strong evidence that a correlation matrix understates joint tail risk.
+- An AIC gain of more than 10 over the Gaussian copula, for a winning family with tail dependence (Clayton, Gumbel, their survival versions, Student t with small ν), is strong evidence that a correlation matrix understates joint tail risk. Frank has no tail dependence, like the Gaussian: an AIC gain for Frank is about the body of the distribution, not the tails (`fit_copulas` says which case it is).
 - The empirical co-exceedance at 5% is a noisy, model-free check of the tails: if it is 0.4 in the lower tail and 0.15 in the upper tail, an asymmetric (Clayton / survival Gumbel) family should win.
 - The t copula's ν: below ~10, tail dependence is material. Its λ is the same in both tails; if the data are clearly asymmetric, it will lose to Clayton-type families.
 - Formal goodness-of-fit (Cramér-von Mises on the empirical copula with parametric bootstrap) is the next step for publication-grade work; AIC ranking is enough for most applied questions.

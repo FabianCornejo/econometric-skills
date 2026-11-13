@@ -82,6 +82,11 @@ jobs:
           print(f"reporting.SKILL_VERSION {s}, CHANGELOG {c}")
           sys.exit(0 if s == c else "set SKILL_VERSION in econometrics/scripts/reporting.py to the CHANGELOG version")
           PY
+      # VALIDATION.md's measured differences: every external comparison still within its test's tolerance on the
+      # newest dependency versions (v2.6.7). The table records the values of the day it was measured.
+      - name: External replications within tolerance (tools/validation_diffs.py --check)
+        if: matrix.deps == 'latest' && matrix.python == '3.13'
+        run: python tools/validation_diffs.py --check
       # The skill promises Python 3.10+: syntax that only 3.12 accepts (PEP 701 nested f-string quotes) must not
       # slip in. Last step of the job, because setup-python changes the default interpreter.
       - uses: actions/setup-python@v6

@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
-SKILL_VERSION = "2.6.6"
+SKILL_VERSION = "2.6.7"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
