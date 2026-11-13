@@ -170,8 +170,14 @@ def missing_report(df: pd.DataFrame, cols: list[str] | None = None, predictors: 
         if "tests" in out and len(out["tests"]):
             print("Is missingness predicted by observables? (H0: no — consistent with MCAR)")
             print(out["tests"].to_string(float_format=lambda v: f"{v:.4f}"))
-            print("Rejection: not MCAR. Listwise deletion is still consistent if missingness depends only on the "
-                  "regressors; otherwise use multiple imputation (MAR) or a selection model (MNAR).")
+            rej = [c for c in out["tests"].index if out["tests"].loc[c, "p"] < 0.05]
+            if rej:
+                print(f"Rejected at 5%: {', '.join(map(str, rej))} → not MCAR for these columns. Listwise deletion is "
+                      "still consistent if missingness depends only on the regressors; otherwise use multiple "
+                      "imputation (MAR) or a selection model (MNAR).")
+            else:
+                print("No column rejects at 5%: consistent with MCAR, which this test cannot prove (and MAR vs MNAR "
+                      "cannot be tested).")
     return out
 
 

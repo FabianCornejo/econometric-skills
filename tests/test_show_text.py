@@ -334,9 +334,13 @@ check("test_implications: no testable implication among the columns -> says so",
 # =============================================================================
 # data_prep.missing_report
 # =============================================================================
-dm = pd.DataFrame({"a": rng.normal(size=300), "b": rng.normal(size=300), "c": rng.normal(size=300)})
+# own generator: b is missing when a > 1 (predicted by a), c and the second b are missing completely at random.
+# Seed 200 is the first of claude/scripts/seed_missing_v267.py where the MCAR columns do not reject at 5% (a false
+# rejection happens in about 5% of seeds and would be a correct "Rejected at 5%: c").
+gm = np.random.default_rng(200)
+dm = pd.DataFrame({"a": gm.normal(size=300), "b": gm.normal(size=300), "c": gm.normal(size=300)})
 dm.loc[dm["a"] > 1, "b"] = np.nan
-dm.loc[rng.uniform(size=300) < 0.1, "c"] = np.nan
+dm.loc[gm.uniform(size=300) < 0.1, "c"] = np.nan
 r, t = run(data_prep.missing_report, dm, predictors=["a"])
 comp = int(dm.notna().all(axis=1).sum())
 check("missing_report: complete rows counted from the data, with the share",
@@ -345,7 +349,7 @@ check("missing_report: missing share per column printed", has(t, f"b   {dm['b'].
 rej = [c for c in r["tests"].index if r["tests"].loc[c, "p"] < 0.05]
 check("missing_report: names the columns whose missingness is predicted (b, by construction) and not c",
       rej == ["b"] and has(t, "Rejected at 5%: b") and "Rejected at 5%: b, c" not in t, t)
-dm2 = dm.assign(b=np.where(rng.uniform(size=300) < 0.12, np.nan, rng.normal(size=300)))   # b missing at random
+dm2 = dm.assign(b=np.where(gm.uniform(size=300) < 0.12, np.nan, gm.normal(size=300)))   # b missing at random
 r, t = run(data_prep.missing_report, dm2, predictors=["a"])
 check("missing_report: no column predicted -> says none rejects and never 'Rejection: not MCAR'",
       (r["tests"]["p"] >= 0.05).all() and has(t, "No column rejects at 5%") and "Rejected at 5%" not in t
@@ -437,6 +441,62 @@ check("cox: breslow ties, clustered by g, stratified by s in the header",
 (res, tab), t = run(survival.cox, ds, "x", "t", "e", robust=False)
 check("cox: robust=False -> 'model-based'", has(t, "SE model-based"), t)
 check("cox: the HR sentence says hazard, not duration", has(t, "not a 25% shorter duration"), t)
+
+# robust SE (v2.6.7): statsmodels' own robust covariance is NaN when a row is censored before the first event;
+# the skill's sandwich sets those score residuals to 0. Reference: lifelines CoxPHFitter(robust=True)
+# (tools/py_reference/cox_robust_v267_lifelines.py -> tests/data/cox_robust_lifelines_v267.json).
+import json  # noqa: E402
+
+LREF = json.loads((HERE / "data" / "cox_robust_lifelines_v267.json").read_text(encoding="utf-8"))
+
+
+def cox_design(seed, n=400):
+    g = np.random.default_rng(seed)
+    x_, w_ = g.normal(size=n), g.normal(size=n)
+    T_ = g.exponential(1 / np.exp(0.5 * x_ - 0.3 * w_))
+    C_ = g.exponential(2, size=n)
+    return pd.DataFrame({"t": np.minimum(T_, C_), "e": (T_ <= C_).astype(int), "x": x_, "w": w_,
+                         "g": g.integers(0, 40, n)})
+
+
+for key, ref in LREF["designs"].items():
+    dd = cox_design(ref["seed"])
+    kw = {"cluster": "g"} if key.endswith("cluster") else {}
+    (res, tab), t = run(survival.cox, dd, "x + w", "t", "e", **kw)
+    rel = max(abs(tab.loc[c, "se"] / ref["se"][c] - 1) for c in ("x", "w"))
+    dif = max(abs(tab.loc[c, "coef"] - ref["coef"][c]) for c in ("x", "w"))
+    check(f"cox {key}: coefficients within 1e-6 and SEs within 1e-6 (relative) of lifelines "
+          f"({ref['censored_before_first_event']} rows censored before the first event)", dif < 1e-6 and rel < 1e-6,
+          (dif, rel))
+    sm_fit = smf.phreg("t ~ x + w", dd, status=dd["e"].to_numpy()).fit(
+        groups=dd["g"].to_numpy() if kw else np.arange(len(dd)))
+    if ref["censored_before_first_event"]:
+        # statsmodels 0.14-0.15 give NaN here; if a later release fixes it, its SE must equal the skill's
+        sm_ok = np.isnan(sm_fit.bse).all() or np.allclose(tab["se"].to_numpy(), sm_fit.bse, rtol=1e-10, atol=0)
+        check(f"cox {key}: the skill's SE is finite and printed (statsmodels' own is NaN, or equal if fixed)",
+              sm_ok and np.isfinite(tab["se"]).all() and "nan" not in t, t)
+    else:
+        check(f"cox {key}: no early censoring -> the skill's SE equals statsmodels' robust SE",
+              np.allclose(tab["se"].to_numpy(), sm_fit.bse, rtol=1e-10, atol=0))
+    check(f"cox {key}: the returned result carries the same covariance as the table",
+          np.allclose(np.asarray(res.bse), tab["se"].to_numpy(), rtol=1e-12, atol=0))
+
+# coverage of the robust 95% CI at the true log-HR 0.5, 200 samples (1000 in claude/scripts/cobertura_cox_v267.py:
+# 94.6%, no NaN); band fixed before running: [0.91, 0.985], which a doubled error rate (90%) fails
+hits, n_nan, n_early = 0, 0, 0
+for s_ in range(200):
+    g = np.random.default_rng(s_)
+    x_ = g.normal(size=400)
+    T_ = g.exponential(1 / np.exp(0.5 * x_))
+    C_ = g.exponential(2, size=400)
+    dd = pd.DataFrame({"t": np.minimum(T_, C_), "e": (T_ <= C_).astype(int), "x": x_})
+    n_early += bool(((dd["e"] == 0) & (dd["t"] < dd.loc[dd["e"] == 1, "t"].min())).any())
+    with contextlib.redirect_stdout(io.StringIO()):
+        _, tb_ = survival.cox(dd, "x", "t", "e")
+    n_nan += int(not np.isfinite(tb_.loc["x", "se"]))
+    hits += int(tb_.loc["x", "HR_ci_low"] < np.exp(0.5) < tb_.loc["x", "HR_ci_high"])
+check(f"cox: 200 samples, {n_early} with early censoring: no NaN SE and coverage {hits / 200:.3f} in [0.91, 0.985]",
+      n_early >= 20 and n_nan == 0 and 0.91 <= hits / 200 <= 0.985, (n_early, n_nan, hits))
 
 # =============================================================================
 # risk

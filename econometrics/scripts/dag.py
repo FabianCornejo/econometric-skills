@@ -336,7 +336,7 @@ def test_implications(g, df: pd.DataFrame, alpha: float = 0.05, show: bool = Tru
             print(tab.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
             bad = tab.loc[~tab["consistent"], "implication"].tolist()
             print("  " + ("Data contradict: " + "; ".join(bad) + " -> revise the graph (missing edge?)" if bad
-                          else "No implication rejected (Holm, 5%): the data do not contradict the graph."))
+                          else f"No implication rejected (Holm, {100 * alpha:g}%): the data do not contradict the graph."))
     return tab
 
 

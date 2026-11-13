@@ -63,12 +63,34 @@ def logrank(df: pd.DataFrame, duration: str, event: str, group: str, strata: str
             "conclusion": "survival differs across groups" if p < 0.05 else "no significant difference"}
 
 
+def _cox_sandwich(mod, res, status: np.ndarray, groups: np.ndarray):
+    """Lin-Wei sandwich H^-1 (sum over groups of s_g s_g') H^-1 from the score residuals, with the residual of a row
+    censored before the first event of its stratum set to 0 (statsmodels leaves it NaN). A NaN on a row with an
+    event is not touched, so it still shows up as NaN."""
+    from statsmodels.duration.hazard_regression import PHRegResults
+    params = np.asarray(res.params)
+    sr = np.asarray(mod.score_residuals(params), dtype=float)
+    fix = np.isnan(sr).any(axis=1) & (status == 0)
+    sr[fix] = 0.0
+    _, gi = np.unique(groups, return_inverse=True)
+    sg = np.zeros((gi.max() + 1, sr.shape[1]))
+    np.add.at(sg, gi, sr)
+    h_inv = np.linalg.inv(mod.hessian(params))
+    cov = h_inv @ (sg.T @ sg) @ h_inv
+    return PHRegResults(mod, params, cov, covariance_type="robust")
+
+
 def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "efron",
         strata: str | None = None, cluster: str | None = None, robust: bool = True, show: bool = True):
     """Cox proportional hazards. formula = right-hand side only, e.g. "age + C(sex) + C(region)".
     No intercept is estimated (the baseline hazard absorbs it), so do not add '0 +'.
     cluster: groups for a sandwich (Lin-Wei) variance; robust=True uses each row as its
-    own group when no cluster is given. Returns (result, hazard-ratio table)."""
+    own group when no cluster is given. Returns (result, hazard-ratio table).
+
+    The sandwich is computed here from statsmodels' score residuals (v2.6.7): statsmodels returns NaN for the
+    rows censored before the first event of their stratum, and its own robust covariance then came out NaN
+    (SE, CI and p all NaN in about a quarter of samples with early censoring). By definition those rows have a
+    score residual of 0 (no event time at or before them), which is what is used."""
     import statsmodels.formula.api as smf
     d = df.dropna(subset=[duration, event]).copy()
     kw = {"status": d[event].astype(int), "ties": ties}
@@ -83,6 +105,8 @@ def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         res = mod.fit(**fit_kw)
+        if "groups" in fit_kw:
+            res = _cox_sandwich(mod, res, d[event].astype(int).to_numpy(), np.asarray(fit_kw["groups"]))
     names = mod.exog_names
     b = np.asarray(res.params)
     se = np.asarray(res.bse)

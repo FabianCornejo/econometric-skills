@@ -54,7 +54,7 @@ Costs of IV: less efficient than OLS (larger variance); biased in finite samples
 **Endogeneity (Durbin-Wu-Hausman, regression version)**:
 1. Regress the suspect endogenous variable on all exogenous variables and instruments; keep the residual v̂.
 2. Add v̂ to the structural equation estimated by OLS (with robust errors if needed).
-3. If v̂'s coefficient is significant, the variable is endogenous → use IV; if not, OLS is consistent and more efficient.
+3. If v̂'s coefficient is significant, the variable is endogenous → use IV; if not, there is no evidence of endogeneity (not proof of exogeneity) and OLS is more efficient. With weak instruments (first-stage F ≤ 10) neither reading holds: 2SLS is unreliable and the test has little power, so use weak-instrument-robust inference (Anderson-Rubin) or LIML.
 `scripts/diagnostics.py` has `endogeneity_test` with this procedure.
 
 **Overidentification** (only with more instruments than endogenous regressors; q = number of instruments − number of endogenous regressors):

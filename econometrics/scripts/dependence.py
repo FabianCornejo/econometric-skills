@@ -208,10 +208,22 @@ def fit_copulas(x, y, families: list[str] | None = None, show: bool = True) -> p
         print(tab[[c for c in cols if c in tab]].to_string(float_format=lambda v: f"{v:.4f}"))
         best = tab.index[0]
         g = tab.loc["gaussian", "AIC"] if "gaussian" in tab.index else np.nan
-        print(f"Best by AIC: {best}. "
-              + (f"AIC gain over Gaussian = {g - tab.loc[best, 'AIC']:.1f} "
-                 "(>10 is strong evidence that the Gaussian copula understates joint tail risk)."
-                 if best != "gaussian" and pd.notna(g) else ""))
+        tail = ""
+        if best != "gaussian" and pd.notna(g):
+            # a tail claim only for a best family that has tail dependence (lambda >= 0.005, i.e. not 0.00 printed);
+            # Frank, like the Gaussian, has none, and a t with large nu has almost none
+            lam = [(s, float(tab.loc[best, c])) for s, c in (("lower", "lambda_L"), ("upper", "lambda_U"))
+                   if c in tab and pd.notna(tab.loc[best, c]) and float(tab.loc[best, c]) >= 0.005]
+            gain = f"AIC gain over Gaussian = {g - tab.loc[best, 'AIC']:.1f}"
+            if lam:
+                which = " and ".join(s for s, _ in lam)
+                vals = ", ".join(f"lambda_{s[0].upper()} = {v:.2f}" for s, v in lam)
+                tail = (f"{gain}; {best} has {which}-tail dependence ({vals}) and the Gaussian copula has none "
+                        "(>10 is strong evidence that the Gaussian copula understates joint tail risk).")
+            else:
+                tail = (f"{gain}; {best}, like the Gaussian copula, has no tail dependence: the gain comes from the "
+                        "body of the distribution and says nothing about joint tail risk.")
+        print(f"Best by AIC: {best}. " + tail)
     return tab
 
 

@@ -1209,8 +1209,13 @@ def event_study(df: pd.DataFrame, unit: str, time: str, y: str, event_time: str,
     if show:
         print(f"\nEvent study (TWFE, ref k = {ref}, clustered by {unit})")
         print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
-        print(f"Joint test of pre-period coefficients = 0: p = {pval:.3f} → "
-              + ("pre-trends detected: parallel trends doubtful" if pval < ALPHA else "no evidence of pre-trends (low power is possible)"))
+        if not np.isfinite(pval):
+            print(f"Joint test of pre-period coefficients: no pre-period coefficient to test (leads = {leads}, "
+                  f"ref = {ref}); parallel trends are not checked by this specification.")
+        else:
+            print(f"Joint test of pre-period coefficients = 0: p = {pval:.3f} → "
+                  + ("pre-trends detected: parallel trends doubtful" if pval < ALPHA
+                     else "no evidence of pre-trends (low power is possible)"))
         if early:
             print(f"  WARNING: the coefficient at k = {near} differs from the reference k = {ref}: the outcome jumps"
                   " right before the recorded date. Typical causes: anticipation (announcement before entry"
