@@ -143,6 +143,17 @@ def _vtuple(v: str) -> tuple:
     return tuple(out)
 
 
+def _release(v) -> tuple | None:
+    """A skill version as a tuple when it is a release number (digits and dots: 2.6.7, 2.5.0.1), else None.
+
+    v2.6.8: the doctor's update advice compared skill versions with _vtuple, which keeps the digits of each part,
+    so a version that is not a release number got an arbitrary place: "abcdef0" became (0,), older than every
+    release (advice to update or uninstall), and "3a98a97" became (39897,), newer than every release (no advice).
+    None were seen on notebook 1 (2026-11-13), but such a version cannot be ordered, so it is not compared."""
+    s = str(v).strip() if v is not None else ""
+    return tuple(int(p) for p in s.split(".")) if re.fullmatch(r"\d+(\.\d+)*", s) else None
+
+
 def _installed_version(import_name: str, dist: str):
     """Version of an importable package, or None when it cannot be imported here."""
     try:
@@ -862,7 +873,8 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
             part == MARKETPLACE for part in Path(here["dir"]).parts)
         plugin = next((c for c in loaded if c["kind"] == "plugin"), None)
         if (here["version"] and in_cache and plugin and plugin["version"]
-                and _vtuple(plugin["version"]) > _vtuple(here["version"])
+                and _release(plugin["version"]) and _release(here["version"])
+                and _release(plugin["version"]) > _release(here["version"])
                 and not _same_file(plugin["path"], here["dir"])):
             # an update was installed (auto-update, say) but this session still runs the old cache folder
             acts.append(f"the plugin {plugin['version']} is installed but this session still runs "
@@ -870,7 +882,15 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
         elif here["version"] and not in_cache and not any(_same_file(c["path"], here["dir"]) for c in rep["copies"]):
             loaded.append({"kind": "copy in use", "version": here["version"], "path": here["dir"]})
         for c in loaded:
-            if not c["version"] or _vtuple(latest) <= _vtuple(c["version"]):
+            if not c["version"]:
+                continue
+            if _release(c["version"]) is None or _release(latest) is None:
+                odd = c["version"] if _release(c["version"]) is None else latest
+                acts.append(f"the {c['kind']} at {c['path']} is {c['version']} and the latest release is {latest}: "
+                            f"{odd} is not a release number, so the doctor cannot tell whether it is behind; "
+                            "compare the two by hand (CHANGELOG.md of the copy) before updating anything")
+                continue
+            if _release(latest) <= _release(c["version"]):
                 continue
             if c["kind"] == "plugin":
                 acts.append(f"update the plugin from {c['version']} to {latest}: {_update_steps()}")
@@ -889,9 +909,12 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
                     + (f" (the Claude app copy: Customize -> Skills, upload {RELEASE_ASSET}, or remove it there "
                        "and keep only the plugin)" if app else ""))
     if ambiguous:                                           # after the 'different versions' item, which it must not hide
-        ref = latest or max((c["version"] for c in counted if c["version"]), key=_vtuple, default=None)
+        ref = latest or max((c["version"] for c in counted if _release(c["version"])), key=_release, default=None)
+        ref = ref if _release(ref) else None
         av = [c["version"] for c in ambiguous]
-        if (ref and any(v and _vtuple(v) < _vtuple(ref) for v in av)) or (not ref and len({v for v in av if v}) > 1):
+        if ((ref and any(_release(v) and _release(v) < _release(ref) for v in av))
+                or (not ref and len({v for v in av if v}) > 1)
+                or any(v and _release(v) is None for v in av)):
             acts.append(f"{len(ambiguous)} Claude app copies are on this computer, in folders of skills/synced "
                         "(Claude Code keeps one per Claude account that synced here), at versions "
                         + ", ".join(v or "unreadable" for v in av) + ", and the account Claude Code is signed in to "
@@ -914,11 +937,16 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
     pin = lst.get("project_install")
     usr = (lst.get("user_install") or {}).get("version")
     ref = rep["latest"].get("version") or rep["skill"].get("version")
-    if pin and pin.get("version") and ref and _vtuple(str(pin["version"])) < _vtuple(str(ref)):
+    if pin and pin.get("version") and ref and (_release(pin["version"]) is None or _release(ref) is None):
+        acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the skill "
+                    f"at version {pin['version']}, and the current one is {ref}: one of the two is not a release "
+                    "number, so the doctor cannot tell whether the folder's install is behind. Check it with claude "
+                    "plugin list --json (projectPath and version) before updating or uninstalling anything")
+    elif pin and pin.get("version") and ref and _release(pin["version"]) < _release(ref):
         # Uninstalling the folder's own install only helps when a user-scope install is there to take over and
         # is newer; with no user-scope install that command would remove the skill from the folder
         # (v2.5.2 review). Then the fix is to update it in place.
-        if usr and _vtuple(str(usr)) > _vtuple(str(pin["version"])):
+        if usr and _release(usr) and _release(usr) > _release(pin["version"]):
             acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the "
                         f"skill, pinned at {pin['version']}, while the user-scope install is {usr}: sessions here "
                         "keep loading the old version. With the user's permission, inside the folder: claude "
