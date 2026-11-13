@@ -234,6 +234,6 @@ From the v2.6.5 validation (the memo opened with "the result only holds if no un
 
 ## Rules added in v2.6.8
 
-From the v2.6.7 validation (the final recommendation gave "HR 0.49 with an approximate CI of [0.37, 0.65] (SE ~0.14)", worked out in the reply: with 1.96 although the same reply recommended t(G − 1) for 8 clusters, and with the SE of a different model than the one the HR came from; with t(7) the interval is [0.35, 0.68]):
+From the v2.6.7 validation (the final recommendation gave "HR 0.49 with an approximate CI of [0.37, 0.65] (SE ~0.14)", worked out in the reply: with 1.96 although the same reply recommended t(G − 1) for 8 clusters, and with the SE of a different model than the one the HR came from):
 
 - **Every number in the reply was printed by the script, including the ones that summarise.** An interval, a transformed estimate (a hazard or odds ratio, exp(β), a percentage change), a critical value or a rounded SE goes into the script and is printed before it goes into the text; never work it out in the reply, not even "approximately". Use the same critical value the reply recommends (t(G − 1) with few clusters, not 1.96) and the SE of the model the sentence describes. Before sending, check each number in the summary against the script's output.
