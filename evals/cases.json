@@ -135,7 +135,7 @@
         "Writes the causal graph of the problem and runs dag.adjustment_report (or adjustment_sets / classify_controls) instead of controlling for every available variable.",
         "Flags post-treatment variables as bad controls: time to closing and the announcement abnormal return are outcomes or descendants of the advisor choice and the premium, so they must not be controls.",
         "Treats target size, sector and listed status as candidate confounders, and discusses competitive auction as a possible mediator (the advisor may run the auction) whose inclusion changes the estimand.",
-        "Says the choice of advisor is not random (selection on deal complexity, acquirer sophistication) and adds a sensitivity analysis (specification.sensitivity or causal.dml_sensitivity) benchmarked on an observed covariate.",
+        "Says the choice of advisor is not random (selection on deal complexity, acquirer sophistication) and adds a sensitivity analysis benchmarked on an observed covariate (specification.sensitivity and specification.ovb_bounds for OLS; causal.dml_sensitivity, dml_benchmark and dml_bounds for double ML), and, if it says where significance would be lost, gives that boundary with its number (k_not_significant for OLS; the dml_bounds k values for DML), never 'as strong as X' with no number.",
         "Delivers a runnable script with a SKILL_DIR variable that calls the skill's functions, on simulated data with the same structure if no data are attached."
       ],
       "must_not": [
@@ -262,6 +262,25 @@
         "Approves the table as it is or keeps calling both numbers 'interval' without saying which is which.",
         "Recomputes the bounds by hand or multiplies cf_y and cf_d by k instead of reading the dml_bounds lines.",
         "Drops the rho or says rho = 1 when the lines report the benchmark's rho."
+      ]
+    },
+    {
+      "id": "review-memo-summary-boundary",
+      "language": "pt-BR",
+      "prompt": "Revise o resumo do memorando antes de eu mandar para a diretoria: \"A triagem reduziu a espera em 6,5 minutos (IC 95% de 4,6 a 8,4 min, erros-padrão HC3, n = 400 clínicas). O resultado, porém, só se sustenta se nenhum fator não medido for tão forte quanto o porte da clínica. Um fator com 1,2 vez a força do porte já o tornaria não significativo. Com qualquer método, um fator oculto com o dobro da força do porte já deixa o efeito compatível com zero.\" O porte é log_pac. A saída do ovb_bounds (OLS) foi: \"1x log_pac: a confounder 1x as strong as log_pac (partial R² up to 12.7% with triagem and 34.2% with the outcome) could move the estimate toward zero, from -6.523 to -2.435 (37% of it); 95% CI [-4.019, -0.8516], which still excludes zero.\", \"2x log_pac: a confounder 2x as strong as log_pac (partial R² up to 25.4% with triagem and 71.0% with the outcome) could move the estimate from -6.523 past zero, to 2.487; 95% CI [1.351, 3.624], which excludes zero on the other side (the sign would flip).\" e \"A confounder 1.2x as strong as log_pac (same k for treatment and outcome) could, in the worst case, make the estimate not significant at the 5% level (classical SE) (its CI reaches zero; the smallest such k on a dense grid).\". A do dml_bounds foi, no DML linear: \"2x log_pac: cf_y 50.0%, cf_d 23.7%, rho 1: theta between -13.7571 and 0.7705; 95% confidence bounds [-15.7169, 2.7298], which include zero.\" e, no DML com floresta: \"2x log_pac: cf_y 15.7%, cf_d 26.8%, rho 0.967914: theta between -9.8353 and -0.7545; 95% confidence bounds [-11.9023, 1.3296], which include zero.\" Nos dois modelos de DML, o dml_bounds usou o ρ observado no benchmark do porte.",
+      "must": [
+        "Points out that the second sentence ('only holds if no unmeasured factor is as strong as size') puts the boundary at 1x and contradicts the output: at 1x log_pac the worst-case CI still excludes zero (the 1x line's ci_verdict), and significance is lost only from about 1.2x (k_not_significant), as the memo's own third sentence says (interpretation-rules v2.6.3 and v2.6.6).",
+        "Rewrites the opening summary with the number (a confounder about 1.2x as strong as size could, in the worst case, make the effect not significant), not 'as strong as size' or 'weaker than size'.",
+        "Points out that the last sentence is wrong for OLS: at 2x size the OLS line's CI [1.351, 3.624] excludes zero on the other side (the sign would flip), which is stronger than 'compatible with zero'; only the two DML lines include zero at 2x.",
+        "Says these are worst cases for a confounder orthogonal to the covariates, not likely values, and labels 1.2x (and the OLS lines) as classical-SE numbers next to the HC3 CI (interpretation-rules v2.6.2).",
+        "When the rewritten text mentions the DML lines, states the rho of each in the document (1 in the linear and 0.967914 in the forest, both observed in the benchmark; interpretation-rules v2.6.4)."
+      ],
+      "must_not": [
+        "Approves the summary as it is, or keeps the boundary at 1x in the rewritten summary ('as strong as size' with no number, or 'weaker than size').",
+        "Rounds the boundary to 1x, or rounds 1.2x to another number.",
+        "Presents 1.2x as the boundary of the DML models too (1.2x is the OLS k_not_significant; the DML boundary comes from dml_bounds lines at several k).",
+        "Calls the 2x OLS line 'compatible with zero' or 'includes zero'.",
+        "Computes bounds or k with formulas of its own instead of reading the ovb_bounds and dml_bounds lines (rerunning those functions, or a loop that calls them, is fine)."
       ]
     }
   ]

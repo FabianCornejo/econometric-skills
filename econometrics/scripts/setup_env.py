@@ -12,7 +12,7 @@ Environment check and setup for the econometrics skill, the same on Windows, mac
                                      told apart when `claude auth status` gives the signed-in account and its
                                      copy is there too), plugin auto-update, and a crowded skill listing.
                                      Installs nothing. --json for a machine-readable report;
-                                     --offline skips the release check (one request to api.github.com);
+                                     --offline skips the release check (one request to api.github.com): only without network;
                                      --folder PATH measures the listing as Claude Code sees it in that
                                      folder (default: $CLAUDE_PROJECT_DIR, else the current folder): run it
                                      for the analysis folder, not from inside the skill's own folder.
@@ -27,7 +27,7 @@ Environment check and setup for the econometrics skill, the same on Windows, mac
                                      excel = openpyxl for .xlsx, plots = matplotlib for PNG charts)
 
 Exit code 0 when everything needed is present (after --install, when it succeeded), 1 otherwise.
-In Claude Code, Claude runs --doctor before the first analysis on a machine and asks the user once
+In Claude Code, Claude runs --doctor before the first analysis in a folder and asks the user once
 before installing or changing anything.
 """
 from __future__ import annotations
@@ -974,6 +974,8 @@ def print_doctor(rep: dict) -> None:
     sk, lt = rep["skill"], rep["latest"]
     print(f"Skill in use: {sk['version']} ({sk['dir']})")
     print("Latest release: " + (lt["version"] if lt["version"] else lt["status"]))
+    if lt.get("status") == "not checked (--offline)":
+        print("  --offline is only for a machine without network; with network, run --doctor without it")
     ac = rep.get("account") or {}
     if ac.get("org_id"):
         print(f"Claude Code signed in to: {ac.get('org_name') or 'an organization'} (org {ac['org_id']})")
@@ -996,7 +998,8 @@ def print_doctor(rep: dict) -> None:
     else:
         print(f"Skill listing: not checked ({lst.get('reason')})")
     if rep["actions"]:
-        print("\nTo do (ask the user once, listing all of these; install or change nothing before the answer):")
+        print("\nTo do (ask the user once, in one question at the end of your reply, listing all of these, optional "
+              "ones included; install or change nothing before the answer):")
         for k, a in enumerate(rep["actions"], 1):
             print(f"  {k}. {a}")
     else:
@@ -1014,7 +1017,7 @@ def main(argv=None) -> int:
     ap.add_argument("--extra", action="append", default=[], choices=sorted(OPTIONAL),
                     help="also check/install an optional extra: " +
                          "; ".join(f"{k} = {OPTIONAL_USE[k]}" for k in OPTIONAL))
-    ap.add_argument("--offline", action="store_true", help="--doctor: skip the latest-release check")
+    ap.add_argument("--offline", action="store_true", help="--doctor: skip the latest-release check (only without network)")
     ap.add_argument("--json", action="store_true", help="--doctor: print the report as JSON")
     ap.add_argument("--folder", help="--doctor: the analysis folder whose skill listing is measured "
                                      "(default: $CLAUDE_PROJECT_DIR, else the current folder)")
