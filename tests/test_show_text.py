@@ -27,6 +27,12 @@ Text defects fixed in v2.6.7 (each check fails on main 74a41a5 and passes on the
   diagnostics.chow            gave the verdict of the robust test without saying so (it can disagree with the F);
   data_prep.missing_report    printed "Rejection: not MCAR" without saying which columns, if any, reject.
 
+Numeric fix in survival.cox (robust and clustered SEs): NaN whenever a row is censored before the first event of
+its stratum, and too small with tied event times and ties="efron" (statsmodels' score residuals). Checked against
+R survival::coxph with ties, strata and clusters, and against lifelines without ties.
+Review of 2026-11-13 (round 1) added: two endogenous regressors, the reasons a DM test is not computed, copulas with
+an upper tail only, both tails and negative dependence, the 0.005 threshold, R references with ties, cluster labels.
+
 Run from the repository root:  python3 tests/test_show_text.py
 Needs: statsmodels, linearmodels, scipy, scikit-learn.
 """
@@ -156,6 +162,16 @@ check("diebold_mariano: non-positive long-run variance (h = 4) -> NaN statistic 
       not np.isfinite(r["DM_HLN"]) and not np.isfinite(r["p"]), r)
 check("diebold_mariano: ... and the text says the test was not computed, never 'no significant difference'",
       "no significant difference" not in t and has(t, "not computed"), t)
+check("diebold_mariano: h = 4 with a non-positive variance -> the reason is the variance, and h = 1 is suggested",
+      has(t, "long-run variance of the loss difference is not positive (h = 4") and has(t, "or h = 1"), t)
+e_nan = e2.copy()
+e_nan[5] = np.nan
+r, t = run(dg.diebold_mariano, e1, e_nan)
+check("diebold_mariano: a missing forecast error -> 'not computed' because of the missing value, not the variance",
+      not np.isfinite(r["p"]) and has(t, "1 missing or infinite forecast error(s)") and "variance" not in t, t)
+r, t = run(dg.diebold_mariano, e1, e1.copy())
+check("diebold_mariano: identical errors with h = 1 -> 'identical losses', and no advice to use h = 1",
+      not np.isfinite(r["p"]) and has(t, "identical losses") and "h = 1" not in t, t)
 
 # endogeneity_test: first-stage label at each band, and the verdict with weak instruments
 n2 = 2000
@@ -198,6 +214,19 @@ xe = 0.05 * Z[:, 0] + 0.05 * Z[:, 1] + rng.normal(size=n2)
 r, t = run(dg.endogeneity_test, pd.Series(1 + xe + u, name="y"), None, pd.DataFrame({"xe": xe}), Zdf)
 check("endogeneity_test: weak instruments and no rejection -> the test has little power, no OLS recommendation",
       r["p"] >= 0.05 and has(t, "weak instruments") and has(t, "little power") and "OLS is" not in t, t)
+# two endogenous regressors (review of 2026-11-13): a strong F for each does not show joint identification
+v2 = 0.7 * u + rng.normal(size=n2)
+x1r = Z[:, 0] + Z[:, 1] + v                               # both driven by z1 + z2: first-stage matrix of rank 1
+x2r = Z[:, 0] + Z[:, 1] + v2
+r, t = run(dg.endogeneity_test, pd.Series(1 + x1r + x2r + u, name="y"), None, pd.DataFrame({"x1": x1r, "x2": x2r}), Zdf)
+check("endogeneity_test: two endogenous regressors with strong separate F -> no 'use IV/2SLS'; points to joint "
+      "identification (Shea, Sanderson-Windmeijer)", all(f > 104.7 for f in r["first_stage_F"].values())
+      and "use IV/2SLS" not in t and has(t, "jointly identified") and has(t, "Sanderson-Windmeijer"), t)
+x2w = 0.03 * Z[:, 0] + 0.03 * Z[:, 1] + v2               # one strong, one weak first stage
+r, t = run(dg.endogeneity_test, pd.Series(1 + x1r + x2w + u, name="y"), None, pd.DataFrame({"x1": x1r, "x2": x2w}), Zdf)
+fs2 = r["first_stage_F"]
+check("endogeneity_test: one strong and one weak first stage -> the weak-instrument verdict (any F <= 10 counts)",
+      fs2["x1"] > 104.7 and fs2["x2"] <= 10 and has(t, "weak instruments") and "use IV/2SLS" not in t, t)
 
 # overid_test
 import linearmodels.iv as lmiv  # noqa: E402
@@ -280,11 +309,14 @@ check("evaluate: identical forecasts (DM p = NaN) -> no accuracy verdict; says t
 # =============================================================================
 # dag
 # =============================================================================
+# own generator: seed 400 is the first of claude/scripts/seed_dag_v267.py where the true graph is not rejected at
+# 10% (a false rejection happens in about 10% of seeds) and the contaminated w is rejected
 n4 = 500
-zc = rng.normal(size=n4)
-xc = zc + rng.normal(size=n4)
-yc = xc + zc + rng.normal(size=n4)
-wc = rng.normal(size=n4)
+gdag = np.random.default_rng(400)
+zc = gdag.normal(size=n4)
+xc = zc + gdag.normal(size=n4)
+yc = xc + zc + gdag.normal(size=n4)
+wc = gdag.normal(size=n4)
 dfc = pd.DataFrame(dict(z=zc, x=xc, y=yc, w=wc))
 G = "z -> x; z -> y; x -> y; w -> y"
 r, t = run(dag.adjustment_report, G, "x", "y", dfc)
@@ -386,6 +418,24 @@ check("fit_copulas: ... and the AIC gain over the Gaussian is still printed",
 zg = rng.multivariate_normal([0, 0], [[1, 0.6], [0.6, 1]], 1500)
 r, t = run(dependence.fit_copulas, zg[:, 0], zg[:, 1])
 check("fit_copulas: Gaussian best -> no gain sentence", r.index[0] == "gaussian" and "AIC gain" not in t, t)
+uv_g = dependence.simulate_copula("gumbel", [2.0], n=2000, seed=11)               # upper tail only
+r, t = run(dependence.fit_copulas, uv_g[:, 0], uv_g[:, 1])
+check("fit_copulas: Gumbel best -> the claim names the upper tail with lambda_U, not the lower one",
+      r.index[0] == "gumbel" and has(t, f"upper-tail dependence (lambda_U = {r.loc['gumbel', 'lambda_U']:.2f})")
+      and "lower-tail" not in t and "lower and upper" not in t, t)
+uv_t = dependence.simulate_copula("student_t", [0.6, 3.0], n=2000, seed=12)       # both tails
+r, t = run(dependence.fit_copulas, uv_t[:, 0], uv_t[:, 1])
+check("fit_copulas: Student t (nu = 3) best -> both tails named with their lambdas",
+      r.index[0] == "student_t" and has(t, "has lower and upper-tail dependence (lambda_L = ")
+      and has(t, "understates joint tail risk"), t)
+uv_n = dependence.simulate_copula("student_t", [-0.6, 3.0], n=3000, seed=13)      # negative dependence
+r, t = run(dependence.fit_copulas, uv_n[:, 0], uv_n[:, 1])
+check("fit_copulas: negative dependence -> the gain is about the opposite corners, not evidence of joint tail risk",
+      r.index[0] != "gaussian" and has(t, "opposite corners") and has(t, "this is not evidence")
+      and "is strong evidence" not in t, t)
+check("fit_copulas: tail dependence counts from lambda = 0.005 (prints as 0.01), not below; NaN is none",
+      not dependence._has_tail_dependence(0.0049) and dependence._has_tail_dependence(0.005)
+      and not dependence._has_tail_dependence(np.nan))
 
 # =============================================================================
 # discrete_choice.heckman
@@ -497,6 +547,41 @@ for s_ in range(200):
     hits += int(tb_.loc["x", "HR_ci_low"] < np.exp(0.5) < tb_.loc["x", "HR_ci_high"])
 check(f"cox: 200 samples, {n_early} with early censoring: no NaN SE and coverage {hits / 200:.3f} in [0.91, 0.985]",
       n_early >= 20 and n_nan == 0 and 0.91 <= hits / 200 <= 0.985, (n_early, n_nan, hits))
+
+# tied event times (review of 2026-11-13): statsmodels' score residuals use Breslow increments whatever the ties
+# setting; the skill's are Efron's or Breslow's. Reference: R survival 3.8.12 coxph(robust) on tests/data/
+# cox_v267_ties.csv (tools/r_reference/cox_v267_reference.R -> output/cox_v267_reference.json). lifelines is not a
+# reference here: its score residuals do not handle ties.
+RREF = json.loads((HERE.parent / "tools" / "r_reference" / "output" / "cox_v267_reference.json").read_text(encoding="utf-8"))
+dties = pd.read_csv(HERE / "data" / "cox_v267_ties.csv")
+for key, ref in RREF.items():
+    if not isinstance(ref, dict):
+        continue
+    kw = {"ties": ref["ties"]}
+    if ref["cluster"] == "g":
+        kw["cluster"] = "g"
+    if "strata" in key:
+        kw["strata"] = "s"
+    (res, tab), t = run(survival.cox, dties, "x + w", "tc" if key.startswith("continuous") else "t", "e", **kw)
+    dif = float(np.max(np.abs(tab["coef"].to_numpy() - ref["coef"])))
+    rel = float(np.max(np.abs(tab["se"].to_numpy() / np.array(ref["robust_se"]) - 1)))
+    check(f"cox R {key}: coefficients within 1e-6 and robust SEs within 1e-6 (relative) of survival::coxph",
+          dif < 1e-6 and rel < 1e-6, (dif, rel))
+sm_eff = smf.phreg("t ~ x + w", dties, status=dties["e"].to_numpy(), ties="efron").fit(groups=np.arange(len(dties)))
+check("cox: with ties and efron, statsmodels' own robust SE differs from R by more than 5% (the defect fixed here)",
+      np.max(np.abs(np.asarray(sm_eff.bse) / np.array(RREF["efron_robust"]["robust_se"]) - 1)) > 0.05)
+lab = dties.assign(g=np.where(dties["g"] % 2 == 0, dties["g"], dties["g"].astype(str)).astype(object))
+(res, tab_m), _ = run(survival.cox, lab, "x + w", "t", "e", cluster="g")
+(res, tab_s), _ = run(survival.cox, dties.assign(g=dties["g"].astype(str)), "x + w", "t", "e", cluster="g")
+check("cox: cluster labels of mixed types (int and str) give the same SEs as the same labels as strings",
+      np.allclose(tab_m["se"], tab_s["se"], rtol=1e-12, atol=0))
+try:
+    run(survival.cox, dties.assign(g=dties["g"].where(dties.index != 3)), "x + w", "t", "e", cluster="g")
+    raised = ""
+except ValueError as exc:
+    raised = str(exc)
+check("cox: a missing cluster label raises (it is not merged into a cluster of its own)",
+      "missing label" in raised, raised)
 
 # =============================================================================
 # risk

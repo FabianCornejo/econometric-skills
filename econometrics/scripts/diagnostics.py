@@ -467,14 +467,20 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     if show:
         for c, f in f_first.items():
             print(f"\nFirst stage for {c}: F of excluded instruments = {f:.2f} → {_first_stage_label(f)}")
-        weak = any(f <= 10 for f in f_first.values())
+        weak = any(not f > 10 for f in f_first.values())          # NaN counts as weak, as its label says
+        multi = len(f_first) > 1
+        joint = (f" With {len(f_first)} endogenous regressors, each first-stage F above does not show that they are "
+                 "jointly identified: check Shea's partial R² (linearmodels IV2SLS(...).fit().first_stage) or the "
+                 "Sanderson-Windmeijer F before using 2SLS.") if multi else ""
         if out["p"] < ALPHA:
             verdict = ("endogenous, but with weak instruments (first-stage F <= 10) 2SLS is unreliable: use "
-                       "weak-instrument-robust inference (Anderson-Rubin) or LIML" if weak else "endogenous: use IV/2SLS")
+                       "weak-instrument-robust inference (Anderson-Rubin) or LIML" if weak else
+                       "endogenous" + ("." if multi else ": use IV/2SLS"))
         else:
             verdict = ("no evidence of endogeneity, but with weak instruments (first-stage F <= 10) the test has "
                        "little power" if weak else
                        "no evidence of endogeneity (not proof of exogeneity): OLS is more efficient")
+        verdict += joint
         print(f"Durbin-Wu-Hausman (control function, {cov_type}): F = {out['statistic']:.3f}, p = {out['p']:.4f} → "
               + verdict)
     return out
@@ -889,8 +895,14 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
     if show:
         better = "model 1" if dbar < 0 else "model 2"
         if not np.isfinite(p):
-            print(f"\nDiebold-Mariano (HLN): not computed: the long-run variance of the loss difference is not "
-                  f"positive (h = {h}, {T} periods); use a longer sample or h = 1.")
+            if not np.isfinite(d).all():
+                why = f"{int((~np.isfinite(d)).sum())} missing or infinite forecast error(s); align and drop them first"
+            elif np.allclose(d, d[0]):
+                why = "the loss difference is constant (identical losses): there is nothing to test"
+            else:
+                why = (f"the long-run variance of the loss difference is not positive (h = {h}, {T} periods); "
+                       "use a longer sample" + (" or h = 1" if h > 1 else ""))
+            print(f"\nDiebold-Mariano (HLN): not computed: {why}.")
         else:
             print(f"\nDiebold-Mariano (HLN): {hln:.3f}, p = {p:.4f} → "
                   + (f"significant difference, {better} more accurate" if p < ALPHA else "no significant difference"))

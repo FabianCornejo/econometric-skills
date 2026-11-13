@@ -192,6 +192,12 @@ def fit_copula(u, v, family: str = "student_t") -> dict:
             "converged": bool(res.success)}
 
 
+def _has_tail_dependence(lam) -> bool:
+    """A tail coefficient counts as tail dependence in fit_copulas' sentence when it is at least 0.005 (it prints as
+    0.01 or more); Frank and the Gaussian have 0, and a Student t with large nu has almost 0."""
+    return pd.notna(lam) and float(lam) >= 0.005
+
+
 def fit_copulas(x, y, families: list[str] | None = None, show: bool = True) -> pd.DataFrame:
     """Fit all families on pseudo-observations of (x, y), rank by AIC."""
     d = pd.concat([pd.Series(np.asarray(x, float)), pd.Series(np.asarray(y, float))], axis=1).dropna()
@@ -209,11 +215,16 @@ def fit_copulas(x, y, families: list[str] | None = None, show: bool = True) -> p
         best = tab.index[0]
         g = tab.loc["gaussian", "AIC"] if "gaussian" in tab.index else np.nan
         tail = ""
-        if best != "gaussian" and pd.notna(g):
+        if best != "gaussian" and pd.notna(g) and pd.notna(tau) and tau < 0:
+            tail = (f"AIC gain over Gaussian = {g - tab.loc[best, 'AIC']:.1f}; with negative dependence "
+                    f"(Kendall tau = {tau:.3f}) the tail coefficients refer to the opposite corners (one variable "
+                    "high while the other is low), not to joint losses: this is not evidence that the Gaussian "
+                    "copula understates joint tail risk.")
+        elif best != "gaussian" and pd.notna(g):
             # a tail claim only for a best family that has tail dependence (lambda >= 0.005, i.e. not 0.00 printed);
             # Frank, like the Gaussian, has none, and a t with large nu has almost none
             lam = [(s, float(tab.loc[best, c])) for s, c in (("lower", "lambda_L"), ("upper", "lambda_U"))
-                   if c in tab and pd.notna(tab.loc[best, c]) and float(tab.loc[best, c]) >= 0.005]
+                   if c in tab and _has_tail_dependence(tab.loc[best, c])]
             gain = f"AIC gain over Gaussian = {g - tab.loc[best, 'AIC']:.1f}"
             if lam:
                 which = " and ".join(s for s, _ in lam)
