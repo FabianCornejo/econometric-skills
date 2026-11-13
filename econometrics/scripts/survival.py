@@ -63,18 +63,73 @@ def logrank(df: pd.DataFrame, duration: str, event: str, group: str, strata: str
             "conclusion": "survival differs across groups" if p < 0.05 else "no significant difference"}
 
 
-def _cox_sandwich(mod, res, status: np.ndarray, groups: np.ndarray):
-    """Lin-Wei sandwich H^-1 (sum over groups of s_g s_g') H^-1 from the score residuals, with the residual of a row
-    censored before the first event of its stratum set to 0 (statsmodels leaves it NaN). A NaN on a row with an
-    event is not touched, so it still shows up as NaN."""
+def _cox_score_residuals(time: np.ndarray, status: np.ndarray, X: np.ndarray, beta: np.ndarray,
+                         strata: np.ndarray | None = None, ties: str = "efron") -> np.ndarray:
+    """Score residuals of the Cox partial likelihood (Therneau & Grambsch 2000, sec. 3.7), by stratum, with Efron or
+    Breslow handling of tied event times. For an event time u with d tied events, risk-set sums S0_j, S1_j for
+    j = 0..d-1 remove the fraction j/d of the tied events (Efron; j/d = 0 for Breslow). A tied event's own term is
+    x_i minus the mean of the d weighted means; the compensator gives full weight to the rest of the risk set and
+    weight 1 - j/d to the tied events. A row censored before the first event of its stratum gets 0 (no event time
+    at or before it). The residuals add up to the score of the same likelihood (0 at its maximum).
+    (statsmodels' PHReg.score_residuals uses Breslow increments with any ties setting and returns NaN for rows
+    censored before the first event; v2.6.7 computes them here.)"""
+    n, p = X.shape
+    out = np.zeros((n, p))
+    strata = np.zeros(n) if strata is None else np.asarray(strata)
+    efron = ties == "efron"
+    for s in pd.unique(strata):
+        ix = np.flatnonzero(strata == s)
+        t, e, x = time[ix], status[ix].astype(bool), X[ix]
+        u_times = np.unique(t[e])
+        if len(u_times) == 0:
+            continue
+        eta = x @ beta
+        w = np.exp(eta - eta.max())                        # the scale cancels in every ratio below
+        o = np.argsort(t, kind="mergesort")
+        ts = t[o]
+        cw = np.cumsum(w[o][::-1])[::-1]                   # sum of w over t >= ts[k]
+        cwx = np.cumsum((w[o, None] * x[o])[::-1], axis=0)[::-1]
+        K = len(u_times)
+        a_r, a_d = np.zeros(K), np.zeros(K)
+        b_r, b_d, xbar_ev = np.zeros((K, p)), np.zeros((K, p)), np.zeros((K, p))
+        for k, u in enumerate(u_times):
+            j0 = np.searchsorted(ts, u, side="left")
+            tied = (t == u) & e
+            dd = int(tied.sum())
+            s0_d, s1_d = w[tied].sum(), (w[tied, None] * x[tied]).sum(axis=0)
+            f = np.arange(dd) / dd if efron else np.zeros(dd)
+            s0 = cw[j0] - f * s0_d
+            xb = (cwx[j0][None, :] - f[:, None] * s1_d[None, :]) / s0[:, None]
+            a_r[k], b_r[k] = (1 / s0).sum(), (xb / s0[:, None]).sum(axis=0)
+            a_d[k], b_d[k] = ((1 - f) / s0).sum(), ((1 - f)[:, None] * xb / s0[:, None]).sum(axis=0)
+            xbar_ev[k] = xb.mean(axis=0)
+        ca, cb = np.cumsum(a_r), np.cumsum(b_r, axis=0)
+        kk = np.searchsorted(u_times, t, side="right")    # number of event times <= t_i
+        has = kk > 0
+        A = np.where(has, ca[np.maximum(kk - 1, 0)], 0.0)
+        B = np.where(has[:, None], cb[np.maximum(kk - 1, 0)], 0.0)
+        ke = kk[e] - 1                                     # an event's own time
+        A[e] += a_d[ke] - a_r[ke]
+        B[e] += b_d[ke] - b_r[ke]
+        r = -(w[:, None] * (x * A[:, None] - B))
+        r[e] += x[e] - xbar_ev[ke]
+        out[ix] = r
+    return out
+
+
+def _cox_sandwich(mod, res, groups, ties: str):
+    """Lin-Wei sandwich I^-1 (sum over groups of s_g s_g') I^-1 from _cox_score_residuals. Clusters are coded with
+    pd.factorize (labels of any type); a missing cluster label is an error, not a cluster of its own."""
     from statsmodels.duration.hazard_regression import PHRegResults
+    codes, _ = pd.factorize(pd.Series(np.asarray(groups, dtype=object)), sort=False)
+    if (codes < 0).any():
+        raise ValueError(f"cluster has {(codes < 0).sum()} missing label(s): drop those rows or fill the cluster id")
     params = np.asarray(res.params)
-    sr = np.asarray(mod.score_residuals(params), dtype=float)
-    fix = np.isnan(sr).any(axis=1) & (status == 0)
-    sr[fix] = 0.0
-    _, gi = np.unique(groups, return_inverse=True)
-    sg = np.zeros((gi.max() + 1, sr.shape[1]))
-    np.add.at(sg, gi, sr)
+    strata = np.asarray(mod.strata) if getattr(mod, "strata", None) is not None else None
+    sr = _cox_score_residuals(np.asarray(mod.endog, float), np.asarray(mod.status), np.asarray(mod.exog, float),
+                              params, strata, ties)
+    sg = np.zeros((codes.max() + 1, sr.shape[1]))
+    np.add.at(sg, codes, sr)
     h_inv = np.linalg.inv(mod.hessian(params))
     cov = h_inv @ (sg.T @ sg) @ h_inv
     return PHRegResults(mod, params, cov, covariance_type="robust")
@@ -87,10 +142,11 @@ def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "
     cluster: groups for a sandwich (Lin-Wei) variance; robust=True uses each row as its
     own group when no cluster is given. Returns (result, hazard-ratio table).
 
-    The sandwich is computed here from statsmodels' score residuals (v2.6.7): statsmodels returns NaN for the
-    rows censored before the first event of their stratum, and its own robust covariance then came out NaN
-    (SE, CI and p all NaN in about a quarter of samples with early censoring). By definition those rows have a
-    score residual of 0 (no event time at or before them), which is what is used."""
+    The sandwich is computed here from score residuals of the same likelihood (v2.6.7, _cox_score_residuals):
+    statsmodels' own robust covariance was NaN whenever a row is censored before the first event of its stratum
+    (about a quarter of samples with early censoring) and, with tied event times and ties="efron", too small
+    (it uses Breslow increments). Checked against R survival::coxph(robust = TRUE) with ties, strata and clusters
+    (tools/r_reference/cox_v267_reference.R). A missing cluster label raises an error."""
     import statsmodels.formula.api as smf
     d = df.dropna(subset=[duration, event]).copy()
     kw = {"status": d[event].astype(int), "ties": ties}
@@ -106,7 +162,7 @@ def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "
         warnings.simplefilter("ignore")
         res = mod.fit(**fit_kw)
         if "groups" in fit_kw:
-            res = _cox_sandwich(mod, res, d[event].astype(int).to_numpy(), np.asarray(fit_kw["groups"]))
+            res = _cox_sandwich(mod, res, np.asarray(fit_kw["groups"]), ties)
     names = mod.exog_names
     b = np.asarray(res.params)
     se = np.asarray(res.bse)
