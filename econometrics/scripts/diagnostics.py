@@ -446,36 +446,119 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     2) y ~ x_endog + X_exog + v̂ by OLS; v̂ significant ⇒ x_endog is endogenous.
     y: Series; X_exog: DataFrame (no constant) or None; x_endog: DataFrame with 1+ columns;
     Z: DataFrame of excluded instruments. Also reports the first-stage F of the excluded instruments.
+    Instruments are counted by rank (v2.6.9): columns that are linear combinations of each other or of the
+    exogenous regressors add nothing, and "n_instruments" is the number that do; "warnings" says when some don't.
+    The first-stage F tests those n_instruments directions (Z net of the exogenous regressors), so a redundant
+    column changes neither the F nor the test. With fewer instruments than endogenous regressors the model is not
+    identified and the test is NaN (no first-stage line is printed); with no residual degrees of freedom left
+    (saturated first stage) the F and the test are NaN too. Rows with NaN are dropped; inf raises ValueError.
+    Known limits (v2.6.9): an instrument whose direction comes from one row (leverage 1) makes the HC2/HC3 F
+    arbitrary; an endogenous regressor that is an exact combination of W and Z gives a meaningless F and test; with
+    HC0 and few residual degrees of freedom the F can be high on noise. Check the design in those cases.
     """
     parts = [y, x_endog, Z] if X_exog is None else [y, X_exog, x_endog, Z]
     d = pd.concat(parts, axis=1).dropna()
     yy = d[y.name]
     Xe = sm.add_constant(d[X_exog.columns]) if X_exog is not None and len(X_exog.columns) else \
         pd.DataFrame({"const": np.ones(len(d))}, index=d.index)
+    # v2.6.9: one rule both counts the excluded instruments and picks the directions the first-stage F tests (v2.6.8
+    # review, round 2; v2.6.9 review, rounds 1 and 2).
+    # - W: orthonormal basis Q_W of the exogenous regressors (columns divided by their largest entry, SVD with
+    #   numpy's rank tolerance). Using Q_W in the regressions keeps their span, so v̂, the first-stage F and the
+    #   Durbin-Wu-Hausman test are unchanged, and the leverages of HC2/HC3 stay accurate with near-collinear W.
+    # - Z: centred (the constant is always in W, so the span is the same; an offset such as 5e12 + z no longer hides
+    #   z), divided by the largest entry (units do not matter; all-zero columns drop out), and projected off Q_W.
+    # - n_z = number of singular values of that residual above eps·max(n, k)·(largest singular value of [W, Z]);
+    #   the F tests those n_z directions. z and 2z count once; z and 3w (w exogenous) count once, and the F is the F
+    #   of z alone (round 1: 196, "strong", against 4.4).
+    def _unit(M):
+        M = np.asarray(M, dtype=float)
+        if not M.shape[1]:
+            return M
+        m = np.max(np.abs(M), axis=0)
+        return M[:, m > 0] / m[m > 0]
+    if not np.all(np.isfinite(d.to_numpy(dtype=float))):
+        raise ValueError("endogeneity_test: the data contain inf; replace or drop those rows first")
+    n_obs = len(d)
+    eps = np.finfo(float).eps
+    # W is centred too (the constant is put back, so the span is the same): an offset such as 1e13 + w no longer
+    # drops w from the basis (v2.6.9 review, round 3)
+    X0 = Xe.to_numpy(dtype=float)
+    Wm = np.column_stack([np.ones(n_obs), _unit(X0 - X0.mean(axis=0))])
+    UW, sW, _ = np.linalg.svd(Wm, full_matrices=False)
+    r_w = int(np.sum(sW > sW.max() * max(Wm.shape) * eps)) if sW.size else 0
+    QW = UW[:, :r_w]
+    Zraw = d[Z.columns].to_numpy(dtype=float)
+    Zc = _unit(Zraw - Zraw.mean(axis=0))
+    if Zc.shape[1]:
+        Zr = Zc - QW @ (QW.T @ Zc)
+        UZ, sZ, _ = np.linalg.svd(Zr, full_matrices=False)
+        s_all = max(sW.max() if sW.size else 0.0, np.linalg.svd(Zc, compute_uv=False).max())
+        # floor for the rounding left by centring a column with a large offset: an entry of 1e5 + z carries an error
+        # of about eps·1e5, which centring and scaling amplify by max|raw| / max|centred| (round 3: z and z + 1e5
+        # counted as two instruments)
+        zr_max = np.max(np.abs(Zraw), axis=0)
+        zc_max = np.max(np.abs(Zraw - Zraw.mean(axis=0)), axis=0)
+        amp = float(np.max(zr_max[zc_max > 0] / zc_max[zc_max > 0])) if np.any(zc_max > 0) else 1.0
+        tol = max(s_all * max(n_obs, r_w + Zc.shape[1]) * eps,
+                  2 * eps * amp * (np.sqrt(n_obs) + np.sqrt(Zc.shape[1])))
+        n_z = int(np.sum(sZ > tol))
+    else:
+        n_z = 0
+    n_x = len(x_endog.columns)
+    warn = []
+    if n_z < len(Z.columns):
+        warn.append(f"{len(Z.columns)} instrument column(s), but only {n_z} add information beyond each other and the "
+                    "exogenous regressors (the rest are constant or linear combinations): the model is counted with "
+                    + (f"{n_z} instrument(s), and the first-stage F tests only those." if n_z >= n_x and n_z else
+                       f"{n_z} instrument(s)." if n_z else "no instrument, so there is no first stage to test."))
+    fs_saturated = n_z > 0 and n_obs - r_w - n_z <= 0
+    test_saturated = n_obs - r_w - 2 * n_x <= 0
+    if fs_saturated or (test_saturated and n_z >= n_x):
+        warn.append(f"{'the first stage' if fs_saturated else 'the test regression'} is saturated ({n_obs} rows for "
+                    f"{r_w} exogenous directions, {n_z} instrument(s) and {n_x} endogenous regressor(s)): no residual "
+                    "degrees of freedom, so " + ("the first-stage F and the test are" if fs_saturated else
+                                                 "the test is") + " not computed.")
+    saturated = fs_saturated or test_saturated
+    Wq = pd.DataFrame(QW, index=d.index, columns=[f"_wdir{k + 1}" for k in range(r_w)])
+    if n_z > 0:
+        Zeff = pd.DataFrame(UZ[:, :n_z], index=d.index, columns=[f"_zdir{k + 1}" for k in range(n_z)])
     resids, f_first = {}, {}
     for c in x_endog.columns:
-        Zfull = pd.concat([Xe, d[Z.columns]], axis=1)
-        fs = sm.OLS(d[c], Zfull).fit(cov_type=cov_type)
-        R = np.zeros((len(Z.columns), Zfull.shape[1])); R[:, -len(Z.columns):] = np.eye(len(Z.columns))
-        f_first[c] = float(fs.wald_test(R, scalar=True, use_f=True).statistic)
+        if n_z > 0 and not fs_saturated:
+            fs = sm.OLS(d[c], pd.concat([Wq, Zeff], axis=1)).fit(cov_type=cov_type)
+            R = np.zeros((n_z, fs.params.shape[0])); R[:, -n_z:] = np.eye(n_z)
+            f_first[c] = float(fs.wald_test(R, scalar=True, use_f=True).statistic)
+        else:
+            fs = sm.OLS(d[c], pd.concat([Wq, Zeff], axis=1) if n_z > 0 else Wq).fit()
+            f_first[c] = float("nan")
         resids[f"vhat_{c}"] = fs.resid
     V = pd.DataFrame(resids)
-    est = sm.OLS(yy, pd.concat([Xe, d[x_endog.columns], V], axis=1)).fit(cov_type=cov_type)
-    Rv = np.zeros((V.shape[1], est.params.shape[0])); Rv[:, -V.shape[1]:] = np.eye(V.shape[1])
-    w = est.wald_test(Rv, scalar=True, use_f=True)
-    out = {"first_stage_F": f_first, "statistic": float(w.statistic), "p": float(w.pvalue)}
+    identified = n_z >= n_x and n_z > 0 and not saturated
+    if identified:
+        est = sm.OLS(yy, pd.concat([Wq, d[x_endog.columns], V], axis=1)).fit(cov_type=cov_type)
+        Rv = np.zeros((V.shape[1], est.params.shape[0])); Rv[:, -V.shape[1]:] = np.eye(V.shape[1])
+        w = est.wald_test(Rv, scalar=True, use_f=True)
+        stat_, p_ = float(w.statistic), float(w.pvalue)
+    else:
+        stat_, p_ = float("nan"), float("nan")
+    out = {"first_stage_F": f_first, "statistic": stat_, "p": p_, "n_instruments": n_z,
+           "warnings": warn}
     if show:
-        for c, f in f_first.items():
+        for m in warn:
+            print("\nWarning:", m)
+        for c, f in (f_first.items() if n_z >= n_x and n_z > 0 and not fs_saturated else ()):
             print(f"\nFirst stage for {c}: F of excluded instruments = {f:.2f} → {_first_stage_label(f)}")
         weak = any(not f > 10 for f in f_first.values())          # NaN counts as weak, as its label says
         multi = len(f_first) > 1
         joint = (f" With {len(f_first)} endogenous regressors, each first-stage F above does not show that they are "
                  "jointly identified: check Shea's partial R² (linearmodels IV2SLS(...).fit().first_stage) or the "
                  "Sanderson-Windmeijer F before using 2SLS.") if multi else ""
-        n_z, n_x = len(Z.columns), len(f_first)
         if n_z < n_x:
             verdict = (f"not identified: {n_z} excluded instrument(s) for {n_x} endogenous regressors, so IV/2SLS "
                        "is impossible and this test is not informative.")
+        elif saturated:
+            verdict = "not computed: the regressions are saturated (see the warning)."
         else:
             if out["p"] < ALPHA:
                 # v2.6.8: LIML equals 2SLS when the model is exactly identified, so it is offered only with more
@@ -543,14 +626,15 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     (found on a grid of ±20 SEs around 2SLS; it can be unbounded, or the complement of an interval; ±inf marks a
     piece that reaches the grid edge). The robust first-stage statistic is reported as an F (Wald χ²/q). The 104.7
     threshold is for one instrument. Exogeneity of an instrument cannot be tested with just one: it is an
-    argument, not a statistic."""
+    argument, not a statistic. Instruments and endogenous regressors are counted on the model's columns
+    (`[x ~ z1*z2]` has three instruments: z1, z2 and z1:z2), and the "instruments" and "endogenous" keys list
+    those columns."""
     from linearmodels.iv import IV2SLS
     robust = cov_type != "unadjusted"
     iv = IV2SLS.from_formula(formula, data).fit(cov_type=cov_type)
     lhs, rhs = formula.split("~", 1)
     endog_part = rhs[rhs.index("[") + 1: rhs.index("]")]
     endog_names = [e.strip() for e in endog_part.split("~")[0].split("+")]
-    instr_names = [e.strip() for e in endog_part.split("~")[1].split("+")]
     exog_rhs = (rhs[:rhs.index("[")] + rhs[rhs.index("]") + 1:]).strip().strip("+").strip()
     ols_rhs = " + ".join([p for p in (exog_rhs, " + ".join(endog_names)) if p])
     warn = []
@@ -566,7 +650,12 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     ci = iv.conf_int(level=1 - alpha)
     table["2SLS ci_low"], table["2SLS ci_high"] = ci.iloc[:, 0], ci.iloc[:, 1]
     diag = iv.first_stage.diagnostics
-    q_instr = len(instr_names)
+    # v2.6.9: instruments and endogenous regressors are counted on the model's columns, not on the formula's
+    # terms: [x ~ z1*z2] has 3 instruments (z1, z2, z1:z2), and counting 1 made the partial F three times too
+    # large and skipped the overidentification test (v2.6.8 review)
+    endog_cols = [str(c) for c in iv.model.endog.cols]
+    instr_cols = [str(c) for c in iv.model.instruments.cols]
+    n_endog, q_instr = len(endog_cols), len(instr_cols)
     # linearmodels reports the robust first-stage statistic as a Wald chi2(q); F = chi2 / q
     fstat = [float(v) / q_instr if str(dist).lower().startswith("chi2") else float(v)
              for v, dist in zip(diag["f.stat"], diag["f.dist"])]
@@ -579,7 +668,7 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     if (fs["partial F"] < 10).any():
         # v2.6.8: LIML only when overidentified (exactly identified, LIML equals 2SLS). Counted on the model's
         # columns, not the formula's terms: [x ~ z1*z2] has 3 instruments (review, round 1)
-        exact_id = iv.model.instruments.shape[1] == iv.model.endog.shape[1]
+        exact_id = q_instr == n_endog
         warn.append("weak instrument(s): 2SLS is biased toward OLS and its t-intervals undercover; use the "
                     + ("Anderson-Rubin set and say so (LIML does not help here: exactly identified, it equals 2SLS)"
                        if exact_id else "Anderson-Rubin set (or LIML) and say so"))
@@ -588,7 +677,7 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     tests.append({"test": "endogeneity (" + ("Wooldridge robust regression" if robust else "Wu-Hausman") + ")",
                   "H0": "regressors are exogenous: OLS is consistent", "statistic": float(endo.stat),
                   "p": float(endo.pval)})
-    q = len(instr_names) - len(endog_names)
+    q = q_instr - n_endog
     if q > 0:
         ov = iv.wooldridge_overid if robust else iv.sargan
         tests.append({"test": "overidentification (" + ("Wooldridge robust score" if robust else "Sargan") + f", {q} df)",
@@ -596,12 +685,12 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
                       "p": float(ov.pval)})
     tests = pd.DataFrame(tests).set_index("test")
     ar = None
-    if len(endog_names) == 1:
+    if n_endog == 1:
         yv = np.asarray(iv.model.dependent.ndarray).ravel()
         xv = np.asarray(iv.model.endog.ndarray).ravel()
         W = np.asarray(iv.model.exog.ndarray)
         Z = np.asarray(iv.model.instruments.ndarray)
-        b, s = float(iv.params[endog_names[0]]), float(iv.std_errors[endog_names[0]])
+        b, s = float(iv.params[endog_cols[0]]), float(iv.std_errors[endog_cols[0]])
         grid = np.linspace(b - 20 * s, b + 20 * s, ar_grid)
         pv = np.array([_ar_pvalue(yv, xv, W, Z, g, robust) for g in grid])
         acc = pv > alpha
@@ -625,16 +714,16 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
             shape = "disjoint (union of intervals)"
         lo = pieces[0][0] if pieces else np.nan
         hi = pieces[-1][1] if pieces else np.nan
-        ar = {"estimand": endog_names[0], "ci_low": lo, "ci_high": hi, "pieces": pieces, "shape": shape,
+        ar = {"estimand": endog_cols[0], "ci_low": lo, "ci_high": hi, "pieces": pieces, "shape": shape,
               "p_at_zero": _ar_pvalue(yv, xv, W, Z, 0.0, robust), "level": 1 - alpha}
         if shape != "bounded interval":
             warn.append(f"Anderson-Rubin set is {shape}: the data do not pin down the effect")
     out = {"table": table, "first_stage": fs, "tests": tests, "anderson_rubin": ar, "n": int(iv.nobs),
-           "endogenous": endog_names, "instruments": instr_names, "overidentified_by": q, "cov_type": cov_type,
+           "endogenous": endog_cols, "instruments": instr_cols, "overidentified_by": q, "cov_type": cov_type,
            "warnings": warn, "iv": iv, "ols": ols}
     if show:
-        print(f"\nIV report (n = {out['n']}, cov_type = {cov_type}); endogenous: {', '.join(endog_names)}; "
-              f"instruments: {', '.join(instr_names)}")
+        print(f"\nIV report (n = {out['n']}, cov_type = {cov_type}); endogenous: {', '.join(endog_cols)}; "
+              f"instruments: {', '.join(instr_cols)}")
         print(table.to_string(float_format=_fmt))
         print("\nFirst stage (excluded instruments):")
         print(fs.to_string(float_format=_fmt))
