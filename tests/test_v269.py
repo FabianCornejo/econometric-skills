@@ -171,7 +171,7 @@ check("two endogenous, three instruments, weak: '(or LIML)' (other side)",
 # into two "endogenous" names (exactly identified, no AR set, no overidentification test), and I(xl*1) stopped with
 # KeyError: 'I(xl*1)' (the column is 'I(xl * 1)')
 dl = de.assign(xl=de.x + 10.0)
-lg, _ = quiet(dg.iv_report, "y ~ 1 + [np.log(xl+10) ~ z1 + z2]", dl)
+lg, tlg = quiet(dg.iv_report, "y ~ 1 + [np.log(xl+10) ~ z1 + z2]", dl)
 li, _ = quiet(dg.iv_report, "y ~ 1 + [I(xl*1) ~ z1 + z2]", dl)
 check("transformed endogenous terms (np.log(xl+10), I(xl*1)): one endogenous column each, overidentified by 1, "
       "and the Anderson-Rubin set computed for the model's column",
@@ -179,6 +179,32 @@ check("transformed endogenous terms (np.log(xl+10), I(xl*1)): one endogenous col
       and lg["anderson_rubin"] is not None and lg["anderson_rubin"]["estimand"] == "np.log(xl + 10)"
       and li["endogenous"] == ["I(xl * 1)"] and li["anderson_rubin"]["estimand"] == "I(xl * 1)",
       (lg["endogenous"], lg["overidentified_by"], li["endogenous"]))
+
+check("overidentified by 1: the 1-df test is printed and 'Exactly identified' is not (boundary q = 0 / q = 1)",
+      "1 df" in tlg and "Exactly identified" not in tlg, tlg[-400:])
+# instruments with a '+' inside a term or repeated (round 2): on main I(z1+z2) became two "instruments" ('I(z1',
+# 'z2)'), so the F was halved (3.75 against 7.51) and an overidentification test with NaN ran; z1 + z1 likewise
+rng = np.random.default_rng(5)
+z1, z2, u, v = rng.normal(size=(4, n))
+x = 0.1 * z1 + 0.1 * np.log(z2 + 10) + v + 0.5 * u
+dp = pd.DataFrame(dict(y=1 + 0.5 * x + u, x=x, z1=z1, z2=z2, zs=z1 + z2))
+ip, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ I(z1+z2)]", dp)
+iz, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ zs]", dp)
+i2, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z1 + z1]", dp)
+i1, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z1]", dp)
+check("[x ~ I(z1+z2)] = [x ~ zs] with zs = z1 + z2: one instrument, exactly identified, the same F (1e-10)",
+      ip["instruments"] == ["I(z1 + z2)"] and ip["overidentified_by"] == 0 and len(ip["tests"]) == 1
+      and close(ip["first_stage"]["partial F"].iloc[0], iz["first_stage"]["partial F"].iloc[0], 1e-10),
+      (ip["instruments"], ip["first_stage"]["partial F"].iloc[0], iz["first_stage"]["partial F"].iloc[0]))
+check("[x ~ z1 + z1] = [x ~ z1]: one instrument, the same F (1e-10)",
+      i2["instruments"] == ["z1"] and i2["overidentified_by"] == 0
+      and close(i2["first_stage"]["partial F"].iloc[0], i1["first_stage"]["partial F"].iloc[0], 1e-10),
+      (i2["instruments"], i2["first_stage"]["partial F"].iloc[0]))
+# the 104.7 note with exactly 2 instruments (boundary q_instr = 1 / 2; round 2)
+n2, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z1 + z2]", dp)
+check("two instruments: the one-instrument note on 104.7 is there (one instrument: absent, checked above)",
+      n2["first_stage"]["strength"].iloc[0].endswith("[104.7 is the one-instrument threshold of Lee et al.]"),
+      n2["first_stage"]["strength"].iloc[0])
 
 # ---------------------------------------------------- 5. endogeneity_test: instruments counted by rank
 # Seed 2701: the first design found by claude/scripts/busca_endog_colinear_v269.py with p < .05 and F <= 10.
