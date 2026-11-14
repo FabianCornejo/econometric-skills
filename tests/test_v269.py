@@ -140,6 +140,19 @@ check("[x*w ~ z1*z2]: three endogenous columns (x, w, x:w) and three instruments
       and inter["anderson_rubin"] is None and "Exactly identified" in ti and "Anderson-Rubin 95%" not in ti,
       (inter["endogenous"], inter["overidentified_by"]))
 
+# transformed endogenous terms are named by the model with spaces. On main, the '+' inside np.log(xl+10) split it
+# into two "endogenous" names (exactly identified, no AR set, no overidentification test), and I(xl*1) stopped with
+# KeyError: 'I(xl*1)' (the column is 'I(xl * 1)')
+dl = de.assign(xl=de.x + 10.0)
+lg, _ = quiet(dg.iv_report, "y ~ 1 + [np.log(xl+10) ~ z1 + z2]", dl)
+li, _ = quiet(dg.iv_report, "y ~ 1 + [I(xl*1) ~ z1 + z2]", dl)
+check("transformed endogenous terms (np.log(xl+10), I(xl*1)): one endogenous column each, overidentified by 1, "
+      "and the Anderson-Rubin set computed for the model's column",
+      lg["endogenous"] == ["np.log(xl + 10)"] and lg["overidentified_by"] == 1 and len(lg["tests"]) == 2
+      and lg["anderson_rubin"] is not None and lg["anderson_rubin"]["estimand"] == "np.log(xl + 10)"
+      and li["endogenous"] == ["I(xl * 1)"] and li["anderson_rubin"]["estimand"] == "I(xl * 1)",
+      (lg["endogenous"], lg["overidentified_by"], li["endogenous"]))
+
 # ---------------------------------------------------- 5. endogeneity_test: instruments counted by rank
 # Seed 2701: the first design found by claude/scripts/busca_endog_colinear_v269.py with p < .05 and F <= 10.
 rng = np.random.default_rng(2701)
@@ -204,7 +217,7 @@ m = re.search(r"^## v2\.6\.9 — .*?(?=^## v)", log, re.M | re.S)
 e269 = m.group(0) if m else ""
 check("CHANGELOG has a v2.6.9 entry, above v2.6.8, naming both fixes and the consistency test",
       bool(m) and log.index("## v2.6.9") < log.index("## v2.6.8")
-      and all(t in e269 for t in ("`[x ~ z1*z2]`", "7.96 instead of 2.65", "KeyError: 'x*w'", "counted by rank",
+      and all(t in e269 for t in ("`[x ~ z1*z2]`", "7.96 instead of 2.65", "`[np.log(x+10) ~ z1 + z2]`", "counted by rank",
                                   "`n_instruments`", "tests/test_release_consistency.py")), e269[:300])
 ver = tuple(int(p_) for p_ in reporting.SKILL_VERSION.split("."))
 check("SKILL_VERSION is 2.6.9 or later (not pinned as the last version)", ver >= (2, 6, 9), reporting.SKILL_VERSION)
