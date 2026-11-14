@@ -731,11 +731,35 @@ V266_SUM = (" The point where significance is lost is a number (OLS: `k_not_sign
             "with that number in every sentence, the opening summary and the chat reply included, never rounded to 1x "
             "(\"as strong as X\" with no number) or to \"weaker than X\" (`interpretation-rules.md`, v2.6.3 and v2.6.6).")
 V266 = (V266_OVB, V266_DML, V266_SUM)
+# v2.6.10 (CHANGELOG v2.6.10) added one sentence to the number rule and rewrote three pieces of the delivery rule:
+# the locator's paths, listed again in the "Script skeleton" of interpretation-rules.md, left section 4, and the cut
+# sentence ". and test it" was repaired. Each pair is (text now, text in v2.5.0); swapping them back rebuilds v2.5.0.
+V2610_NUM = (" Every number in the reply, its summary and the document, including the ones worked out from printed "
+             "numbers (a sum of coefficients or a combined slope, an MDE, an interval, a percentage), is printed by the "
+             "script before it is written; saying it is your own arithmetic does not exempt it "
+             "(`interpretation-rules.md`, v2.6.8 and v2.6.10).")
+V2610_SUBS = (
+    ("(\"Script skeleton\"), which finds the skill so the user runs the file without editing paths and turns a "
+     "missing package into a one-line install instruction; never put",
+     "(\"Script skeleton\"): it takes `ECONOMETRICS_SKILL_DIR` if set, else finds the Claude Code plugin "
+     "(`~/.claude/plugins/marketplaces/econometric-skills/econometrics`), any copy under `~/.claude/skills` (including "
+     "the one synced from the Claude app, `~/.claude/skills/synced/.../econometrics`) or the user's clone, so the "
+     "user runs the file without editing paths; never put"),
+    ("(in your own environment, set `ECONOMETRICS_SKILL_DIR` instead). In Claude Code",
+     "(in your own environment, set the variable instead). It also turns a missing package into a one-line "
+     "instruction to run `scripts/setup_env.py --install`. In Claude Code"),
+    ("which the system may delete. Test the script on data", "which the system may delete. and test it on data"),
+)
 sec4_v250 = sec4.replace(V251_ASK, "", 1).replace(V251_DID, "", 1)
 for piece in V266:
     sec4_v250 = sec4_v250.replace(piece, "", 1)
-check("SKILL.md section 4 (non-negotiable rules), minus the documented v2.5.1 and v2.6.6 additions, is byte-identical "
-      "to v2.5.0 (SHA-256 pinned, works in a shallow CI checkout)", V251_ASK in sec4 and V251_DID in sec4
+sec4_v250 = sec4_v250.replace(V2610_NUM, "", 1)
+for now, then in V2610_SUBS:
+    sec4_v250 = sec4_v250.replace(now, then, 1)
+check("SKILL.md section 4 (non-negotiable rules), minus the documented v2.5.1, v2.6.6 and v2.6.10 changes, is "
+      "byte-identical to v2.5.0 (SHA-256 pinned, works in a shallow CI checkout)", V251_ASK in sec4 and V251_DID in sec4
+      and sec4.count(V2610_NUM) == 1 and all(sec4.count(now) == 1 for now, _ in V2610_SUBS)
+      and "a cited source." + V2610_NUM + "\n" in sec4
       and all(sec4.count(piece) == 1 for piece in V266)
       # each piece where the CHANGELOG says it is (review 1 of v2.6.6: moving the sentence passed the hash)
       and "(`specification.sensitivity`" + V266_OVB + ";" in sec4

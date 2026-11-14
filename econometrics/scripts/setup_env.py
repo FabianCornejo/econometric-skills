@@ -1021,8 +1021,14 @@ def print_doctor(rep: dict) -> None:
               "ones included; install or change nothing before the answer):")
         for k, a in enumerate(rep["actions"], 1):
             print(f"  {k}. {a}")
-    else:
+    elif lt["version"]:
         print("\nNothing to do: the setup is complete and up to date.")
+    else:   # v2.6.10: never "up to date" when the latest release was not checked
+        print(f"\nNothing to do in this setup; the latest release was {lt['status']}, so the skill "
+              "may be out of date.")
+    if lt.get("status") == "not checked (--offline)":   # v2.6.10: last line, so a tail of the output still shows it
+        print("Latest release not checked (--offline): if this computer has network, run --doctor again without "
+              "--offline before answering.")
 
 
 def main(argv=None) -> int:
