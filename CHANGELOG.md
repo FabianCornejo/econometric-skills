@@ -2,6 +2,23 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.6.9 — IV: instruments and endogenous regressors counted on the model's columns; instruments counted by rank in the endogeneity test; one check count everywhere
+
+Origin: the v2.6.8 review. In round 1, reviewer B found that `diagnostics.iv_report` counted instruments by the formula's terms. In round 2 (NIT 4), `diagnostics.endogeneity_test` counted collinear instrument columns as separate instruments. Item #5 of the structural optimization proposal of 2026-11-13 also goes in: the check count had drifted between the README and the marketplace.
+
+- **Fix: `diagnostics.iv_report` counted instruments and endogenous regressors by the formula's terms.** With `[x ~ z1*z2]` (three instrument columns: z1, z2, z1:z2) the robust first-stage F was the Wald χ² divided by 1 instead of 3, so it was three times too large: 7.96 instead of 2.65 in the review's design. A weak instrument could therefore pass the F > 10 rule. The overidentification test was skipped (`overidentified_by` 0 instead of 2), and the 104.7 note was dropped. With `[x*w ~ z1*z2]` the report stopped with `KeyError: 'x*w'`. Both counts now use the model's columns, and the `instruments` and `endogenous` keys and the printed header list them. With `cov_type="unadjusted"` the F was already right, because linearmodels reports it as an F. Models written term by term give the same numbers as before.
+- **Fix: `diagnostics.endogeneity_test` counted instruments with `len(Z.columns)`.** With z and 2z, a single instrument looked like overidentification, and the advice offered LIML, which equals 2SLS here. Instruments are now counted by rank, net of the exogenous regressors, on unit-norm columns. The F and the p were already right. A new warning says how many columns add information, and a new key, `n_instruments`, gives that number.
+- **`tests/test_release_consistency.py`**: the README's "**N checks**" and the marketplace's "N tested checks" must agree, and so must the version in the marketplace, `reporting.SKILL_VERSION` and the top of this file. The count itself is not pinned.
+- **`VALIDATION.md`**: the rows of `iv_report` and `endogeneity_test` cite the new checks. No level changes.
+- **Tests**: `tests/test_v269.py` (26 checks):
+  - A metamorphic check: `z1*z2` gives the same numbers as `z1 + z2 + z12`.
+  - The robust partial F against statsmodels' HC0 Wald F.
+  - The unadjusted F against the two sums of squared residuals.
+  - Sargan by hand.
+  - Both sides of exact identification, collinear and rescaled instruments, and an instrument that is a multiple of an exogenous regressor.
+
+  Directed mutation: every mutant is caught by a check.
+
 ## v2.6.8 — Exact Oster: alternatives by side and truthful texts on the spurious root; ρ-clipping rates measured for each check; LIML only when overidentified
 
 Origin: deferred findings of the v2.5.2 review (the Assumption 3 side test used `np.sign` with no tolerance; the docstring tied the spurious root to "a single control"; `beta_star_alternatives` mixed both sides; a project-install version that is not a release number), the backlog triage of 2026-11-12 (the placebo warning quoted "about 18%"), and the v2.6.7 validation on notebook 1 (LIML recommended in an exactly identified model; an interval worked out in the reply).
