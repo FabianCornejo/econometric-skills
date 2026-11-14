@@ -577,8 +577,9 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     if q_instr > 1:
         fs["strength"] += " [104.7 is the one-instrument threshold of Lee et al.]"
     if (fs["partial F"] < 10).any():
-        # v2.6.8: LIML only when overidentified (exactly identified, LIML equals 2SLS)
-        exact_id = len(instr_names) == len(endog_names)
+        # v2.6.8: LIML only when overidentified (exactly identified, LIML equals 2SLS). Counted on the model's
+        # columns, not the formula's terms: [x ~ z1*z2] has 3 instruments (review, round 1)
+        exact_id = iv.model.instruments.shape[1] == iv.model.endog.shape[1]
         warn.append("weak instrument(s): 2SLS is biased toward OLS and its t-intervals undercover; use the "
                     + ("Anderson-Rubin set and say so (LIML does not help here: exactly identified, it equals 2SLS)"
                        if exact_id else "Anderson-Rubin set (or LIML) and say so"))

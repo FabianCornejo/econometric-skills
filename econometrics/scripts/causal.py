@@ -3272,11 +3272,11 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
                          f"{chk['p']:.3f}), so that finding stands and is if anything understated.")
             else:
                 # v2.6.8: rates measured for each check in its own design (20000 stationary AR(1) series per cell,
-                # claude/scripts/corte_rho_v268.py); the 18% quoted before was the main step's, for the trend test
+                # development repository, claude/scripts/corte_rho_v268.py); the 18% quoted before was the main step's, for the trend test
                 # and for the placebo alike, and the placebo never runs on 12 periods
                 often = ("about 21% of 12-period and 10% of 16-period pre-periods with ρ = 0.4, 4.5% with 20"
                          if nm == "pre-period trend test" else
-                         "about 7% of 16-period pre-periods with ρ = 0.4 and 4% with 20")
+                         "about 7% of 16-period pre-periods with ρ = 0.4 and 3.5% with 20")
                 w.append(f"The {nm} found the pre-period gap close to a unit root (ρ above 0.95, clipped; "
                          f"{T0} pre periods): that check did not reject, but it is not informative either. Short "
                          f"pre-periods with moderate persistence do this often ({often}, in the skill's checks).")

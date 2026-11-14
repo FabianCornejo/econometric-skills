@@ -46,9 +46,12 @@ check("version in CHANGELOG (top), reporting.SKILL_VERSION and marketplace.json 
       first.group(1) == reporting.SKILL_VERSION == mk["plugins"][0]["version"] and _vt(first.group(1)) >= (2, 6, 7),
       (first.group(1), reporting.SKILL_VERSION, mk["plugins"][0]["version"]))
 top = re.search(r"^## v(2\.6\.7) — (.*)$", cl, re.M)
-entry = cl[top.start():cl.index("\n## v", top.end())]
+check("the v2.6.7 entry exists, under newer entries only", top is not None
+      and all(_vt(v) > (2, 6, 7) for v in re.findall(r"^## v(\S+) — ", cl[:top.start()], re.M)))
+entry = cl[top.start():cl.index("\n## v", top.end())] if top else ""
+title = top.group(2) if top else ""
 check("the v2.6.7 entry names the three subjects (show tests, validation diary, Cox SEs) in its title",
-      "`show`" in top.group(2) and "validation diary" in top.group(2) and "Cox" in top.group(2), top.group(2))
+      "`show`" in title and "validation diary" in title and "Cox" in title, title)
 val = (ROOT / "VALIDATION.md").read_text(encoding="utf-8")
 lv = Counter(m.group(1) for m in re.finditer(r"^\| `[a-z_]+\.[A-Za-z0-9_]+` \| ([ABCD]) \|", val, re.M))
 diffs = json.loads((ROOT / "tools" / "validation_diffs.json").read_text(encoding="utf-8"))["functions"]

@@ -83,35 +83,47 @@ check("orthogonal control: psacalc/robomit's choice is still computed from the �
       all(np.isfinite(o["beta_star_psacalc"]) for _, _, o in orth))
 
 
-# Both sides of the direction tolerance (1e-8 of the coefficients' scale): a control that moves β by about 1e-10
-# and 1e-9 of β̃ (rounding scale: no direction) and by about 1e-7 and 1e-6 (a real move: Oster's rule applies).
-def kappa_fits(kappa, seed=3):
+# Both sides of the direction tolerance (1e-8 of the coefficients' scale), in a non-degenerate design (review, round
+# 1: a control orthogonal to x makes σ²_x − τ_x ~ 1e-15 and the cubic degenerate). Two controls related to x whose
+# effects on β cancel, plus κ times the direction that moves β: κ = 0 and 3e-9 move it by ~1e-15 and 2.5e-9 of β̃
+# (below: no direction), κ = 3e-7 and 1e-5 by 2.5e-7 and 8.4e-6 (above: Oster's rule). The other roots, about 1.03
+# and −0.03, sit on either side of β̃ = 0.5. main gave nan or a β* jumping between 1.03 and −0.03 below.
+def cancel_fits(kappa, seed=1):
     rng = np.random.default_rng(seed)
     n = 500
-    x = rng.normal(size=n)
-    w = rng.normal(size=n)
-    w = w - np.polyval(np.polyfit(x, w, 1), x) + kappa * 0.5 / 0.8 * (x - x.mean())
-    y = 1 + 0.5 * x + 0.8 * w + rng.normal(size=n)
-    d = pd.DataFrame(dict(y=y, x=x, w=w))
-    return smf.ols("y ~ x", d).fit(), smf.ols("y ~ x + w", d).fit()
+    W = rng.normal(size=(n, 2))
+    x = W @ [0.8, 0.6] + rng.normal(size=n)
+    c = np.cov(np.column_stack([W, x]).T, ddof=1)[:2, 2]
+    A = np.column_stack([np.ones(n), x, W])
+    g = np.array([c[1], -c[0]])
+    g = g / np.linalg.norm(g) + kappa * c
+    e = rng.normal(size=n)
+    e = e - A @ np.linalg.lstsq(A, e, rcond=None)[0]
+    y = 1 + 0.5 * x + W @ g + e
+    d = pd.DataFrame(dict(y=y, x=x, w1=W[:, 0], w2=W[:, 1]))
+    return smf.ols("y ~ x", d).fit(), smf.ols("y ~ x + w1 + w2", d).fit()
 
 
-below = [oster(*kappa_fits(k), "x", delta=dl) for k in (1e-10, 1e-9) for dl in (0.5, 1.0, 2.0)]
-above = [oster(*kappa_fits(k), "x", delta=dl) for k in (1e-7, 1e-6) for dl in (0.5, 1.0, 2.0)]
 rel = lambda o: (o["beta_uncontrolled"] - o["beta_controlled"]) / abs(o["beta_controlled"])
-check("direction tolerance, below (β° − β̃ ~ 1e-10 and 1e-9 of β̃): β* exact equals β̃ exactly, nothing else listed",
-      all(1e-11 < abs(rel(o)) < 2e-9 and o["beta_star_exact"] == o["beta_controlled"]
-          and not o["beta_star_alternatives"] and not o["warnings"] for o in below),
-      [(rel(o), o["beta_star_exact"] - o["beta_controlled"]) for o in below])
-check("direction tolerance, above (~1e-7 and 1e-6 of β̃): β* moves off β̃, on the side of the move β° → β̃, and a "
-      "root on the other side goes to beta_star_forbidden_side, not to the admissible ones",
-      all(5e-8 < abs(rel(o)) < 2e-6 and o["beta_star_exact"] != o["beta_controlled"]
-          and np.sign(o["beta_star_exact"] - o["beta_controlled"]) == -np.sign(rel(o))
-          and not o["beta_star_admissible_alternatives"]
-          and all(np.sign(r - o["beta_controlled"]) == np.sign(rel(o)) for r in o["beta_star_forbidden_side"])
-          for o in above)
-      and sum(len(o["beta_star_forbidden_side"]) for o in above) >= 4,
-      [(rel(o), o["beta_star_exact"] - o["beta_controlled"], o["beta_star_forbidden_side"]) for o in above])
+below = [oster(*cancel_fits(k), "x", delta=dl) for k in (0.0, 3e-9) for dl in (0.5, 2.0)]
+above = [oster(*cancel_fits(k), "x", delta=dl) for k in (3e-7, 1e-5) for dl in (0.5, 2.0)]
+check("direction tolerance, below (β° − β̃ ≤ 2.5e-9 of β̃): β* exact equals β̃, nothing spurious or forbidden; "
+      "with δ = 2 the roots near 1.03 and −0.03 are both admissible and the warning says no root is ruled out",
+      all(abs(rel(o)) < 3e-9 and o["beta_star_exact"] == o["beta_controlled"] and not o["beta_star_spurious"]
+          and o["beta_star_forbidden_side"] == [] for o in below)
+      and all(sorted(round(r, 3) for r in o["beta_star_admissible_alternatives"]) == [-0.027, 1.027]
+              and any("no root is ruled out" in m for m in o["warnings"]) for o in below if o["delta"] == 2.0),
+      [(rel(o), o["beta_star_exact"] - o["beta_controlled"], o["beta_star_alternatives"], o["warnings"])
+       for o in below])
+check("direction tolerance, above (2.5e-7 and 8.4e-6 of β̃): β* moves off β̃ against β° − β̃, by less than 1e-4; "
+      "with δ = 2 the root near 1.03 (on the side of β°) is forbidden and the one near −0.03 admissible",
+      all(2e-7 < abs(rel(o)) < 1e-5 and 0 < abs(o["beta_star_exact"] - o["beta_controlled"]) < 1e-4
+          and np.sign(o["beta_star_exact"] - o["beta_controlled"]) == -np.sign(rel(o)) for o in above)
+      and all([round(r, 3) for r in o["beta_star_forbidden_side"]] == [1.027]
+              and [round(r, 3) for r in o["beta_star_admissible_alternatives"]] == [-0.027]
+              and not any("no root is ruled out" in m for m in o["warnings"]) for o in above if o["delta"] == 2.0),
+      [(rel(o), o["beta_star_exact"] - o["beta_controlled"], o["beta_star_forbidden_side"],
+        o["beta_star_admissible_alternatives"]) for o in above])
 # A genuine violation stays one (the other side of item 1, on the R reference data of tests/test_v252.py).
 mt = pd.read_csv(ROOT / "tools" / "r_reference" / "output" / "mtcars.csv")
 m0_mt, m1_mt = smf.ols("mpg ~ wt", mt).fit(), smf.ols("mpg ~ wt + hp + qsec", mt).fit()
@@ -120,9 +132,9 @@ check("a genuine violation (mtcars, δ = 2, R_max = 0.9) still says Assumption 3
       any("Assumption 3" in m and "Do not report" in m for m in o["warnings"]), o["warnings"])
 
 
-# --------------------------------------------- 2. Oster: the spurious root by its cause, with two controls as well
-# y = 0.5 x + 0.7 π'W + ε·w2 + e, with e orthogonal to (1, x, W): at ε = 0 the controls' coefficients in y are
-# proportional to their coefficients in x, so the numerator of δ*(β) vanishes at the pole with two controls.
+# ------------------------------------- 2. Oster: the spurious root, with two controls too (classification as v2.6.7)
+# y = 0.5 x + 0.7 π'W + e, with e orthogonal to (1, x, W): the controls' coefficients in y are proportional to their
+# coefficients in x, so the numerator of δ*(β) vanishes at the pole with two controls.
 def eps_fits(seed, eps):
     rng = np.random.default_rng(seed)
     n = 400
@@ -151,28 +163,67 @@ check("two controls with γ ∝ π: the identity holds to rounding, and a spurio
       "(the docstring used to say 'with a single control')",
       identity_rel(m0, m1, d0) < 1e-12 and all(len(o["beta_star_spurious"]) == 1 for o in o2),
       [identity_rel(m0, m1, d0)] + [o["beta_star_spurious"] for o in o2])
-check("the spurious warning no longer ties it to a single control",
-      any("lines up with their relation to the treatment" in m for m in o2[1]["warnings"])
-      and not any("with a single control it appears" in m for o in o2 for m in o["warnings"]), o2[1]["warnings"])
-# The two sides of the 1e-6 identity tolerance: ε = 3e-4 (identity off by ~4e-7) and ε = 1e-3 (~4e-6), δ = 20.
-m0a, m1a, da = eps_fits(0, 3e-4)
-m0b, m1b, db = eps_fits(0, 1e-3)
-oa, ob = oster(m0a, m1a, "x", delta=20.0), oster(m0b, m1b, "x", delta=20.0)
-ra, rb = identity_rel(m0a, m1a, da), identity_rel(m0b, m1b, db)
-check("identity off by less than 1e-6 (ε = 3e-4): the root at the pole is spurious, β* is nan",
-      1e-7 < ra < 1e-6 and len(oa["beta_star_spurious"]) == 1 and np.isnan(oa["beta_star_exact"]), (ra, oa))
-pole_b = ob["beta_controlled"] + (ob["beta_uncontrolled"] - ob["beta_controlled"]) * (
-    ob["exact_inputs"]["sigma_xx"] / (ob["exact_inputs"]["sigma_xx"] - ob["exact_inputs"]["tau_x"]))
-dstar = sp._oster_exact_delta(ob["beta_uncontrolled"], ob["beta_controlled"], ob["r2_uncontrolled"],
-                              ob["r2_controlled"], ob["r_max"], ob["beta_star_exact"], *ob["exact_inputs"].values())
-check("identity off by more than 1e-6 (ε = 1e-3): the root next to the pole is not called spurious; it solves "
-      "δ*(β) = 20 by the δ formula, lies on the side of β°, and the warning is Assumption 3, not 'spurious'",
-      1e-6 < rb < 1e-5 and not ob["beta_star_spurious"] and abs(dstar - 20) < 1e-3
-      and abs(ob["beta_star_exact"] - pole_b) < 1e-5 * abs(pole_b)
-      and np.sign(ob["beta_star_exact"] - ob["beta_controlled"]) == np.sign(
-          ob["beta_uncontrolled"] - ob["beta_controlled"])
-      and any("Assumption 3" in m for m in ob["warnings"]) and not any("spurious" in m for m in ob["warnings"]),
-      (rb, ob["beta_star_exact"], pole_b, dstar, ob["warnings"]))
+nr = [m for o in o2 for m in o["warnings"] if "no usable real solution" in m]
+check("the spurious warning: no single-control tie, the pole named, no claim that it 'does not satisfy' the equation",
+      nr and all("lines up with their relation to the treatment" in m and "at the pole of δ*(β)" in m
+                 and "does not satisfy" not in m and "with a single control it appears" not in m for m in nr), nr)
+
+
+# The rule the review rejected (v2.6.8, round 1): the identity to a tolerance, instead of the distance to the pole.
+# These cases keep v2.6.7's answers. (a) one control, R² gain 2.4e-11: the 1e-6 identity rule reported the spurious
+# root 0.99999792 as β* with δ = −1; (b) two controls with γ ∝ π, x on a 1e6 scale, controls barely related to x:
+# rounding put the identity off by 2.8e-5, and the rule reported the spurious root 5.1e-7 with δ = −1; (c) two
+# generic random designs (seeds 2036 and 3077 of claude/scripts/comparar_oster_v268.py) with the identity off by
+# 2.2e-5 and 9.4e-4 by chance: v2.6.7 and this version give a genuine β* next to the pole, ruled out by Assumption 3.
+def tiny_gain():
+    rng = np.random.default_rng(1)
+    n = 300
+    x = rng.normal(size=n)
+    w = 0.6 * x + 0.8 * rng.normal(size=n)
+    y = 1 + x + 1e-5 * w + 1e-4 * rng.normal(size=n)
+    d = pd.DataFrame(dict(y=y, x=x, w=w))
+    return smf.ols("y ~ x", d).fit(), smf.ols("y ~ x + w", d).fit()
+
+
+def scaled_aligned():
+    rng = np.random.default_rng(16)
+    n = 300
+    W = rng.normal(size=(n, 2))
+    x = 1e6 * (0.01 * (W @ [1.0, -0.6]) + rng.normal(size=n))
+    pi = np.linalg.lstsq(np.column_stack([np.ones(n), W]), x, rcond=None)[0][1:]
+    e = rng.normal(size=n)
+    A = np.column_stack([np.ones(n), x, W])
+    e = e - A @ np.linalg.lstsq(A, e, rcond=None)[0]
+    y = 1 + 0.5 * x / 1e6 + 0.01 * (W @ pi) / 1e6 + e
+    d = pd.DataFrame(dict(y=y, x=x, w0=W[:, 0], w1=W[:, 1]))
+    return smf.ols("y ~ x", d).fit(), smf.ols("y ~ x + w0 + w1", d).fit()
+
+
+def generic(k, seed):
+    rng = np.random.default_rng(1000 * k + seed)
+    n = 300
+    W = rng.normal(size=(n, k))
+    x = W @ rng.uniform(-1, 1, k) + rng.normal(size=n)
+    y = 1 + rng.uniform(-1, 1) * x + W @ rng.uniform(-1, 1, k) + rng.normal(size=n)
+    d = pd.DataFrame(dict(y=y, x=x, **{f"w{j}": W[:, j] for j in range(k)}))
+    return smf.ols("y ~ x", d).fit(), smf.ols("y ~ x + " + " + ".join(f"w{j}" for j in range(k)), d).fit()
+
+
+ta = [oster(*tiny_gain(), "x", delta=dl) for dl in (-1.0, 2.0)]
+check("(a) one control, R² gain at rounding level: β* nan and the root 0.99999792 spurious, for δ = −1 and 2",
+      all(np.isnan(o["beta_star_exact"]) and len(o["beta_star_spurious"]) == 1
+          and abs(o["beta_star_spurious"][0] - 0.9999979222) < 1e-9 for o in ta),
+      [(o["beta_star_exact"], o["beta_star_spurious"]) for o in ta])
+sa = oster(*scaled_aligned(), "x", delta=-1.0)
+check("(b) two aligned controls, x on a 1e6 scale: β* nan with δ = −1, the root 5.1e-7 spurious, not reported",
+      np.isnan(sa["beta_star_exact"]) and len(sa["beta_star_spurious"]) == 1
+      and abs(sa["beta_star_spurious"][0] - 5.0999986e-7) < 1e-13, (sa["beta_star_exact"], sa["beta_star_spurious"]))
+ga = [oster(*generic(k, s_), "x", delta=2.0) for k, s_ in ((2, 36), (3, 77))]
+check("(c) two generic designs near alignment by chance: a genuine β* next to the pole (0.001776, −0.1123), nothing "
+      "spurious, the warning is Assumption 3",
+      [round(o["beta_star_exact"], 4) for o in ga] == [0.0018, -0.1123]
+      and all(not o["beta_star_spurious"] and any("Assumption 3" in m for m in o["warnings"]) for o in ga),
+      [(o["beta_star_exact"], o["beta_star_spurious"], o["warnings"]) for o in ga])
 # One control (the R reference data): still spurious, as in v2.5.2.
 sim = pd.read_csv(ROOT / "tests" / "data" / "oster_v252.csv")
 m0s, m1s = smf.ols("y ~ x", sim).fit(), smf.ols("y ~ x + w1", sim).fit()
@@ -180,7 +231,7 @@ os2 = oster(m0s, m1s, "x", r_max=1, delta=2)
 check("one control (oster_v252.csv, δ = 2, R_max = 1): the only real root is spurious, β* nan, as in v2.5.2",
       np.isnan(os2["beta_star_exact"]) and len(os2["beta_star_spurious"]) == 1
       and abs(os2["beta_star_spurious"][0] - 2.803677) < 2e-6, os2)
-# Generic two controls: no spurious root (the identity fails by far more than 1e-6).
+# Generic controls (mtcars): no spurious root.
 m0g, m1g = smf.ols("mpg ~ wt", mt).fit(), smf.ols("mpg ~ wt + hp + qsec", mt).fit()
 check("mtcars (two controls, generic): no spurious root for δ = 0.5, 1, 2, 3",
       all(oster(m0g, m1g, "wt", r_max=0.9, delta=dl)["beta_star_spurious"] == [] for dl in (0.5, 1, 2, 3)))
@@ -216,7 +267,8 @@ check("ols-regression.md: the spurious root with several controls, and the two n
 
 # ------------------------------------------------- 4. did_single_treated: ρ-clipping rates measured for each check
 # Rates re-measured here with seeds of this test (20000 stationary AR(1) series per cell, the function's own
-# design and clipping); the bands are ±3 Monte Carlo SEs around the measurement in claude/scripts/corte_rho_v268.py.
+# design and clipping); the bands are about ±4 to ±7 Monte Carlo SEs (0.002–0.003 with 20000 series) around the
+# measurement in claude/scripts/corte_rho_v268.py, and each quoted figure lies inside its band.
 def clip_rate(T, T0, rho, seed, R=20000):
     rng = np.random.default_rng(seed)
     z = rng.standard_normal((R, T))
@@ -257,14 +309,20 @@ check("trend test clipped, not rejecting: its own rates (21% of 12-period, 10% o
       r_tr["pre_trend"]["rho_clipped"] and r_tr["pre_trend"]["p"] > 0.05 and len(w_tr) == 1
       and "about 21% of 12-period and 10% of 16-period pre-periods with ρ = 0.4, 4.5% with 20" in w_tr[0]
       and "18%" not in w_tr[0], w_tr)
-check("placebo clipped, not rejecting: its own rates (7% with 16, 4% with 20), never the 12-period figure",
+check("placebo clipped, not rejecting: its own rates (7% with 16, 3.5% with 20), never the 12-period figure",
       r_pl["pre_placebo"]["rho_clipped"] and r_pl["pre_placebo"]["p"] > 0.05 and len(w_pl) == 1
-      and "about 7% of 16-period pre-periods with ρ = 0.4 and 4% with 20" in w_pl[0]
+      and "about 7% of 16-period pre-periods with ρ = 0.4 and 3.5% with 20" in w_pl[0]
       and "12-period" not in w_pl[0] and "18%" not in w_pl[0], w_pl)
-src = (SKILL / "scripts" / "causal.py").read_text(encoding="utf-8")
-check("main-gap sentence (fewer than 20 periods): 17% and 3% with 12, 7% and 0.5% with 16; the old 18%/4%/5% gone",
-      "about 17% of gaps with ρ = 0.4 and 3% of white-noise gaps with 12 periods, and 7% and \"\n" in src
-      and "0.5% with 16" in src and "about 18% of gaps" not in src and "and 5% and \"" not in src)
+# 12 periods (6 + 6), the main step's ρ clipped (seed 0 of claude/scripts/busca_desenhos_v268.py, part (c)); and
+# 24 periods, where the sentence must not appear
+r_mg = cz.did_single_treated(panel(0, 6, 6), "u", "t", "y", ["t"], t0=6, n_sim=999, seed=1, show=False)
+w_mg = [m for m in r_mg["warnings"] if "the series is too short to tell" in m]
+r_24 = cz.did_single_treated(panel(0, 12, 12), "u", "t", "y", ["t"], t0=12, n_sim=999, seed=1, show=False)
+check("main-gap sentence (12 periods, clipped): 17% and 3% with 12 periods, 7% and 0.5% with 16; old 18%/4%/5% gone; "
+      "absent with 24 periods",
+      len(w_mg) == 1 and "about 17% of gaps with ρ = 0.4 and 3% of white-noise gaps with 12 periods, and 7% and 0.5% "
+      "with 16" in w_mg[0] and "18%" not in w_mg[0] and "5% and" not in w_mg[0]
+      and not any("the series is too short to tell" in m for m in r_24["warnings"]), (w_mg, r_24["warnings"]))
 
 # --------------------------------------------------- 5. doctor: a project install whose version is not a release
 tmp = Path(tempfile.mkdtemp(prefix="v268 "))
@@ -298,8 +356,18 @@ check("pin at 2.4.0 with a newer user install (a release): the old advice, unins
       any("pinned at 2.4.0" in a and "plugin uninstall" in a for a in acts)
       and not any("not a release number" in a for a in acts), acts)
 acts = doc([pin("2.4.0"), dict(user, version="ffff999")])
-check("pin at 2.4.0 with a user install whose version is not a release: update in place, never uninstall",
-      any("pinned at 2.4.0" in a and "plugin update" in a and "do not uninstall it" in a for a in acts)
+check("pin at 2.4.0 with a user install whose version is not a release: update in place, never uninstall, and it "
+      "says why truthfully (the user install is there, its version cannot be ordered)",
+      any("pinned at 2.4.0" in a and "plugin update" in a and "do not uninstall it: the user-scope install (ffff999) "
+          "is not a release number" in a for a in acts)
+      and not any("plugin uninstall" in a or "no user-scope install" in a for a in acts), acts)
+acts = doc([pin("2.4.0")])
+check("pin at 2.4.0 and no user install: update in place, 'there is no user-scope install to take over'",
+      any("pinned at 2.4.0" in a and "do not uninstall it: there is no user-scope install to take over" in a
+          for a in acts), acts)
+acts = doc([pin("2.4.0"), dict(user, version="2.3.0")])
+check("pin at 2.4.0 and an older user install (2.3.0): update in place, 'the user-scope install (2.3.0) is not newer'",
+      any("do not uninstall it: the user-scope install (2.3.0) is not newer" in a for a in acts)
       and not any("plugin uninstall" in a for a in acts), acts)
 acts = doc([pin(ver), user])
 check("pin at the current release: nothing about the folder's install", not any("this folder (" in a for a in acts), acts)
@@ -350,19 +418,34 @@ b_2s2 = IV2SLS.from_formula("y ~ 1 + [x ~ z1 + z2]", d2).fit().params["x"]
 b_li2 = IVLIML.from_formula("y ~ 1 + [x ~ z1 + z2]", d2).fit().params["x"]
 check("the claim itself (linearmodels): LIML equals 2SLS exactly identified (1e-8), and differs overidentified",
       abs(b_2s - b_li) < 1e-8 and abs(b_2s2 - b_li2) > 1e-4, (b_2s - b_li, b_2s2 - b_li2))
+# instruments counted on the model's columns: [x ~ z1*z2] has 3 (z1, z2, z1:z2), so it is overidentified
+# (review, round 1: counting the formula's terms called it exactly identified)
+d3 = ivdata(0, 2)
+d3["x"] = 0.08 * d3["z1"] + 0.08 * d3["z2"] + (d3["x"] - 0.12 * d3["z1"] - 0.12 * d3["z2"])
+with contextlib.redirect_stdout(io.StringIO()):
+    iv3 = dg.iv_report("y ~ 1 + [x ~ z1*z2]", d3)
+w3 = [m for m in iv3["warnings"] if m.startswith("weak instrument")]
+check("iv_report with [x ~ z1*z2] (3 instrument columns, weak): overidentified, 'Anderson-Rubin set (or LIML)'",
+      len(w3) == 1 and "Anderson-Rubin set (or LIML) and say so" in w3[0] and "exactly identified" not in w3[0], w3)
 piv = (SKILL / "references" / "panel-iv.md").read_text(encoding="utf-8")
-check("panel-iv.md says the same as the code", "LIML only with more instruments than endogenous regressors" in piv
-      and "Anderson-Rubin, or LIML)" not in piv)
+check("panel-iv.md says the same as the code (line 57 and the code comment)",
+      "LIML only with more instruments than endogenous regressors" in piv and "Anderson-Rubin, or LIML)" not in piv
+      and "# preferable with weak instruments" not in piv and "# with weak instruments, when overidentified" in piv)
 
 # --------------------------------------------------- 7. the rule on numbers worked out in the reply
 rules = (SKILL / "references" / "interpretation-rules.md").read_text(encoding="utf-8")
 heads = re.findall(r"^## .*$", rules, re.M)
 r268 = rules[rules.index("## Rules added in v2.6.8"):] if "## Rules added in v2.6.8" in rules else ""
-check("interpretation-rules.md: 'Rules added in v2.6.8' after v2.6.6", heads[-2:] == [
-      "## Rules added in v2.6.6", "## Rules added in v2.6.8"], heads[-3:])
+_vt = lambda h: tuple(int(p) for p in re.search(r"v([\d.]+)$", h).group(1).split("."))
+_i68 = heads.index("## Rules added in v2.6.8") if "## Rules added in v2.6.8" in heads else -1
+check("interpretation-rules.md: 'Rules added in v2.6.8' right after v2.6.6, followed only by later versions",
+      _i68 > 0 and heads[_i68 - 1] == "## Rules added in v2.6.6"
+      and all(h.startswith("## Rules added in v") and _vt(h) > (2, 6, 8) for h in heads[_i68 + 1:]), heads[-3:])
+r268 = r268.split("\n## ", 1)[0] if "\n## " in r268 else r268          # the v2.6.8 section only
 check("the v2.6.8 rule: printed by the script, the same critical value, the SE of the model described, its origin",
       all(k in r268 for k in ("printed by the script", "never work it out in the reply", "t(G − 1)",
-                              "SE of the model the sentence describes", "v2.6.7 validation", "[0.37, 0.65]")),
+                              "SE of the model the sentence describes", "v2.6.7 validation", "[0.37, 0.65]",
+                              "Rounding a printed number to 2–3 significant digits is fine")),
       r268[:500])
 check("the rule quotes the reply's interval as the reply's, and no interval worked out by the rule itself (the "
       "registered HR and SE are rounded: they do not reproduce either bound)", "the interval is [" not in r268
@@ -371,14 +454,20 @@ check("the rule quotes the reply's interval as the reply's, and no interval work
 # ------------------------------------------------------------- 8. version and CHANGELOG
 cl = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 mk = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
-top = re.search(r"^## v([\d.]+) — ", cl, re.M)
-check("version 2.6.8 in CHANGELOG (top), reporting.SKILL_VERSION and marketplace.json",
-      top is not None and top.group(1) == "2.6.8" == reporting.SKILL_VERSION == mk["plugins"][0]["version"],
-      (top and top.group(1), reporting.SKILL_VERSION, mk["plugins"][0]["version"]))
+first = re.search(r"^## v([\d.]+) — ", cl, re.M)
+check("version in CHANGELOG (top), reporting.SKILL_VERSION and marketplace.json agree and are 2.6.8 or later",
+      first is not None and first.group(1) == reporting.SKILL_VERSION == mk["plugins"][0]["version"]
+      and tuple(int(x) for x in first.group(1).split(".")) >= (2, 6, 8),
+      (first and first.group(1), reporting.SKILL_VERSION, mk["plugins"][0]["version"]))
+top = re.search(r"^## v2\.6\.8 — ", cl, re.M)
 e268 = cl[top.start():cl.index("\n## v", top.end())] if top else ""
 check("CHANGELOG v2.6.8 names each item and the measured rates",
       all(k in e268 for k in ("Assumption 3", "beta_star_admissible_alternatives", "beta_star_forbidden_side",
-                              "proportional", "21%", "7%", "not a release number", "LIML", "interpretation-rules.md")),
+                              "proportional to their coefficients in x", "The classification stays the distance",
+                              "trend test 21% with 12 pre-periods, 10% with 16, 4.5% with 20",
+                              "placebo 7% with 16, 3.5% with 20", "measured: 17%, 3%, 7% and 0.5%",
+                              "not a release number", "LIML equals 2SLS", "`[x ~ z1*z2]` has three",
+                              "interpretation-rules.md")),
       e268[:600])
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")

@@ -938,11 +938,16 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
                         f"plugin uninstall {PLUGIN_ID} --scope {pin.get('scope')} (the {usr} user-scope install "
                         "then applies), then restart Claude Code")
         else:
+            # v2.6.8 review: say why uninstalling would not help, truthfully: no user-scope install, or one that is
+            # not newer, or one whose version cannot be ordered
+            why = ("there is no user-scope install to take over" if not usr else
+                   f"the user-scope install ({str(usr).strip()}) is not a release number, so it is not known to be "
+                   "newer" if usr_v is None else
+                   f"the user-scope install ({usr_v}) is not newer")
             acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the "
-                        f"skill, pinned at {pin['version']} (current {ref}), and it is the only install that "
-                        "applies here: sessions here keep loading the old version. With the user's permission, "
-                        f"inside the folder: claude plugin update {PLUGIN_ID} --scope {pin.get('scope')}, then "
-                        "restart Claude Code (do not uninstall it: there is no user-scope install to take over)")
+                        f"skill, pinned at {pin['version']} (current {ref}), and sessions here keep loading the old "
+                        f"version. With the user's permission, inside the folder: claude plugin update {PLUGIN_ID} "
+                        f"--scope {pin.get('scope')}, then restart Claude Code (do not uninstall it: {why})")
     if lst.get("checked") and lst.get("crowded") and lst.get("prepared"):
         acts.append(f"skill listing still crowded in this folder although it is already prepared "
                     f"({lst.get('plugins_off')} plugins off in its .claude/settings.json): the {lst['skills']} skills "

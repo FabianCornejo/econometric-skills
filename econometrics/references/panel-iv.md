@@ -37,7 +37,7 @@ print(iv.first_stage)        # partial F, partial R² of excluded instruments
 iv.wu_hausman(); iv.durbin()  # endogeneity (H0: regressor exogenous)
 iv.sargan; iv.basmann        # overidentification (homoskedasticity)
 gmm = IVGMM.from_formula(f, data=df).fit(); gmm.j_stat           # Hansen J (robust)
-liml = IVLIML.from_formula(f, data=df).fit(cov_type="robust")    # preferable with weak instruments
+liml = IVLIML.from_formula(f, data=df).fit(cov_type="robust")    # with weak instruments, when overidentified
 # debiased=True: n−k small-sample correction and t/F instead of z/χ² (= Stata's `small` option and
 # the textbook formulas). The default divides by n (= Stata's default). Use it when replicating a
 # published table; with large N the difference is negligible.
