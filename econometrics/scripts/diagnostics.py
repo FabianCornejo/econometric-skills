@@ -452,6 +452,9 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     column changes neither the F nor the test. With fewer instruments than endogenous regressors the model is not
     identified and the test is NaN (no first-stage line is printed); with no residual degrees of freedom left
     (saturated first stage) the F and the test are NaN too. Rows with NaN are dropped; inf raises ValueError.
+    Known limits (v2.6.9): an instrument whose direction comes from one row (leverage 1) makes the HC2/HC3 F
+    arbitrary; an endogenous regressor that is an exact combination of W and Z gives a meaningless F and test; with
+    HC0 and few residual degrees of freedom the F can be high on noise. Check the design in those cases.
     """
     parts = [y, x_endog, Z] if X_exog is None else [y, X_exog, x_endog, Z]
     d = pd.concat(parts, axis=1).dropna()
@@ -478,7 +481,10 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
         raise ValueError("endogeneity_test: the data contain inf; replace or drop those rows first")
     n_obs = len(d)
     eps = np.finfo(float).eps
-    Wm = _unit(Xe)
+    # W is centred too (the constant is put back, so the span is the same): an offset such as 1e13 + w no longer
+    # drops w from the basis (v2.6.9 review, round 3)
+    X0 = Xe.to_numpy(dtype=float)
+    Wm = np.column_stack([np.ones(n_obs), _unit(X0 - X0.mean(axis=0))])
     UW, sW, _ = np.linalg.svd(Wm, full_matrices=False)
     r_w = int(np.sum(sW > sW.max() * max(Wm.shape) * eps)) if sW.size else 0
     QW = UW[:, :r_w]
@@ -488,7 +494,15 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
         Zr = Zc - QW @ (QW.T @ Zc)
         UZ, sZ, _ = np.linalg.svd(Zr, full_matrices=False)
         s_all = max(sW.max() if sW.size else 0.0, np.linalg.svd(Zc, compute_uv=False).max())
-        n_z = int(np.sum(sZ > s_all * max(n_obs, r_w + Zc.shape[1]) * eps))
+        # floor for the rounding left by centring a column with a large offset: an entry of 1e5 + z carries an error
+        # of about eps·1e5, which centring and scaling amplify by max|raw| / max|centred| (round 3: z and z + 1e5
+        # counted as two instruments)
+        zr_max = np.max(np.abs(Zraw), axis=0)
+        zc_max = np.max(np.abs(Zraw - Zraw.mean(axis=0)), axis=0)
+        amp = float(np.max(zr_max[zc_max > 0] / zc_max[zc_max > 0])) if np.any(zc_max > 0) else 1.0
+        tol = max(s_all * max(n_obs, r_w + Zc.shape[1]) * eps,
+                  2 * eps * amp * (np.sqrt(n_obs) + np.sqrt(Zc.shape[1])))
+        n_z = int(np.sum(sZ > tol))
     else:
         n_z = 0
     n_x = len(x_endog.columns)
@@ -496,19 +510,22 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     if n_z < len(Z.columns):
         warn.append(f"{len(Z.columns)} instrument column(s), but only {n_z} add information beyond each other and the "
                     "exogenous regressors (the rest are constant or linear combinations): the model is counted with "
-                    + (f"{n_z} instrument(s), and the first-stage F tests only those." if n_z else
-                       "no instrument, so there is no first stage to test."))
-    saturated = n_obs - r_w - n_z <= 0 or n_obs - r_w - 2 * n_x <= 0
-    if saturated:
-        warn.append(f"the first stage or the test regression is saturated ({n_obs} rows for {r_w} exogenous directions, "
-                    f"{n_z} instrument(s) and {n_x} endogenous regressor(s)): no residual degrees of freedom, so the "
-                    "first-stage F and the test are not computed.")
+                    + (f"{n_z} instrument(s), and the first-stage F tests only those." if n_z >= n_x and n_z else
+                       f"{n_z} instrument(s)." if n_z else "no instrument, so there is no first stage to test."))
+    fs_saturated = n_z > 0 and n_obs - r_w - n_z <= 0
+    test_saturated = n_obs - r_w - 2 * n_x <= 0
+    if fs_saturated or (test_saturated and n_z >= n_x):
+        warn.append(f"{'the first stage' if fs_saturated else 'the test regression'} is saturated ({n_obs} rows for "
+                    f"{r_w} exogenous directions, {n_z} instrument(s) and {n_x} endogenous regressor(s)): no residual "
+                    "degrees of freedom, so " + ("the first-stage F and the test are" if fs_saturated else
+                                                 "the test is") + " not computed.")
+    saturated = fs_saturated or test_saturated
     Wq = pd.DataFrame(QW, index=d.index, columns=[f"_wdir{k + 1}" for k in range(r_w)])
     if n_z > 0:
         Zeff = pd.DataFrame(UZ[:, :n_z], index=d.index, columns=[f"_zdir{k + 1}" for k in range(n_z)])
     resids, f_first = {}, {}
     for c in x_endog.columns:
-        if n_z > 0 and not saturated:
+        if n_z > 0 and not fs_saturated:
             fs = sm.OLS(d[c], pd.concat([Wq, Zeff], axis=1)).fit(cov_type=cov_type)
             R = np.zeros((n_z, fs.params.shape[0])); R[:, -n_z:] = np.eye(n_z)
             f_first[c] = float(fs.wald_test(R, scalar=True, use_f=True).statistic)
@@ -530,18 +547,18 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     if show:
         for m in warn:
             print("\nWarning:", m)
-        for c, f in (f_first.items() if identified else ()):
+        for c, f in (f_first.items() if n_z >= n_x and n_z > 0 and not fs_saturated else ()):
             print(f"\nFirst stage for {c}: F of excluded instruments = {f:.2f} → {_first_stage_label(f)}")
         weak = any(not f > 10 for f in f_first.values())          # NaN counts as weak, as its label says
         multi = len(f_first) > 1
         joint = (f" With {len(f_first)} endogenous regressors, each first-stage F above does not show that they are "
                  "jointly identified: check Shea's partial R² (linearmodels IV2SLS(...).fit().first_stage) or the "
                  "Sanderson-Windmeijer F before using 2SLS.") if multi else ""
-        if saturated:
-            verdict = "not computed: the regressions are saturated (see the warning)."
-        elif n_z < n_x:
+        if n_z < n_x:
             verdict = (f"not identified: {n_z} excluded instrument(s) for {n_x} endogenous regressors, so IV/2SLS "
                        "is impossible and this test is not informative.")
+        elif saturated:
+            verdict = "not computed: the regressions are saturated (see the warning)."
         else:
             if out["p"] < ALPHA:
                 # v2.6.8: LIML equals 2SLS when the model is exactly identified, so it is offered only with more

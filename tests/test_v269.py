@@ -374,6 +374,57 @@ rsat, tsat = quiet(dg.endogeneity_test, ds.y, ds[["w"]], ds[["x"]], ds[[f"s{k}" 
 check("saturated first stage (n = 10, 2 + 8 columns): F and test NaN, a warning, 'not computed', no 'strong'",
       np.isnan(rsat["first_stage_F"]["x"]) and np.isnan(rsat["statistic"]) and "saturated" in " ".join(rsat["warnings"])
       and "not computed" in tsat and "strong" not in tsat, tsat)
+# the other side of the boundary: 11 rows leave 1 residual degree of freedom, and the F and test are computed
+rng = np.random.default_rng(26941)
+ds11 = pd.DataFrame(rng.normal(size=(11, 11)), columns=["y", "x", "w"] + [f"s{k}" for k in range(8)])
+r11, _ = quiet(dg.endogeneity_test, ds11.y, ds11[["w"]], ds11[["x"]], ds11[[f"s{k}" for k in range(8)]],
+               cov_type="nonrobust")
+check("11 rows, 2 + 8 columns (1 residual degree of freedom): F and test computed, no saturation warning",
+      np.isfinite(r11["first_stage_F"]["x"]) and np.isfinite(r11["statistic"])
+      and not any("saturated" in m for m in r11["warnings"]), r11)
+# the test regression [W, x, v̂] saturates first: 2 endogenous, 2 instruments, 2 exogenous directions; 6 rows leave
+# the first stage 2 degrees of freedom but the test none (the clause n − r_W − 2·n_x ≤ 0); 7 rows compute both
+for nrow, sat_ in ((6, True), (7, False)):
+    rng = np.random.default_rng(26943)
+    dd6 = pd.DataFrame(rng.normal(size=(nrow, 6)), columns=["y", "x1", "x2", "w", "s1", "s2"])
+    r6, t6 = quiet(dg.endogeneity_test, dd6.y, dd6[["w"]], dd6[["x1", "x2"]], dd6[["s1", "s2"]], cov_type="nonrobust")
+    if sat_:
+        check("6 rows, 2 endogenous, 2 instruments, 2 exogenous directions: test NaN, 'the test regression is "
+              "saturated', the first-stage F still computed and printed",
+              np.isnan(r6["statistic"]) and any("the test regression is saturated" in m for m in r6["warnings"])
+              and all(np.isfinite(list(r6["first_stage_F"].values()))) and "First stage for x1" in t6
+              and "not computed" in t6, (r6, t6))
+    else:
+        check("7 rows (other side): the test is computed, no saturation warning",
+              np.isfinite(r6["statistic"]) and not any("saturated" in m for m in r6["warnings"]), r6)
+# the magnitude of the rank tolerance, both sides: z and z + 1e-10·e are two instruments (distinct beyond rounding);
+# z and z + 1e5 are one (the offset's rounding is not an instrument; it used to count 2)
+rng = np.random.default_rng(26944)
+z, w, u, v, ee = rng.normal(size=(5, 400))
+x = 0.3 * z + 0.3 * w + v + u
+dtl = pd.DataFrame(dict(y=x + u, x=x, z=z, w=w, zn=z + 1e-10 * ee, zo=z + 1e5, wo=w + 1e5))
+rt1, _ = endo(dtl, ["z", "zn"], exog=["w"])
+rt2, _ = endo(dtl, ["z", "zo"], exog=["w"])
+rt3, _ = endo(dtl, ["z", "wo"], exog=["w"])
+rt0, _ = endo(dtl, ["z"], exog=["w"])
+check("z and z + 1e-10·e: 2 instruments; z and z + 1e5, and z and w + 1e5: 1, with the F of z alone (1e-8)",
+      rt1["n_instruments"] == 2 and rt2["n_instruments"] == 1 and rt3["n_instruments"] == 1
+      and close(rt2["first_stage_F"]["x"], rt0["first_stage_F"]["x"], 1e-8)
+      and close(rt3["first_stage_F"]["x"], rt0["first_stage_F"]["x"], 1e-8),
+      (rt1["n_instruments"], rt2["n_instruments"], rt3["n_instruments"]))
+# an exogenous regressor with a large offset stays in W (W is centred too): the same F and test as without it
+dwo = dtl.assign(wbig=dtl.w + 1e13)
+rwo, _ = endo(dwo, ["z"], exog=["wbig"])
+check("an exogenous regressor with offset 1e13: the same F and test as with w (1e-3; the offset costs digits)",
+      close(rwo["first_stage_F"]["x"], rt0["first_stage_F"]["x"], 1e-3) and close(rwo["statistic"], rt0["statistic"], 1e-3),
+      (rwo["first_stage_F"], rt0["first_stage_F"], rwo["statistic"], rt0["statistic"]))
+# fewer instruments than endogenous regressors: the warning about a redundant column does not promise a first stage
+dun = dxx.assign(z1b=2 * dxx.z1)
+run_, tun = quiet(dg.endogeneity_test, dun.y, dun[["w"]], dun[["x", "x2"]], dun[["z1", "z1b"]])
+check("not identified with a redundant column: the warning does not say 'the first-stage F tests only those'",
+      run_["n_instruments"] == 1 and "tests only those" not in " ".join(run_["warnings"]) and "First stage" not in tun,
+      run_["warnings"])
+
 # near-collinear exogenous regressors (cond ~ 1e12): the instrument still counts (rank tolerances of W and [W, Z]
 # used to disagree: 'not identified' for a strong z), and the F and test equal those of the same span written
 # well conditioned: a + 2e-13·e1 and b + 2e-13·e2 span what a, e1, b, e2 span
@@ -384,9 +435,11 @@ x = 0.5 * zz + v + u
 dnc = pd.DataFrame(dict(y=x + u, x=x, z=zz, a=a_, a2=a_ + 2e-13 * e1, b=b_, b2=b_ + 2e-13 * e2, e1=e1, e2=e2))
 rnc, _ = quiet(dg.endogeneity_test, dnc.y, dnc[["a", "a2", "b", "b2"]], dnc[["x"]], dnc[["z"]], cov_type="HC1")
 rn2, _ = quiet(dg.endogeneity_test, dnc.y, dnc[["a", "e1", "b", "e2"]], dnc[["x"]], dnc[["z"]], cov_type="HC1")
-check("near-collinear exogenous regressors: 1 instrument, and the F and test of the same span well conditioned (1e-4)",
-      rnc["n_instruments"] == 1 and close(rnc["first_stage_F"]["x"], rn2["first_stage_F"]["x"], 1e-4)
-      and close(rnc["statistic"], rn2["statistic"], 1e-4), (rnc["first_stage_F"], rn2["first_stage_F"]))
+# (with cond(W) ~ 1e12 about four digits survive: eps·cond ~ 2e-4)
+check("near-collinear exogenous regressors: 1 instrument, and the F and test of the same span well conditioned (1e-3)",
+      rnc["n_instruments"] == 1 and close(rnc["first_stage_F"]["x"], rn2["first_stage_F"]["x"], 1e-3)
+      and close(rnc["statistic"], rn2["statistic"], 1e-3), (rnc["first_stage_F"], rn2["first_stage_F"],
+                                                             rnc["statistic"], rn2["statistic"]))
 # an instrument with a large offset (1e14 + z): centring keeps it (without centring it was counted 0, 'not
 # identified'); 1e14 + z keeps z to about 0.016, so the F agrees with the F of z1 to about 1e-3
 dof = dref.assign(zo=dref.z1 + 1e14)
