@@ -940,7 +940,8 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
         else:
             # v2.6.8 review: say why uninstalling would not help, truthfully: no user-scope install, or one that is
             # not newer, or one whose version cannot be ordered
-            why = ("there is no user-scope install to take over" if not usr else
+            why = ("there is no user-scope install to take over" if not lst.get("user_install") else
+                   "the user-scope install reports no version, so it is not known to be newer" if not usr else
                    f"the user-scope install ({str(usr).strip()}) is not a release number, so it is not known to be "
                    "newer" if usr_v is None else
                    f"the user-scope install ({usr_v}) is not newer")

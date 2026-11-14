@@ -54,77 +54,12 @@ def oster(*a, **k):
         return sp.oster(*a, **k)
 
 
-# ----------------------------------------------------------- 1. Oster: Assumption 3 when β° and β̃ differ by rounding
-# A control made orthogonal to x in the sample: the controls do not move β, so β° − β̃ is ±2e-16 or 0 and the right
-# β* is β̃ itself. main (v2.6.7) told the user not to report it in 30 of these 60 fits (np.sign of the rounding).
-def orth_fits(seed):
-    rng = np.random.default_rng(seed)
-    n = 500
-    x = rng.normal(size=n)
-    w = rng.normal(size=n)
-    w = w - np.polyval(np.polyfit(x, w, 1), x)
-    y = 1 + 0.5 * x + 0.8 * w + rng.normal(size=n)
-    d = pd.DataFrame(dict(y=y, x=x, w=w))
-    return smf.ols("y ~ x", d).fit(), smf.ols("y ~ x + w", d).fit()
-
-
-orth = [(s, dl, oster(*orth_fits(s), "x", delta=dl)) for s in range(20) for dl in (0.5, 1.0, 2.0)]
-noise = [o for _, _, o in orth if o["beta_uncontrolled"] != o["beta_controlled"]]
-check("orthogonal control: β° − β̃ is pure rounding in this set (some fits differ by ~1e-16, none by more than 1e-14)",
-      len(noise) >= 20 and all(abs(o["beta_uncontrolled"] - o["beta_controlled"]) < 1e-14 for _, _, o in orth),
-      len(noise))
-check("orthogonal control: no 'Assumption 3' warning in any of the 60 fits (main: 30), and no warning at all",
-      all(not o["warnings"] for _, _, o in orth), [(s, dl, o["warnings"]) for s, dl, o in orth if o["warnings"]][:2])
-check("orthogonal control: β* exact is β̃ (within 1e-12 relative) and no root of 1e15 is listed",
-      all(abs(o["beta_star_exact"] - o["beta_controlled"]) <= 1e-12 * abs(o["beta_controlled"])
-          and not o["beta_star_alternatives"] for _, _, o in orth),
-      [(o["beta_star_exact"], o["beta_star_alternatives"]) for _, _, o in orth][:3])
-check("orthogonal control: psacalc/robomit's choice is still computed from the β° given (key present and finite)",
-      all(np.isfinite(o["beta_star_psacalc"]) for _, _, o in orth))
-
-
-# Both sides of the direction tolerance (1e-8 of the coefficients' scale), in a non-degenerate design (review, round
-# 1: a control orthogonal to x makes σ²_x − τ_x ~ 1e-15 and the cubic degenerate). Two controls related to x whose
-# effects on β cancel, plus κ times the direction that moves β: κ = 0 and 3e-9 move it by ~1e-15 and 2.5e-9 of β̃
-# (below: no direction), κ = 3e-7 and 1e-5 by 2.5e-7 and 8.4e-6 (above: Oster's rule). The other roots, about 1.03
-# and −0.03, sit on either side of β̃ = 0.5. main gave nan or a β* jumping between 1.03 and −0.03 below.
-def cancel_fits(kappa, seed=1):
-    rng = np.random.default_rng(seed)
-    n = 500
-    W = rng.normal(size=(n, 2))
-    x = W @ [0.8, 0.6] + rng.normal(size=n)
-    c = np.cov(np.column_stack([W, x]).T, ddof=1)[:2, 2]
-    A = np.column_stack([np.ones(n), x, W])
-    g = np.array([c[1], -c[0]])
-    g = g / np.linalg.norm(g) + kappa * c
-    e = rng.normal(size=n)
-    e = e - A @ np.linalg.lstsq(A, e, rcond=None)[0]
-    y = 1 + 0.5 * x + W @ g + e
-    d = pd.DataFrame(dict(y=y, x=x, w1=W[:, 0], w2=W[:, 1]))
-    return smf.ols("y ~ x", d).fit(), smf.ols("y ~ x + w1 + w2", d).fit()
-
-
-rel = lambda o: (o["beta_uncontrolled"] - o["beta_controlled"]) / abs(o["beta_controlled"])
-below = [oster(*cancel_fits(k), "x", delta=dl) for k in (0.0, 3e-9) for dl in (0.5, 2.0)]
-above = [oster(*cancel_fits(k), "x", delta=dl) for k in (3e-7, 1e-5) for dl in (0.5, 2.0)]
-check("direction tolerance, below (β° − β̃ ≤ 2.5e-9 of β̃): β* exact equals β̃, nothing spurious or forbidden; "
-      "with δ = 2 the roots near 1.03 and −0.03 are both admissible and the warning says no root is ruled out",
-      all(abs(rel(o)) < 3e-9 and o["beta_star_exact"] == o["beta_controlled"] and not o["beta_star_spurious"]
-          and o["beta_star_forbidden_side"] == [] for o in below)
-      and all(sorted(round(r, 3) for r in o["beta_star_admissible_alternatives"]) == [-0.027, 1.027]
-              and any("no root is ruled out" in m for m in o["warnings"]) for o in below if o["delta"] == 2.0),
-      [(rel(o), o["beta_star_exact"] - o["beta_controlled"], o["beta_star_alternatives"], o["warnings"])
-       for o in below])
-check("direction tolerance, above (2.5e-7 and 8.4e-6 of β̃): β* moves off β̃ against β° − β̃, by less than 1e-4; "
-      "with δ = 2 the root near 1.03 (on the side of β°) is forbidden and the one near −0.03 admissible",
-      all(2e-7 < abs(rel(o)) < 1e-5 and 0 < abs(o["beta_star_exact"] - o["beta_controlled"]) < 1e-4
-          and np.sign(o["beta_star_exact"] - o["beta_controlled"]) == -np.sign(rel(o)) for o in above)
-      and all([round(r, 3) for r in o["beta_star_forbidden_side"]] == [1.027]
-              and [round(r, 3) for r in o["beta_star_admissible_alternatives"]] == [-0.027]
-              and not any("no root is ruled out" in m for m in o["warnings"]) for o in above if o["delta"] == 2.0),
-      [(rel(o), o["beta_star_exact"] - o["beta_controlled"], o["beta_star_forbidden_side"],
-        o["beta_star_admissible_alternatives"]) for o in above])
-# A genuine violation stays one (the other side of item 1, on the R reference data of tests/test_v252.py).
+# ----------------------------------------------------------- 1. Oster: the calculation is v2.6.7's (item 1 dropped)
+# The plan's item 1 (no direction for Assumption 3 when β° and β̃ differ by rounding) was dropped after the second
+# round of review: with β° = β̃, β̃ is a 0/0 point of the exact equation, not a solution in general (decision of the
+# user, 2026-11-13). The numbers are main's; claude/scripts/comparar_oster_v268.py found no numeric difference on
+# 3618 designs. What this version keeps is documented as a known limitation.
+# A genuine violation (the R reference data of tests/test_v252.py).
 mt = pd.read_csv(ROOT / "tools" / "r_reference" / "output" / "mtcars.csv")
 m0_mt, m1_mt = smf.ols("mpg ~ wt", mt).fit(), smf.ols("mpg ~ wt + hp + qsec", mt).fit()
 o = oster(m0_mt, m1_mt, "wt", r_max=0.9, delta=2)
@@ -163,7 +98,7 @@ check("two controls with γ ∝ π: the identity holds to rounding, and a spurio
       "(the docstring used to say 'with a single control')",
       identity_rel(m0, m1, d0) < 1e-12 and all(len(o["beta_star_spurious"]) == 1 for o in o2),
       [identity_rel(m0, m1, d0)] + [o["beta_star_spurious"] for o in o2])
-nr = [m for o in o2 for m in o["warnings"] if "no usable real solution" in m]
+nr = [m for o in o2 for m in o["warnings"] if "is the spurious root of the cubic they solve" in m]
 check("the spurious warning: no single-control tie, the pole named, no claim that it 'does not satisfy' the equation",
       nr and all("lines up with their relation to the treatment" in m and "at the pole of δ*(β)" in m
                  and "does not satisfy" not in m and "with a single control it appears" not in m for m in nr), nr)
@@ -257,10 +192,23 @@ check("on a grid of 40 (δ, R_max): admissible + forbidden is beta_star_alternat
           == sorted(o["beta_star_alternatives"]) for o in grid if "beta_star_alternatives" in o))
 check("δ ≤ 0 has no forbidden side (Assumption 3 is about δ > 0)",
       all(o["beta_star_forbidden_side"] == [] for o in grid if o["delta"] <= 0))
-check("docstring: names both new keys, the cause of the spurious root and the δ ≈ 1 limitation",
+check("docstring: both new keys, the cause of the spurious root, δ ≤ 0 without a direction, and the known "
+      "limitations (δ near 1; a genuine root within the pole's tolerance; β̃ a 0/0 point when β° = β̃)",
       all(k in sp.oster.__doc__ for k in ("beta_star_admissible_alternatives", "beta_star_forbidden_side",
-                                          "proportional to their coefficients in x", "within about 3e-8 of 1"))
-      and "With a single control the cubic always has" not in sp.oster.__doc__)
+                                          "proportional to their coefficients in", "within about 1e-7 of 1",
+                                          "with δ ≤ 0 no direction is", "called spurious", "0/0 point",
+                                          "with δ < 0, where they still apply the sign check"))
+      and "With a single control the cubic always has" not in sp.oster.__doc__
+      and "it differs whenever the spurious root is the closest one" not in sp.oster.__doc__)
+# δ ≤ 0: several admissible roots, and the warning must not claim a direction (review, round 2)
+gd = [oster(*generic(2, s_), "x", delta=-0.5) for s_ in (1, 2)]
+wd = [m for o in gd for m in o["warnings"] if "admissible real roots" in m]
+check("δ = −0.5 with two admissible roots (generic seeds 2001, 2002): 'closest to β̃ (with δ ≤ 0 no direction is "
+      "applied)', not 'in the direction of the move'", len(wd) == 2 and all(
+          "with δ ≤ 0 no direction is applied" in m and "direction of the move" not in m for m in wd), wd)
+d2w = oster(*generic(2, 1), "x", delta=2.0)
+check("δ = 2, same data: if several roots are admissible the warning still names Oster's direction (other side)",
+      all("direction of the move from β°" in m for m in d2w["warnings"] if "admissible real roots" in m))
 ols_md = (SKILL / "references" / "ols-regression.md").read_text(encoding="utf-8")
 check("ols-regression.md: the spurious root with several controls, and the two new keys",
       "proportional to their coefficients in x" in ols_md and "beta_star_forbidden_side" in ols_md)
@@ -365,6 +313,10 @@ acts = doc([pin("2.4.0")])
 check("pin at 2.4.0 and no user install: update in place, 'there is no user-scope install to take over'",
       any("pinned at 2.4.0" in a and "do not uninstall it: there is no user-scope install to take over" in a
           for a in acts), acts)
+acts = doc([pin("2.4.0"), {k: v for k, v in user.items() if k != "version"}])
+check("pin at 2.4.0 and a user install with no version field: 'reports no version', not 'no user-scope install' "
+      "(review, round 2)", any("do not uninstall it: the user-scope install reports no version" in a for a in acts)
+      and not any("no user-scope install" in a or "plugin uninstall" in a for a in acts), acts)
 acts = doc([pin("2.4.0"), dict(user, version="2.3.0")])
 check("pin at 2.4.0 and an older user install (2.3.0): update in place, 'the user-scope install (2.3.0) is not newer'",
       any("do not uninstall it: the user-scope install (2.3.0) is not newer" in a for a in acts)

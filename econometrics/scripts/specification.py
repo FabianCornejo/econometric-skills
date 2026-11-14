@@ -325,26 +325,27 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
     Exact (keys beta_star_exact, beta_star_alternatives, delta_for_zero_exact, identified_set_exact,
     exact_inputs): Oster's Proposition 2, computed as Stata's psacalc and R's robomit do; it also uses var(y),
     var(x) and τ_x (the variance of x net of the controls). When δ ≠ 1 the bias-adjusted β solves a cubic; with
-    several real roots the one closest to β̃ in the direction of β° → β̃ is reported and the others are listed
-    (beta_star_alternatives; since v2.6.8 also split into beta_star_admissible_alternatives and
-    beta_star_forbidden_side, the roots Assumption 3 rules out). When β° and β̃ differ only by rounding, the
-    direction is undefined and no root is ruled out.
+    several real roots the one closest to β̃ in the direction of β° → β̃ is reported (with δ ≤ 0 no direction is
+    applied: the closest one) and the others are listed (beta_star_alternatives; since v2.6.8 also split into
+    beta_star_admissible_alternatives and beta_star_forbidden_side, the roots Assumption 3 rules out).
     The cubic can have a root that does not solve Oster's equation: at the pole of δ*(β), when its numerator vanishes
-    there too. That happens always with a single control, and with several when the controls' coefficients in y are
-    proportional to their coefficients in x (the Frisch-Waugh identity (R̃ − R°)σ²_y = (β° − β̃)²σ²_xτ_x/(σ²_x − τ_x)). The code
-    recognises it by its distance to the pole (1e-7 of the coefficients' scale); it is kept apart
-    (beta_star_spurious) and never reported. psacalc and robomit skip this check, so their
-    choice is kept apart in beta_star_psacalc; it differs whenever their ordering of the roots picks the spurious one,
-    which happens with a genuine root available as well as when there is none (then beta_star_exact is nan).
-    A warning names the difference, so a number from psacalc or robomit can be told apart from this one.
+    there too (the Frisch-Waugh identity (R̃ − R°)σ²_y = (β° − β̃)²σ²_xτ_x/(σ²_x − τ_x)). That happens always with a
+    single control, and with several when the controls' coefficients in y are proportional to their coefficients in
+    x. The code recognises it by its distance to the pole (1e-7 of the coefficients' scale); it is kept apart
+    (beta_star_spurious) and never reported. psacalc and robomit do not check for it, so their choice is kept apart
+    in beta_star_psacalc; it differs when their ordering of the roots picks the spurious root (with or without a
+    genuine root available; then beta_star_exact is nan), and with δ < 0, where they still apply the sign check.
+    A warning names the first case, so a number from psacalc or robomit can be told apart from this one.
     beta_star_exact_unstable is True when another admissible root is nearer to β* than β* is to β̃ (a heuristic for
     being near a double root, where β* is unstable); then report δ for β = 0, not β*.
     The exact solution is skipped, with a warning, for weighted or panel fits and when the uncontrolled model has
     other regressors (psacalc's mcontrol); the approximation is still returned.
     Default R_max = min(1.3·R̃, 1) (Oster's calibration, not a fact about the data). δ depends on the R_max chosen
     and is not a probability; |δ(β=0)| > 1 is the usual robustness bar.
-    Known limitation (v2.5.2 review, not fixed): with δ within about 3e-8 of 1 (but not 1) the cubic is badly
-    conditioned; pass delta=1 exactly in that case.
+    Known limitations (v2.5.2 and v2.6.8 reviews, not fixed): with δ within about 1e-7 of 1 (but not 1) the cubic is
+    badly conditioned (β* off by a few % below 3e-8); pass delta=1 exactly then. When β° and β̃ differ by about 1e-8
+    or less of β̃, or the controls barely move β, a genuine root can lie within the pole's distance tolerance and be
+    called spurious; and with β° = β̃ exactly, β̃ itself is a 0/0 point of the equation, not a solution in general.
     """
     # Every number here is a function of R², and statsmodels reports an UNCENTERED R² for a fit without an
     # intercept. Oster's decomposition needs the centered one (its identity R°σ²_y = β°²σ²_x holds only with an
@@ -388,44 +389,27 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
             args, S = (b0, bt, r0, rt, rmax), (inp["sigma_yy"], inp["sigma_xx"], inp["tau_x"])
             bp, alt_p = _oster_exact_beta(*args, delta, *S)          # psacalc/robomit's choice and other roots
             dx = _oster_exact_delta(*args, 0.0, *S)
-            # v2.6.8: when β° and β̃ differ only by rounding, the controls did not move the coefficient, and the
-            # direction β° → β̃ that Assumption 3 needs is undefined. A control orthogonal to x in the sample gave
-            # β° − β̃ = ±2e-16: np.sign of that flagged the right β* = β̃ as "do not report" in 30 of 60 fits, and
-            # dividing by it produced roots of 1e15 (development repository, claude/scripts/sonda_oster_a3_v268.py). Then the exact solution
-            # is computed with β° − β̃ = 0 (ν = 0, i.e. β* = β̃, is always a root) and no root is ruled out by the
-            # sign. psacalc and robomit's choice (bp) keeps the given β°, so beta_star_psacalc still replicates them.
-            dir_tol = 1e-8 * max(abs(b0), abs(bt))
-            no_move = abs(bt - b0) <= dir_tol
-            b0e = bt if no_move else b0
-            if no_move:
-                be, alt_e = _oster_exact_beta(bt, bt, r0, rt, rmax, delta, *S)
-            else:
-                be, alt_e = bp, alt_p
             # Spurious roots. The denominator of δ*(β) factors as [(β° − β̃)σ²_x + ν(σ²_x − τ_x)]·[(R_max − R̃)σ²_y
-            # + ν²τ_x], ν = β̃ − β, so δ*(β) has one pole, at β_p = β̃ + (β° − β̃)σ²_x/(σ²_x − τ_x). When the
-            # numerator vanishes there too (the Frisch-Waugh identity (R̃ − R°)σ²_y = (β° − β̃)²σ²_xτ_x/(σ²_x − τ_x)),
-            # the cubic psacalc and robomit solve (numerator − δ·denominator) gains a root at β_p for every δ and
+            # + ν²τ_x], ν = β̃ − β, so δ*(β) has one pole, at β_p = β̃ + (β° − β̃)σ²_x/(σ²_x − τ_x). With a single
+            # control the numerator vanishes there too (Frisch-Waugh: (R̃ − R°)σ²_y = (β° − β̃)²σ²_xτ_x/(σ²_x − τ_x)),
+            # and the cubic psacalc and robomit solve (numerator − δ·denominator) gains a root at β_p for every δ and
             # R_max that does not solve Oster's equation. They do not check this. (v2.5.2 study, 2026-11-08.)
-            roots = [float(r) for r in [be, *alt_e] if np.isfinite(r)]
-            syy, sxx, tx = S
-            pole = bt + (b0e - bt) * sxx / (sxx - tx) if sxx - tx > 1e-12 * sxx and not no_move else None
+            roots = [float(r) for r in [bp, *alt_p] if np.isfinite(r)]
+            sxx, tx = S[1], S[2]
+            pole = bt + (b0 - bt) * sxx / (sxx - tx) if sxx - tx > 1e-12 * sxx else None
             # relative to the coefficients' own scale, for the same reason (an absolute floor made every
             # root look like the pole once |beta| fell below ~1e-8)
             b_scale = max(abs(b0), abs(bt), abs(pole) if pole is not None else 0.0)
             tol = 1e-7 * b_scale if b_scale > 0 else 1e-12
-            # Classified by the distance to the pole, as since v2.5.2. v2.6.8 tried the cause instead (the identity
-            # above to a tolerance) and dropped it after the review: in floating point no tolerance separates rounding
-            # (up to 2.8e-5 with x on a 1e6 scale and controls barely related to x) from a chance near-alignment in
-            # ordinary data (2.2e-5 and 9.4e-4 in 2 of 400 generic designs), and with a one-control R² gain of
-            # 2.4e-11 a 1e-6 tolerance reported the spurious root. The distance rule got β* right in every case
-            # measured (development repository, claude/v2.6.8.md and claude/scripts/limiar_arredondamento_v268.py).
+            # v2.6.8: still by the distance to the pole. A classification by the identity above was tried and
+            # dropped in review: in floating point no tolerance separates rounding (up to 2.8e-5) from a chance
+            # near-alignment in ordinary data (2.2e-5 and 9.4e-4 in 2 of 400 generic designs), and with a one-control
+            # R² gain of 2.4e-11 it reported the spurious root. The distance rule has its own failure, kept as a
+            # known limitation: a genuine root within the tolerance (a move of β of ~1e-8, or controls that barely
+            # move β) is called spurious (development repository, claude/v2.6.8.md).
             spurious = [r for r in roots if pole is not None and abs(r - pole) <= tol]
             genuine = [r for r in roots if r not in spurious]
-            if delta > 0 and not no_move:
-                s_dir = np.sign(bt - b0)
-                side = lambda r: (r - bt) * s_dir >= 0
-            else:
-                side = lambda r: True
+            side = (lambda r: np.sign(r - bt) == np.sign(bt - b0)) if delta > 0 else (lambda r: True)
             adm = sorted((r for r in genuine if side(r)), key=lambda r: (abs(r - bt), r))
             if adm:                                   # Oster's rule: the admissible root closest to β̃
                 bx, violates = adm[0], False
@@ -443,12 +427,12 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
                        beta_star_exact_unstable=False)
             if not np.isfinite(bx):
                 if spurious:
-                    w.append(f"The exact equation has no usable real solution for this δ and R_max. psacalc and "
-                             f"robomit report β* = {bp:.4g}, but that is the spurious root of the cubic they solve: it "
-                             "sits at the pole of δ*(β), where numerator and denominator vanish together (or nearly), "
-                             "and appears for every δ when the controls' effect on the outcome lines up "
-                             "with their relation to the treatment (always with a single control). Do not report "
-                             "it; report δ for β = 0 and the approximation, and say why.")
+                    w.append(f"The exact equation has no real solution for this δ and R_max. psacalc and robomit "
+                             f"report β* = {bp:.4g}, but that is the spurious root of the cubic they solve: it sits "
+                             "at the pole of δ*(β), where numerator and denominator vanish together (or nearly), and "
+                             "appears for every δ when the controls' effect on the outcome lines up with their "
+                             "relation to the treatment (always with a single control). Do not report it; report δ "
+                             "for β = 0 and the approximation, and say why.")
                 else:
                     w.append("The exact equation has no real solution for this δ and R_max; only the approximation "
                              "is reported.")
@@ -468,8 +452,8 @@ def oster(res_uncontrolled, res_controlled, focal: str, r_max: float | None = No
                 out["beta_star_exact_unstable"] = unstable
                 not_to_report = violates or unstable
                 if len(adm) > 1 and not violates:
-                    how = ("closest to β̃ (the controls did not move the coefficient, so no root is ruled out)"
-                           if no_move else "closest to β̃ in the direction of the move from β° (Oster's rule)")
+                    how = ("closest to β̃ in the direction of the move from β° (Oster's rule)" if delta > 0 else
+                           "closest to β̃ (with δ ≤ 0 no direction is applied)")
                     msg = (f"The exact equation has {len(adm)} admissible real roots: β* = {bx:.4g} is the one "
                            f"{how}; the other(s): " + ", ".join(f"{a:.4g}" for a in adm[1:]) + ".")
                     if unstable:
