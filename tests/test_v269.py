@@ -225,8 +225,8 @@ check("z and 2z: counted as 1 instrument; exactly identified text (LIML does not
       rc["n_instruments"] == 1 and rc["p"] < 0.05 and rc["first_stage_F"]["x"] <= 10
       and "LIML does not help here" in tc and "or LIML" not in tc, tc)
 check("z and 2z: warned, in the dict and on screen, that only 1 of the 2 columns adds information",
-      len(rc["warnings"]) == 1 and "2 instrument columns, but only 1 add information" in rc["warnings"][0]
-      and "Warning: 2 instrument columns, but only 1" in tc, rc["warnings"])
+      len(rc["warnings"]) == 1 and "2 instrument column(s), but only 1 add information" in rc["warnings"][0]
+      and "Warning: 2 instrument column(s), but only 1" in tc, rc["warnings"])
 check("z and 2z: the same F and p as z alone (the statistics were already right; only the count was wrong)",
       close(rc["statistic"], rs["statistic"], 1e-8) and close(rc["p"], rs["p"], 1e-8)
       and close(rc["first_stage_F"]["x"], rs["first_stage_F"]["x"], 1e-6) and rs["warnings"] == []
@@ -287,7 +287,7 @@ for sc in (1e-10, 1e-170):
           and close(rr["statistic"], rb["statistic"], 1e-8), (rr["n_instruments"], rr["first_stage_F"]))
 r0, _ = endo(di.assign(z0=0.0), ["z1", "z2", "z0"])
 check("a column of zeros among the instruments: counted 2 of 3, warned, the same F (1e-8)",
-      r0["n_instruments"] == 2 and len(r0["warnings"]) == 1 and "3 instrument columns, but only 2" in r0["warnings"][0]
+      r0["n_instruments"] == 2 and len(r0["warnings"]) == 1 and "3 instrument column(s), but only 2" in r0["warnings"][0]
       and close(r0["first_stage_F"]["x"], rb["first_stage_F"]["x"], 1e-8), (r0["n_instruments"], r0["warnings"]))
 rng = np.random.default_rng(26930)
 dww = di.assign(w=rng.normal(size=400))
@@ -328,6 +328,95 @@ d2x = di.assign(x2=di.x + np.random.default_rng(26932).normal(size=400), zz=2 * 
 r2x, t2x = quiet(dg.endogeneity_test, d2x.y, None, d2x[["x", "x2"]], d2x[["z1", "zz"]])
 check("two endogenous regressors with z and 2z: 1 instrument, 'not identified: 1 excluded instrument(s) for 2'",
       r2x["n_instruments"] == 1 and "not identified: 1 excluded instrument(s) for 2 endogenous" in t2x, t2x)
+
+# --------------------------------------- 5b. endogeneity_test: references by other paths and degenerate designs
+# (review, round 2, reviewer D)
+from linearmodels.iv import IV2SLS  # noqa: E402
+
+rng = np.random.default_rng(26940)
+nr = 300
+z1, z2, w, u, v = rng.normal(size=(5, nr))
+x = 0.25 * z1 + 0.15 * z2 + 0.4 * w + v + 0.6 * u
+dref = pd.DataFrame(dict(y=1 + 0.5 * x + 0.3 * w + u * (1 + 0.5 * np.abs(w)), x=x, z1=z1, z2=z2, w=w))
+Xo = sm.add_constant(dref[["w", "z1", "z2"]])
+for cov in ("HC3", "HC0", "nonrobust"):
+    rr_, _ = endo(dref.assign(), ["z1", "z2"], exog=["w"]) if cov == "HC3" else \
+        quiet(dg.endogeneity_test, dref.y, dref[["w"]], dref[["x"]], dref[["z1", "z2"]], cov_type=cov)
+    f_ref = float(sm.OLS(dref.x, Xo).fit(cov_type=cov).f_test(np.eye(4)[2:]).fvalue)
+    check(f"{cov}: first-stage F = statsmodels F test on the original columns (1e-8)",
+          close(rr_["first_stage_F"]["x"], f_ref, 1e-8), (rr_["first_stage_F"], f_ref))
+ivm = IV2SLS.from_formula("y ~ 1 + w + [x ~ z1 + z2]", dref)
+h0, _ = quiet(dg.endogeneity_test, dref.y, dref[["w"]], dref[["x"]], dref[["z1", "z2"]], cov_type="HC0")
+hn, _ = quiet(dg.endogeneity_test, dref.y, dref[["w"]], dref[["x"]], dref[["z1", "z2"]], cov_type="nonrobust")
+check("HC0: the Durbin-Wu-Hausman F = linearmodels' robust Wooldridge regression test (1e-8)",
+      close(h0["statistic"], ivm.fit(cov_type="robust").wooldridge_regression.stat, 1e-8),
+      (h0["statistic"], ivm.fit(cov_type="robust").wooldridge_regression.stat))
+vh = sm.OLS(dref.x, Xo).fit().resid                              # control function by hand
+Xr = sm.add_constant(dref[["w", "x"]])
+ssr_r, fu_ = sm.OLS(dref.y, Xr).fit().ssr, sm.OLS(dref.y, Xr.assign(vh=vh)).fit()
+f_dwh = (ssr_r - fu_.ssr) / (fu_.ssr / fu_.df_resid)
+check("nonrobust: the Durbin-Wu-Hausman F = the F from the two SSRs with v̂ added by hand (1e-8)",
+      close(hn["statistic"], f_dwh, 1e-8), (hn["statistic"], f_dwh))
+# fewer instruments than endogenous regressors: not identified, test NaN, no first-stage line; the other side
+# (as many) computes the test
+dxx = dref.assign(x2=0.3 * dref.z1 - 0.2 * dref.w + rng.normal(size=nr) + 0.4 * u)
+ru1, tu1 = quiet(dg.endogeneity_test, dxx.y, dxx[["w"]], dxx[["x", "x2"]], dxx[["z1"]])
+ru2, _ = quiet(dg.endogeneity_test, dxx.y, dxx[["w"]], dxx[["x", "x2"]], dxx[["z1", "z2"]])
+check("2 endogenous, 1 instrument: 'not identified', statistic and p NaN, no first-stage line",
+      ru1["n_instruments"] == 1 and np.isnan(ru1["statistic"]) and np.isnan(ru1["p"])
+      and "not identified: 1 excluded instrument(s) for 2" in tu1 and "First stage for" not in tu1, tu1)
+check("2 endogenous, 2 instruments (other side): the test is computed",
+      ru2["n_instruments"] == 2 and np.isfinite(ru2["statistic"]) and np.isfinite(ru2["p"]), ru2)
+# saturated first stage: 10 rows, 1 exogenous regressor, 8 instruments (HC0 gave F = 1e31, "strong")
+rng = np.random.default_rng(26941)
+ds = pd.DataFrame(rng.normal(size=(10, 11)), columns=["y", "x", "w"] + [f"s{k}" for k in range(8)])
+rsat, tsat = quiet(dg.endogeneity_test, ds.y, ds[["w"]], ds[["x"]], ds[[f"s{k}" for k in range(8)]], cov_type="HC0")
+check("saturated first stage (n = 10, 2 + 8 columns): F and test NaN, a warning, 'not computed', no 'strong'",
+      np.isnan(rsat["first_stage_F"]["x"]) and np.isnan(rsat["statistic"]) and "saturated" in " ".join(rsat["warnings"])
+      and "not computed" in tsat and "strong" not in tsat, tsat)
+# near-collinear exogenous regressors (cond ~ 1e12): the instrument still counts (rank tolerances of W and [W, Z]
+# used to disagree: 'not identified' for a strong z), and the F and test equal those of the same span written
+# well conditioned: a + 2e-13·e1 and b + 2e-13·e2 span what a, e1, b, e2 span
+rng = np.random.default_rng(26942)
+a_, b_, zz, u, v = rng.normal(size=(5, 200))
+e1, e2 = rng.normal(size=(2, 200))
+x = 0.5 * zz + v + u
+dnc = pd.DataFrame(dict(y=x + u, x=x, z=zz, a=a_, a2=a_ + 2e-13 * e1, b=b_, b2=b_ + 2e-13 * e2, e1=e1, e2=e2))
+rnc, _ = quiet(dg.endogeneity_test, dnc.y, dnc[["a", "a2", "b", "b2"]], dnc[["x"]], dnc[["z"]], cov_type="HC1")
+rn2, _ = quiet(dg.endogeneity_test, dnc.y, dnc[["a", "e1", "b", "e2"]], dnc[["x"]], dnc[["z"]], cov_type="HC1")
+check("near-collinear exogenous regressors: 1 instrument, and the F and test of the same span well conditioned (1e-4)",
+      rnc["n_instruments"] == 1 and close(rnc["first_stage_F"]["x"], rn2["first_stage_F"]["x"], 1e-4)
+      and close(rnc["statistic"], rn2["statistic"], 1e-4), (rnc["first_stage_F"], rn2["first_stage_F"]))
+# an instrument with a large offset (1e14 + z): centring keeps it (without centring it was counted 0, 'not
+# identified'); 1e14 + z keeps z to about 0.016, so the F agrees with the F of z1 to about 1e-3
+dof = dref.assign(zo=dref.z1 + 1e14)
+rof, _ = endo(dof.assign(), ["zo"], exog=["w"])
+rz1, _ = endo(dref.assign(), ["z1"], exog=["w"])
+check("an instrument with offset 1e14: still 1 instrument, F close to the F of z1 (5e-3; the offset costs digits)",
+      rof["n_instruments"] == 1 and close(rof["first_stage_F"]["x"], rz1["first_stage_F"]["x"], 5e-3),
+      (rof["first_stage_F"], rz1["first_stage_F"]))
+# the review's grid (round 2, reviewer D, seed 8): two pairs of near-collinear exogenous regressors, eps from 1e-14
+# to 1e-12; separate rank tolerances for W and [W, Z] counted 0 instruments at eps = 2.04e-13 ('not identified' for a
+# strong z). Every point of the grid must count 1.
+rng = np.random.default_rng(8)
+a_, b_ = rng.normal(size=200), rng.normal(size=200)
+cnt = []
+for eps_ in np.geomspace(1e-14, 1e-12, 30):
+    Wg = pd.DataFrame(dict(w0=a_, w1=a_ + eps_ * rng.normal(size=200), w2=b_, w3=b_ + eps_ * rng.normal(size=200)))
+    zg = pd.DataFrame(dict(z0=rng.normal(size=200) * 50))
+    u = rng.normal(size=200)
+    x = 0.02 * zg.z0 + u + rng.normal(size=200)
+    dg_ = pd.concat([pd.DataFrame(dict(y=x + u, x=x)), Wg, zg], axis=1)
+    cnt.append(dg.endogeneity_test(dg_.y, Wg, dg_[["x"]], zg, cov_type="HC1", show=False)["n_instruments"])
+check("near-collinear exogenous pairs, 30 values of eps (seed 8): the strong instrument counts 1 at every point",
+      cnt == [1] * 30, cnt)
+try:
+    dg.endogeneity_test(dref.y, None, dref[["x"]], dref[["z1"]].assign(z1=dref.z1.where(dref.index != 3, np.inf)),
+                        show=False)
+    inf_ok = False
+except ValueError as e:
+    inf_ok = "inf" in str(e)
+check("inf in the data: a clear ValueError, not an SVD failure", inf_ok)
 
 # ------------------------------------------------------------------ 6. CHANGELOG and version (found by heading)
 import re  # noqa: E402
