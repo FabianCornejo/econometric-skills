@@ -457,16 +457,15 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     yy = d[y.name]
     Xe = sm.add_constant(d[X_exog.columns]) if X_exog is not None and len(X_exog.columns) else \
         pd.DataFrame({"const": np.ones(len(d))}, index=d.index)
-    # v2.6.9: effective number of excluded instruments = rank([W, Z]) − rank(W), on columns scaled to unit norm (after
-    # dividing by their largest entry, so the norm does not underflow) so that the rank does not depend on units; z and
-    # 2z count once (v2.6.8 review, round 2)
+    # v2.6.9: effective number of excluded instruments = rank([W, Z]) − rank(W), on columns divided by their largest
+    # entry (so that the rank does not depend on units, down to 1e-170); all-zero columns are dropped; z and 2z count
+    # once (v2.6.8 review, round 2)
     def _unit(M):
         M = np.asarray(M, dtype=float)
         if not M.shape[1]:
             return M
         m = np.max(np.abs(M), axis=0)
-        M = M[:, m > 0] / m[m > 0]
-        return M / np.linalg.norm(M, axis=0)
+        return M[:, m > 0] / m[m > 0]
 
     def _rank(M):
         M = _unit(M)

@@ -269,6 +269,22 @@ dww["w2"] = 2 * dww["w"]
 rw, _ = endo(dww, ["z1", "z2"], exog=["w", "w2"])
 check("collinear exogenous regressors (w, 2w): the instruments still count 2, no warning",
       rw["n_instruments"] == 2 and rw["warnings"] == [], (rw["n_instruments"], rw["warnings"]))
+# copies of two highly correlated exogenous regressors among the instruments, and z orthogonal to them in the sample
+# (a residualized instrument): the strongest directions of Z lie in the span of W, so the F must be taken on Z net of
+# W (taking the top singular directions of Z itself gave 65.8 against 25.8)
+rng = np.random.default_rng(26933)
+z, u, v, w = rng.normal(size=(4, 400))
+w2 = w + 0.1 * rng.normal(size=400)
+WW = np.column_stack([np.ones(400), w, w2])
+z = z - WW @ np.linalg.lstsq(WW, z, rcond=None)[0]
+x = 0.3 * z + 0.5 * w + v + u
+dzw = pd.DataFrame(dict(y=1 + 0.5 * x + u, x=x, z=z, w=w, w2=w2, wz=w, w2z=w2))
+rzw, _ = endo(dzw, ["wz", "w2z", "z"], exog=["w", "w2"])
+rzo, _ = endo(dzw, ["z"], exog=["w", "w2"])
+check("copies of correlated exogenous regressors among the instruments, z orthogonal to them: 1 instrument and the "
+      "F of z alone (1e-8)",
+      rzw["n_instruments"] == 1 and close(rzw["first_stage_F"]["x"], rzo["first_stage_F"]["x"], 1e-8),
+      (rzw["first_stage_F"], rzo["first_stage_F"]))
 # nearly collinear but distinct columns (2·z1 + 1e-8 noise) count as 2; the F tests both directions and equals the
 # classical F from the two sums of squared residuals (nonrobust), computed here with lstsq on the raw columns
 rng = np.random.default_rng(26931)
