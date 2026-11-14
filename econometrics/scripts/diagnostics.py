@@ -447,42 +447,67 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     y: Series; X_exog: DataFrame (no constant) or None; x_endog: DataFrame with 1+ columns;
     Z: DataFrame of excluded instruments. Also reports the first-stage F of the excluded instruments.
     Instruments are counted by rank (v2.6.9): columns that are linear combinations of each other or of the
-    exogenous regressors add nothing, and "n_instruments" is the number that do; a warning says when some don't.
+    exogenous regressors add nothing, and "n_instruments" is the number that do; "warnings" says when some don't.
+    The first-stage F tests those n_instruments directions (Z net of the exogenous regressors), so a redundant
+    column changes neither the F nor the test; with none left, the F and the test are NaN and the model is not
+    identified.
     """
     parts = [y, x_endog, Z] if X_exog is None else [y, X_exog, x_endog, Z]
     d = pd.concat(parts, axis=1).dropna()
     yy = d[y.name]
     Xe = sm.add_constant(d[X_exog.columns]) if X_exog is not None and len(X_exog.columns) else \
         pd.DataFrame({"const": np.ones(len(d))}, index=d.index)
-    resids, f_first = {}, {}
-    for c in x_endog.columns:
-        Zfull = pd.concat([Xe, d[Z.columns]], axis=1)
-        fs = sm.OLS(d[c], Zfull).fit(cov_type=cov_type)
-        R = np.zeros((len(Z.columns), Zfull.shape[1])); R[:, -len(Z.columns):] = np.eye(len(Z.columns))
-        f_first[c] = float(fs.wald_test(R, scalar=True, use_f=True).statistic)
-        resids[f"vhat_{c}"] = fs.resid
-    V = pd.DataFrame(resids)
-    # v2.6.9: effective number of excluded instruments = rank([W, Z]) − rank(W), on unit-norm columns so that the
-    # rank does not depend on units; z and 2z count once (v2.6.8 review, round 2)
-    def _rank(M):
+    # v2.6.9: effective number of excluded instruments = rank([W, Z]) − rank(W), on columns scaled to unit norm (after
+    # dividing by their largest entry, so the norm does not underflow) so that the rank does not depend on units; z and
+    # 2z count once (v2.6.8 review, round 2)
+    def _unit(M):
         M = np.asarray(M, dtype=float)
-        nrm = np.linalg.norm(M, axis=0)
-        return int(np.linalg.matrix_rank(M[:, nrm > 0] / nrm[nrm > 0])) if M.shape[1] else 0
-    n_z = _rank(np.column_stack([Xe, d[Z.columns]])) - _rank(Xe)
+        if not M.shape[1]:
+            return M
+        m = np.max(np.abs(M), axis=0)
+        M = M[:, m > 0] / m[m > 0]
+        return M / np.linalg.norm(M, axis=0)
+
+    def _rank(M):
+        M = _unit(M)
+        return int(np.linalg.matrix_rank(M)) if M.shape[1] else 0
+    Wm, Zm = _unit(Xe), _unit(d[Z.columns])
+    n_z = _rank(np.column_stack([Wm, Zm])) - _rank(Wm)
     warn = []
     if n_z < len(Z.columns):
         warn.append(f"{len(Z.columns)} instrument columns, but only {n_z} add information beyond each other and the "
                     "exogenous regressors (the rest are linear combinations): the model is counted with "
-                    f"{n_z} instrument(s).")
+                    + (f"{n_z} instrument(s), and the first-stage F tests only those." if n_z else
+                       "no instrument, so there is no first stage to test."))
+    # The first-stage F tests the exclusion restriction on the n_z directions of Z that are not in the span of the
+    # exogenous regressors (Z residualized on W, orthonormal basis by SVD). [W, basis] spans the same space as [W, Z],
+    # so the fitted values and v̂ are unchanged; a redundant column no longer lends the exogenous regressors' effect
+    # to the F (v2.6.9 review, round 1: z and 3w gave F = 196, "strong", against 4.4 with z alone).
+    if n_z > 0:
+        Zr = Zm - Wm @ np.linalg.lstsq(Wm, Zm, rcond=None)[0] if Wm.shape[1] else Zm
+        U = np.linalg.svd(Zr, full_matrices=False)[0][:, :n_z]
+        Zeff = pd.DataFrame(U, index=d.index, columns=[f"_zdir{k + 1}" for k in range(n_z)])
+    resids, f_first = {}, {}
+    for c in x_endog.columns:
+        if n_z > 0:
+            fs = sm.OLS(d[c], pd.concat([Xe, Zeff], axis=1)).fit(cov_type=cov_type)
+            R = np.zeros((n_z, fs.params.shape[0])); R[:, -n_z:] = np.eye(n_z)
+            f_first[c] = float(fs.wald_test(R, scalar=True, use_f=True).statistic)
+        else:
+            fs = sm.OLS(d[c], Xe).fit(cov_type=cov_type)
+            f_first[c] = float("nan")
+        resids[f"vhat_{c}"] = fs.resid
+    V = pd.DataFrame(resids)
     est = sm.OLS(yy, pd.concat([Xe, d[x_endog.columns], V], axis=1)).fit(cov_type=cov_type)
     Rv = np.zeros((V.shape[1], est.params.shape[0])); Rv[:, -V.shape[1]:] = np.eye(V.shape[1])
     w = est.wald_test(Rv, scalar=True, use_f=True)
-    out = {"first_stage_F": f_first, "statistic": float(w.statistic), "p": float(w.pvalue), "n_instruments": n_z,
+    stat_, p_ = (float(w.statistic), float(w.pvalue)) if n_z > 0 else (float("nan"), float("nan"))
+    out = {"first_stage_F": f_first, "statistic": stat_, "p": p_, "n_instruments": n_z,
            "warnings": warn}
     if show:
         for m in warn:
             print("\nWarning:", m)
-        for c, f in f_first.items():
+        for c, f in (f_first.items() if n_z else ()):
             print(f"\nFirst stage for {c}: F of excluded instruments = {f:.2f} → {_first_stage_label(f)}")
         weak = any(not f > 10 for f in f_first.values())          # NaN counts as weak, as its label says
         multi = len(f_first) > 1

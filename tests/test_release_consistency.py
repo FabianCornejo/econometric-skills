@@ -52,9 +52,11 @@ check("the rule rejects two different counts inside the README",
 # --------------------------------------------------------------- the repository
 readme = (ROOT / "README.md").read_text(encoding="utf-8")
 market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
-plugin = market["plugins"][0]
-r, d = counts(readme, plugin["description"])
-check("README and marketplace state the same check count", agree(readme, plugin["description"]), (r, d))
+plugins = market["plugins"]
+check("every plugin in the marketplace states the README's check count",
+      len(plugins) >= 1 and all(agree(readme, p_["description"]) for p_ in plugins),
+      [counts(readme, p_["description"]) for p_ in plugins])
+plugin = next(p_ for p_ in plugins if p_["name"] == "econometrics")
 
 changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 top = re.search(r"^## v(\S+)", changelog, re.M).group(1)

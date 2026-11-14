@@ -70,8 +70,9 @@ for cov in ("robust", "unadjusted"):
     check(f"{cov}: z1*z2 and z1 + z2 + z12 give the same partial F and partial R² (1e-10)",
           close(fa, fb, 1e-10) and close(a["first_stage"]["partial R²"].iloc[0], b["first_stage"]["partial R²"].iloc[0],
                                          1e-10), (fa, fb))
-    check(f"{cov}: the partial F of z1*z2 is not three times the right one (the old count of 1 instrument)",
-          not close(fa, 3 * fb, 1e-3), (fa, fb))
+    if cov == "robust":   # unadjusted: linearmodels already reports an F, which the old count left alone
+        check("robust: the partial F of z1*z2 is not three times the right one (the old count of 1 instrument)",
+              not close(fa, 3 * fb, 1e-3), (fa, fb))
     check(f"{cov}: both overidentified by 2, with the same tests and statistics (1e-10)",
           a["overidentified_by"] == 2 and b["overidentified_by"] == 2 and len(a["tests"]) == 2
           and np.allclose(a["tests"][["statistic", "p"]].to_numpy(), b["tests"][["statistic", "p"]].to_numpy(),
@@ -140,6 +141,32 @@ check("[x*w ~ z1*z2]: three endogenous columns (x, w, x:w) and three instruments
       and inter["anderson_rubin"] is None and "Exactly identified" in ti and "Anderson-Rubin 95%" not in ti,
       (inter["endogenous"], inter["overidentified_by"]))
 
+Zt = sm.add_constant(de[["z1", "z2", "z12"]])
+f_two = [float(sm.OLS(de[c], Zt).fit(cov_type="HC0").wald_test(np.eye(4)[1:], scalar=True, use_f=True).statistic)
+         for c in ("x", "w")]
+check("two endogenous, three instruments: each partial F = statsmodels HC0 Wald F on the 3 columns (1e-8)",
+      all(close(a_, b_, 1e-8) for a_, b_ in zip(two["first_stage"]["partial F"], f_two)),
+      (two["first_stage"]["partial F"].tolist(), f_two))
+check("[x*w ~ z1*z2]: the header names the three endogenous columns, and the 104.7 note is there (3 instruments)",
+      "endogenous: x, w, x:w;" in ti
+      and inter["first_stage"]["strength"].str.endswith("[104.7 is the one-instrument threshold of Lee et al.]").all(),
+      inter["first_stage"]["strength"].tolist())
+# exact identification with two endogenous regressors, both sides (weak design; seed 2693)
+rng = np.random.default_rng(2693)
+z1, z2, u, v, wv = rng.normal(size=(5, n))
+x = 0.05 * z1 + 0.04 * z2 + v + 0.5 * u
+w = 0.04 * z1 - 0.05 * z2 + 0.05 * z1 * z2 + wv + 0.3 * u
+d2w = pd.DataFrame(dict(y=1 + 0.5 * x + 0.3 * w + u, x=x, w=w, z1=z1, z2=z2, z12=z1 * z2))
+ex2, _ = quiet(dg.iv_report, "y ~ 1 + [x + w ~ z1 + z2]", d2w)
+ov2, _ = quiet(dg.iv_report, "y ~ 1 + [x + w ~ z1 + z2 + z12]", d2w)
+we = [m for m in ex2["warnings"] if m.startswith("weak instrument")]
+wo = [m for m in ov2["warnings"] if m.startswith("weak instrument")]
+check("two endogenous, two instruments, weak: exactly identified, 'LIML does not help', not '(or LIML)'",
+      len(we) == 1 and "exactly identified, it equals 2SLS" in we[0] and "(or LIML)" not in we[0]
+      and ex2["overidentified_by"] == 0, we)
+check("two endogenous, three instruments, weak: '(or LIML)' (other side)",
+      len(wo) == 1 and "(or LIML)" in wo[0] and "exactly identified" not in wo[0] and ov2["overidentified_by"] == 1, wo)
+
 # transformed endogenous terms are named by the model with spaces. On main, the '+' inside np.log(xl+10) split it
 # into two "endogenous" names (exactly identified, no AR set, no overidentification test), and I(xl*1) stopped with
 # KeyError: 'I(xl*1)' (the column is 'I(xl * 1)')
@@ -202,10 +229,63 @@ rx, tx = endo(dx, ["z", "z3"], exog=["w"])
 check("an instrument equal to 3 × an exogenous regressor is not counted (1 of 2), and it is said",
       rx["n_instruments"] == 1 and len(rx["warnings"]) == 1 and "only 1 add information" in rx["warnings"][0]
       and "or LIML" not in tx, (rx["n_instruments"], rx["warnings"], tx))
+check("z, 3w with w exogenous: the first-stage F is the F of z alone (1e-8), not the F of the redundant columns",
+      close(rx["first_stage_F"]["x"], endo(dx, ["z"], exog=["w"])[0]["first_stage_F"]["x"], 1e-8),
+      (rx["first_stage_F"], endo(dx, ["z"], exog=["w"])[0]["first_stage_F"]))
+# the review's design (round 1, reviewer B, seed 5): z weak, w strong in the first stage; with z3 = 3w the F of the
+# redundant columns was 196, "strong", against 4.4 with z alone
+rng = np.random.default_rng(5)
+z, u, v, w = rng.normal(size=(4, nn))
+x = 0.11 * z + 0.8 * w + v + u
+d5 = pd.DataFrame(dict(y=1 + 0.5 * x + u, x=x, z=z, w=w, z3=3 * w))
+r5, t5 = endo(d5, ["z", "z3"], exog=["w"])
+r5z, _ = endo(d5, ["z"], exog=["w"])
+check("z, 3w (review's design): F = F of z alone (1e-8), labelled WEAK, and no 'strong' nor 'use IV/2SLS'",
+      close(r5["first_stage_F"]["x"], r5z["first_stage_F"]["x"], 1e-8) and r5["first_stage_F"]["x"] < 10
+      and "→ WEAK" in t5 and "strong" not in t5 and "use IV/2SLS" not in t5,
+      (r5["first_stage_F"], r5z["first_stage_F"], t5))
 # no excluded instrument left: 'not identified'
 rn, tn = endo(dx, ["z3"], exog=["w"])
-check("the only instrument is 3 × an exogenous regressor: 0 instruments, 'not identified'",
-      rn["n_instruments"] == 0 and "not identified: 0 excluded instrument(s) for 1 endogenous" in tn, tn)
+check("the only instrument is 3 × an exogenous regressor: 0 instruments, 'not identified', F and test NaN, no "
+      "first-stage line",
+      rn["n_instruments"] == 0 and "not identified: 0 excluded instrument(s) for 1 endogenous" in tn
+      and np.isnan(rn["first_stage_F"]["x"]) and np.isnan(rn["statistic"]) and np.isnan(rn["p"])
+      and "First stage for" not in tn and "no instrument, so there is no first stage" in rn["warnings"][0], tn)
+# units and degenerate columns (review, round 1, reviewer B: mutants of the rank that survived)
+rb, _ = endo(di, ["z1", "z2"])
+for sc in (1e-10, 1e-170):
+    rr, _ = endo(di.assign(z1=di.z1 * sc), ["z1", "z2"])
+    check(f"an instrument scaled by {sc:g}: still 2, no warning, the same F and test (1e-8)",
+          rr["n_instruments"] == 2 and rr["warnings"] == [] and close(rr["first_stage_F"]["x"], rb["first_stage_F"]["x"],
+                                                                       1e-8)
+          and close(rr["statistic"], rb["statistic"], 1e-8), (rr["n_instruments"], rr["first_stage_F"]))
+r0, _ = endo(di.assign(z0=0.0), ["z1", "z2", "z0"])
+check("a column of zeros among the instruments: counted 2 of 3, warned, the same F (1e-8)",
+      r0["n_instruments"] == 2 and len(r0["warnings"]) == 1 and "3 instrument columns, but only 2" in r0["warnings"][0]
+      and close(r0["first_stage_F"]["x"], rb["first_stage_F"]["x"], 1e-8), (r0["n_instruments"], r0["warnings"]))
+rng = np.random.default_rng(26930)
+dww = di.assign(w=rng.normal(size=400))
+dww["w2"] = 2 * dww["w"]
+rw, _ = endo(dww, ["z1", "z2"], exog=["w", "w2"])
+check("collinear exogenous regressors (w, 2w): the instruments still count 2, no warning",
+      rw["n_instruments"] == 2 and rw["warnings"] == [], (rw["n_instruments"], rw["warnings"]))
+# nearly collinear but distinct columns (2·z1 + 1e-8 noise) count as 2; the F tests both directions and equals the
+# classical F from the two sums of squared residuals (nonrobust), computed here with lstsq on the raw columns
+rng = np.random.default_rng(26931)
+dn = di.assign(z2e=2 * di.z1 + 1e-8 * rng.normal(size=400))
+rnn, _ = quiet(dg.endogeneity_test, dn.y, None, dn[["x"]], dn[["z1", "z2e"]], cov_type="nonrobust")
+Xn = np.column_stack([np.ones(400), dn.z1, dn.z2e])
+ssr_u = float(np.sum((dn.x - Xn @ np.linalg.lstsq(Xn, dn.x, rcond=None)[0]) ** 2))
+ssr_r = float(np.sum((dn.x - dn.x.mean()) ** 2))
+f_cl = ((ssr_r - ssr_u) / 2) / (ssr_u / 397)
+check("z1 and 2·z1 + 1e-8 noise: 2 instruments, and the nonrobust F = the classical F from the two SSRs (1e-6)",
+      rnn["n_instruments"] == 2 and rnn["warnings"] == [] and close(rnn["first_stage_F"]["x"], f_cl, 1e-6),
+      (rnn["n_instruments"], rnn["first_stage_F"], f_cl))
+# two endogenous regressors, z and 2z: 1 instrument for 2, not identified (the old count said 2 and went on)
+d2x = di.assign(x2=di.x + np.random.default_rng(26932).normal(size=400), zz=2 * di.z1)
+r2x, t2x = quiet(dg.endogeneity_test, d2x.y, None, d2x[["x", "x2"]], d2x[["z1", "zz"]])
+check("two endogenous regressors with z and 2z: 1 instrument, 'not identified: 1 excluded instrument(s) for 2'",
+      r2x["n_instruments"] == 1 and "not identified: 1 excluded instrument(s) for 2 endogenous" in t2x, t2x)
 
 # ------------------------------------------------------------------ 6. CHANGELOG and version (found by heading)
 import re  # noqa: E402
@@ -218,7 +298,7 @@ e269 = m.group(0) if m else ""
 check("CHANGELOG has a v2.6.9 entry, above v2.6.8, naming both fixes and the consistency test",
       bool(m) and log.index("## v2.6.9") < log.index("## v2.6.8")
       and all(t in e269 for t in ("`[x ~ z1*z2]`", "7.96 instead of 2.65", "`[np.log(x+10) ~ z1 + z2]`", "counted by rank",
-                                  "`n_instruments`", "tests/test_release_consistency.py")), e269[:300])
+                                  "`n_instruments`", "196, \"strong\", against 4.4", "tests/test_release_consistency.py")), e269[:300])
 ver = tuple(int(p_) for p_ in reporting.SKILL_VERSION.split("."))
 check("SKILL_VERSION is 2.6.9 or later (not pinned as the last version)", ver >= (2, 6, 9), reporting.SKILL_VERSION)
 
