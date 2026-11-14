@@ -3250,7 +3250,7 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
         w.append("The gap is close to a unit root (estimated ρ above 0.95, clipped): the effect is not distinguishable "
                  "from a drifting gap with this series; the CI is not reliable."
                  + (" With fewer than 20 periods this also happens with moderate persistence: in the skill's checks "
-                    "it hit about 18% of gaps with ρ = 0.4 and 4% of white-noise gaps with 12 periods, and 5% and "
+                    "it hit about 17% of gaps with ρ = 0.4 and 3% of white-noise gaps with 12 periods, and 7% and "
                     "0.5% with 16; the series is too short to tell." if len(g) < 20 else ""))
     elif main["rho"] > 0.5:
         w.append(f"The gap is persistent (ρ ≈ {main['rho']:.2f}): the CI is wide, and the block-means route "
@@ -3271,10 +3271,15 @@ def did_single_treated(df: pd.DataFrame, unit: str, time: str, y: str, treated, 
                          f"{T0} pre periods), which inflates its standard error: it rejects anyway (p = "
                          f"{chk['p']:.3f}), so that finding stands and is if anything understated.")
             else:
+                # v2.6.8: rates measured for each check in its own design (20000 stationary AR(1) series per cell,
+                # development repository, claude/scripts/corte_rho_v268.py); the 18% quoted before was the main step's, for the trend test
+                # and for the placebo alike, and the placebo never runs on 12 periods
+                often = ("about 21% of 12-period and 10% of 16-period pre-periods with ρ = 0.4, 4.5% with 20"
+                         if nm == "pre-period trend test" else
+                         "about 7% of 16-period pre-periods with ρ = 0.4 and 3.5% with 20")
                 w.append(f"The {nm} found the pre-period gap close to a unit root (ρ above 0.95, clipped; "
                          f"{T0} pre periods): that check did not reject, but it is not informative either. Short "
-                         "pre-periods with moderate persistence do this often (about 18% of 12-period gaps with "
-                         "ρ = 0.4 in the skill's checks).")
+                         f"pre-periods with moderate persistence do this often ({often}, in the skill's checks).")
     if trend is not None and trend["p"] <= alpha:
         w.append(f"The gap trends before treatment (slope {trend['slope']:.3g} per period, p = {trend['p']:.3f}): "
                  "parallel trends fail in the pre-period, and a post-minus-pre contrast picks up the trend.")

@@ -126,9 +126,15 @@ check("agent: --check when the doctor already ran in this analysis folder, not '
 # ------------------------------------------------------------------------------------------------ 4. rules
 rules = (SKILL / "references" / "interpretation-rules.md").read_text(encoding="utf-8")
 heads = re.findall(r"^## .*$", rules, re.M)
-check("interpretation rules: 'Rules added in v2.6.6' is the last section", heads[-1:] == ["## Rules added in v2.6.6"],
-      heads[-3:])
+# v2.6.8: this check said "is the last section", which every later version breaks; what it guards is that the
+# v2.6.6 section is there, right after v2.6.4, and that only sections of later versions come after it.
+_vt = lambda h: tuple(int(p) for p in re.search(r"v([\d.]+)$", h).group(1).split("."))
+_i66 = heads.index("## Rules added in v2.6.6") if "## Rules added in v2.6.6" in heads else -1
+check("interpretation rules: 'Rules added in v2.6.6' right after v2.6.4, followed only by later versions",
+      _i66 > 0 and heads[_i66 - 1] == "## Rules added in v2.6.4"
+      and all(h.startswith("## Rules added in v") and _vt(h) > (2, 6, 6) for h in heads[_i66 + 1:]), heads[-3:])
 r266 = rules[rules.index("## Rules added in v2.6.6"):] if "## Rules added in v2.6.6" in rules else ""
+r266 = r266.split("\n## ", 1)[0] if "\n## " in r266 else r266          # the v2.6.6 section only
 check("interpretation rules v2.6.6: the summary, the slide title and the chat reply carry the number",
       all(k in r266 for k in ("opening line", "executive summary", "slide title", "reply in the chat", "1.2x",
                               "worst case", "classical SE")), r266[:400])

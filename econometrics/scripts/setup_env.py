@@ -914,22 +914,41 @@ def doctor_actions(rep: dict, os_name=os.name) -> list[str]:
     pin = lst.get("project_install")
     usr = (lst.get("user_install") or {}).get("version")
     ref = rep["latest"].get("version") or rep["skill"].get("version")
-    if pin and pin.get("version") and ref and _vtuple(str(pin["version"])) < _vtuple(str(ref)):
+    # v2.6.8: these two versions come straight from `claude plugin list --json`, the only skill versions here not
+    # filtered by _version_or_none (copies, the latest release and the running skill are). _vtuple keeps the digits
+    # of each part, so a version that is not a release number got an arbitrary place: "abcdef0" became (0,), older
+    # than every release (advice to update or uninstall), and "3a98a97" became (39897,), newer (no advice). None was
+    # seen on notebook 1 (2026-11-13); such a version cannot be ordered, so it is not compared.
+    pin_v = _version_or_none(str(pin["version"]).strip()) if pin and pin.get("version") else None
+    usr_v = _version_or_none(str(usr).strip()) if usr else None
+    if pin and pin.get("version") and ref and pin_v is None:
+        acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the skill "
+                    f"at version {pin['version']}, which is not a release number, so the doctor cannot tell whether "
+                    f"it is behind {ref}. Check it with claude plugin list --json (projectPath and version) before "
+                    "updating or uninstalling anything")
+    elif pin_v and ref and _vtuple(pin_v) < _vtuple(str(ref)):
         # Uninstalling the folder's own install only helps when a user-scope install is there to take over and
         # is newer; with no user-scope install that command would remove the skill from the folder
-        # (v2.5.2 review). Then the fix is to update it in place.
-        if usr and _vtuple(str(usr)) > _vtuple(str(pin["version"])):
+        # (v2.5.2 review). Then the fix is to update it in place. A user-scope version that is not a release
+        # number is not known to be newer (v2.6.8).
+        if usr_v and _vtuple(usr_v) > _vtuple(pin_v):
             acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the "
                         f"skill, pinned at {pin['version']}, while the user-scope install is {usr}: sessions here "
                         "keep loading the old version. With the user's permission, inside the folder: claude "
                         f"plugin uninstall {PLUGIN_ID} --scope {pin.get('scope')} (the {usr} user-scope install "
                         "then applies), then restart Claude Code")
         else:
+            # v2.6.8 review: say why uninstalling would not help, truthfully: no user-scope install, or one that is
+            # not newer, or one whose version cannot be ordered
+            why = ("there is no user-scope install to take over" if not lst.get("user_install") else
+                   "the user-scope install reports no version, so it is not known to be newer" if not usr else
+                   f"the user-scope install ({str(usr).strip()}) is not a release number, so it is not known to be "
+                   "newer" if usr_v is None else
+                   f"the user-scope install ({usr_v}) is not newer")
             acts.append(f"this folder ({lst.get('folder')}) has its own {pin.get('scope')}-scope install of the "
-                        f"skill, pinned at {pin['version']} (current {ref}), and it is the only install that "
-                        "applies here: sessions here keep loading the old version. With the user's permission, "
-                        f"inside the folder: claude plugin update {PLUGIN_ID} --scope {pin.get('scope')}, then "
-                        "restart Claude Code (do not uninstall it: there is no user-scope install to take over)")
+                        f"skill, pinned at {pin['version']} (current {ref}), and sessions here keep loading the old "
+                        f"version. With the user's permission, inside the folder: claude plugin update {PLUGIN_ID} "
+                        f"--scope {pin.get('scope')}, then restart Claude Code (do not uninstall it: {why})")
     if lst.get("checked") and lst.get("crowded") and lst.get("prepared"):
         acts.append(f"skill listing still crowded in this folder although it is already prepared "
                     f"({lst.get('plugins_off')} plugins off in its .claude/settings.json): the {lst['skills']} skills "
