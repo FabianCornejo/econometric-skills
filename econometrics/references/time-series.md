@@ -70,6 +70,8 @@ Practical view: for the most common macro series, the order of integration is us
 
 `scripts/diagnostics.py stationarity` runs ADF, KPSS and DF-GLS in levels and differences, with a constant and with a trend, and suggests the order of integration.
 
+Which function (v2.6.10): `diagnostics.stationarity` first, for the order of integration of each series; `ts_univariate.adf_bootstrap` when the series is short and the asymptotic ADF p-value is not trusted (it reports both); Zivot-Andrews when a break is suspected.
+
 ## 4. Structural breaks
 
 Breaks (pandemic, exchange-rate regime change, methodology change, a new product line) violate the constant-parameter assumption. Linked to the Lucas critique: parameters depend on the "rules of the game".

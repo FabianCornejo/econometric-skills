@@ -149,6 +149,38 @@ o_real = shown(rep_off)
 check("doctor --offline end to end: the printed report ends with the line asking for a run without --offline",
       AGAIN in last(o_real) and "complete and up to date" not in o_real, last(o_real))
 
+# ----------------------------------------------------------------------------------- 5. description (item 3.1)
+import yaml  # noqa: E402
+desc = yaml.safe_load(skill_md.split("---")[1])["description"]
+check("description: at most 980 characters (room for v2.7.0; it was 1022 of 1024)", 0 < len(desc) <= 980, len(desc))
+kept = ["hypothesis", "two groups", "Welch", "proportions", "variances", "chi-square", "normality", "correlation",
+        "power and sample size", "regression", "effect of X on Y", "VaR", "WACC", "forecast", "DiD",
+        "even a quick one you could do by hand", "an interval for a proportion", "a sample size", "a p-value",
+        "a conceptual one", "review a conclusion, report or paper", "catch errors of answers from memory",
+        "teaching a method", "not data, finance or risk skills", "consultant", "teacher", "reviewer", "FRTB",
+        "even without the word econometrics", "event studies", "time-to-event", "elasticity", "choice of controls"]
+check("description: every phrase the earlier tests and the routing history need is still there",
+      all(k in desc for k in kept), [k for k in kept if k not in desc])
+check("description: the methods sit inside the tasks; no separate 'Methods:' list",
+      "Methods:" not in desc and "any regression (OLS, IV, panel, logit)" in desc
+      and "policy evaluation (DiD, RD, synthetic control)" in desc and "forecast (ARIMA, GARCH)" in desc)
+
+# ----------------------------------------------------------------------------------- 6. unit roots (item 3.2)
+rows = [ln for ln in skill_md.splitlines() if ln.startswith("| ")]
+one = next(r for r in rows if r.startswith("| One series:"))
+order = next((r for r in rows if r.startswith("| Order of integration before modelling")), "")
+ts_md = (SKILL / "references" / "time-series.md").read_text(encoding="utf-8")
+check("routing: one series -> unit root names which function comes first (stationarity, then adf_bootstrap)",
+      "unit root (`diagnostics.stationarity` first; `adf_bootstrap` for bootstrap p-values in a short series)" in one)
+check("routing: the generic 'Time series (levels, lags, cointegration, VAR)' row is gone; the row says what "
+      "stationarity and cointegration do (cointegration after I(1); Engle-Granger and Johansen)",
+      not any(r.startswith("| Time series (levels") for r in rows)
+      and "`diagnostics.stationarity`, `cointegration`" in order and "once all series are I(1)" in order
+      and "Engle-Granger and Johansen" in order, order)
+check("time-series.md section 3 states the same choice of function",
+      "Which function (v2.6.10): `diagnostics.stationarity` first" in ts_md
+      and "`ts_univariate.adf_bootstrap` when the series is short" in ts_md)
+
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")
 sys.exit(0 if passed == len(results) else 1)
