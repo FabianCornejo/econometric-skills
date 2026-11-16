@@ -9,7 +9,8 @@ Blind behavioural tests of the `econometrics` skill. The test suites in `tests/`
 3. Paste only the `prompt` from `cases.json`, with no context.
 4. Grade the answer against every `must` and `must_not` criterion. Read the code in the answer against the text: an answer that recommends a step and then shows code doing something else fails.
 5. Record the result in the table below. A case passes only if all `must` hold and no `must_not` is triggered.
-6. For each failure, decide whether the fix belongs in the code (a missing function or option), in `SKILL.md` (a rule Claude should follow) or in a reference file, and add a criterion here if the failure was new.
+6. **Cases with data** (a `data` field and `{DATA_DIR}` in the prompt, such as `iv-interaction-numbers`): run them in Claude Code, which can run the script, in a new folder that holds the data file (regenerate it with the script named in `data`, or copy it from `evals/data/`), and replace `{DATA_DIR}` with that folder's path, written with `/`. Grade with the transcript next to the answer: a `must` about a number printed by the script is checked against the script's output, not against the final reply alone.
+7. For each failure, decide whether the fix belongs in the code (a missing function or option), in `SKILL.md` (a rule Claude should follow) or in a reference file, and add a criterion here if the failure was new.
 
 ## History
 

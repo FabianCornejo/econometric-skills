@@ -113,7 +113,8 @@ check("v2.6.10 section: linearmodels fits (no t_test) use delta_method with res.
       "for linearmodels fits (IV, panel), which have no `t_test`" in v2610 and "res.params, res.cov)" in v2610
       and "with few clusters, build the interval from its printed SE with t(G − 1)" in v2610
       and "(z₁₋α/₂ + z_power) × SE (2.8 × SE at 5% and 80% power)" in v2610
-      and "`simulation.power_mde` is for a difference of two means" in v2610
+      and "`simulation.power_mde` is the two-group formula (a binary treatment" in v2610
+      and "the v2.6.8 validation had shown the same failure" in v2610
       and "A number quoted unchanged from the user or a cited source is attributed to it." in v2610)
 
 import numpy as np  # noqa: E402
@@ -156,7 +157,7 @@ def shown(rep):
 
 OFF = {"version": None, "status": "not checked (--offline)"}
 AGAIN = "if this computer has network, run --doctor again without --offline before answering"
-last = lambda o: o.rstrip("\n").splitlines()[-1]  # noqa: E731
+last = lambda o: (o.rstrip("\n").splitlines() or [""])[-1]  # noqa: E731
 
 
 class _Reply(io.BytesIO):                                  # a context manager like urlopen's response
@@ -215,17 +216,53 @@ check("doctor --offline: no request; the JSON status is unchanged and --offline 
       and rep_off["actions"] == rep_err["actions"] and rep_err["latest"] == ERR, (rep_off["actions"], rep_err["actions"]))
 check("doctor --offline, report built by doctor() and printed: ends with the line asking for a run without --offline",
       AGAIN in last(shown(rep_off)) and "complete and up to date" not in shown(rep_off), last(shown(rep_off)))
-with tempfile.TemporaryDirectory() as tmp:     # review B-2: the real command line, as the agent runs it
-    env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("CLAUDE", "ECONOMETRICS"))}
-    env.update(HOME=tmp, USERPROFILE=tmp, CLAUDE_CONFIG_DIR=str(Path(tmp) / ".claude"), PYTHONIOENCODING="utf-8",
-               PATH=os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
-                                    if not (Path(p) / "claude").exists() and not (Path(p) / "claude.cmd").exists()))
-    cli = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), "--doctor", "--offline",
-                          "--folder", tmp], capture_output=True, text=True, encoding="utf-8", env=env, cwd=tmp,
-                         timeout=300)
-    lines = [ln for ln in (cli.stdout + cli.stderr).splitlines() if ln.strip()]
+import shutil  # noqa: E402
+
+
+def run_cli(args, **extra_env):
+    """setup_env.py run as the agent runs it, isolated: temp HOME/USERPROFILE/CLAUDE_CONFIG_DIR and no `claude` on the
+    PATH (any extension Windows tries: review r2 B-2.4). Returns (returncode, non-empty lines of stdout+stderr,
+    stdout); a timeout returns code 124 (review r2 B-2.5: a FAIL line, not a traceback)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {k: v for k, v in os.environ.items()
+               if not k.upper().startswith(("CLAUDE", "ECONOMETRICS")) and k.upper() not in ("NO_PROXY",)}
+        env.update(HOME=tmp, USERPROFILE=tmp, CLAUDE_CONFIG_DIR=str(Path(tmp) / ".claude"), PYTHONIOENCODING="utf-8",
+                   PATH=os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
+                                        if p and shutil.which("claude", path=p) is None))
+        env.update(extra_env)
+        try:
+            cli = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), *args, "--folder", tmp],
+                                 capture_output=True, text=True, encoding="utf-8", env=env, cwd=tmp, timeout=300)
+        except subprocess.TimeoutExpired:
+            return 124, [], ""
+    return cli.returncode, [ln for ln in (cli.stdout + cli.stderr).splitlines() if ln.strip()], cli.stdout
+
+
+rc, lines, _ = run_cli(["--doctor", "--offline"])
 check("doctor --offline from the command line (stdout and stderr): the last line asks for a run without --offline",
-      cli.returncode == 0 and bool(lines) and AGAIN in lines[-1], (cli.returncode, lines[-3:]))
+      rc == 0 and bool(lines) and AGAIN in lines[-1], (rc, lines[-3:]))
+DEAD = "http://127.0.0.1:9"                       # review r2 B-2.1: a network error without network, fast and local
+rc_e, lines_e, _ = run_cli(["--doctor"], HTTPS_PROXY=DEAD, https_proxy=DEAD, HTTP_PROXY=DEAD, http_proxy=DEAD)
+check("doctor with a network error, from the command line: the last line says the release was not checked; "
+      "never 'up to date'; no --offline line",
+      rc_e == 0 and bool(lines_e) and lines_e[-1].startswith("Nothing to do in this setup; the latest release was not "
+                                                             "checked (")
+      and lines_e[-1].endswith("so the skill may be out of date.")
+      and not any("up to date" in ln for ln in lines_e) and not any(AGAIN in ln for ln in lines_e), (rc_e, lines_e[-2:]))
+rc_j, _, out_j = run_cli(["--doctor", "--offline", "--json"])
+try:
+    js = json.loads(out_j)
+except ValueError:
+    js = {}
+check("doctor --offline --json from the command line: the same keys as v2.6.9, latest 'not checked (--offline)', no "
+      "To do item, and nothing printed after the JSON (review r2 B-2.2)",
+      rc_j == 0 and set(js) == {"claude_dir", "account", "python", "core_missing", "extras", "skill", "copies",
+                                "autoupdate", "listing", "interpreters", "latest", "actions"}
+      and js.get("latest") == OFF and js.get("actions") == [], (rc_j, sorted(js), js.get("latest")))
+check("doctor text: --offline with To do items -> the line before the last says the release was not checked "
+      "(review r2 B-2.3)",
+      o_off_act.rstrip("\n").splitlines()[-2:-1] == ["The latest release was not checked (--offline), so the skill may "
+                                                    "be out of date."], o_off_act.splitlines()[-3:])
 
 # ----------------------------------------------------------------------------------- 5. description (item 3.1)
 import yaml  # noqa: E402
@@ -267,13 +304,13 @@ check("time-series.md section 3 states the same choice of function",
 
 # ----------------------------------------------------------------------------------- 7. --offline in section 7 (3.5)
 sec7 = skill_md[skill_md.index("## 7. Environment"):skill_md.index("## 8.")]       # review B-5: section 7 only
-check("section 7: --offline only without network, not because of a sandbox or speed; read the whole report",
-      "Use `--offline` only on a computer without network, not because of a sandbox or to save time" in sec7
-      and "read the whole report (no `tail` or `Select-Object -Last`): its last lines say what to do." in sec7
-      and "`--offline` only without network, never by default" in sec7)
-check("section 7 points to the report's last lines, and the doctor's last line says what to do with --offline "
-      "(review B-4: read from the printed report, not from the test's constant)",
-      "its last lines say what to do" in sec7 and "run --doctor again without --offline" in last(o_off))
+check("section 7: --offline only without network, never by default, never because of a sandbox or to save time; "
+      "read the whole report (the one rule said once, review r2 A nit 2)",
+      "(one request to api.github.com; `--offline` only without network, never by default)" in sec7
+      and "Never add it because of a sandbox or to save time, and read the whole report (no `tail` or "
+          "`Select-Object -Last`)." in sec7 and sec7.count("--offline") == 1)
+check("the doctor's last line says what to do after --offline (read from the printed report, review B-4)",
+      "run --doctor again without --offline" in last(o_off))
 check("section 7: what left it is said elsewhere (the doctor lists the extras, the README names them; --install "
       "chooses pip itself); a missing extra still stops with the install line; within the v2.5.1 size",
       "any other extra only when the task needs it; a function missing one stops with the install line." in sec7
@@ -282,7 +319,20 @@ check("section 7: what left it is said elsewhere (the doctor lists the extras, t
               for x in ("rd", "regimes", "panel", "web", "data-br", "data-intl"))
       and all(x in se.OPTIONAL for x in ("rd", "regimes", "panel", "web", "data-br", "data-intl"))
       and "--break-system-packages" in (SKILL / "scripts" / "setup_env.py").read_text(encoding="utf-8")
-      and len(sec7) <= 2859, len(sec7))
+      and len(sec7) <= 2832, len(sec7))
+check("routing: the 'One series' row lists diagnostics.stationarity in its function column too (review r2 A nit 6)",
+      one.count("`diagnostics.stationarity`") == 2 and one.split(" | ")[-1].startswith("`diagnostics.stationarity`"))
+cases = json.loads((ROOT / "evals" / "cases.json").read_text(encoding="utf-8"))
+case = next((c for c in cases.get("cases", []) if c.get("id") == "iv-interaction-numbers"), {})
+gen = ROOT / "evals" / "data" / "make_treino_regiao_v269.py"
+check("blind eval iv-interaction-numbers: data and generator are in the public repository; the MDE must matches "
+      "the rule (SE of the coefficient, not the two-group formula); strength graded by the AR set, not by a word",
+      case.get("data", "").startswith("evals/data/treino_regiao_v269.csv") and gen.is_file()
+      and (ROOT / "evals" / "data" / "treino_regiao_v269.csv").is_file()
+      and "(z_{1-α/2} + z_power) × SE of that coefficient" in " ".join(case.get("must", []))
+      and "any label for the strength is fine if the AR set is reported" in " ".join(case.get("must", []))
+      and "{DATA_DIR}" in case.get("prompt", "")
+      and "6. **Cases with data**" in (ROOT / "evals" / "README.md").read_text(encoding="utf-8"))
 
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")
