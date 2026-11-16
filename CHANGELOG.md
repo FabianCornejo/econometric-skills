@@ -33,13 +33,13 @@ Origin: the v2.6.9 validation (notebook 2, 2026-11-14) and the review of the str
   - It also asks for the first-stage slope of distance with and without the subsidy and for the minimum detectable effect: the two kinds of number that were worked out by hand.
   - `evals/cases.json` is now version 2.6.10 (17 cases).
 - **Tests**:
-  - `tests/test_v2610.py` (47 checks), covering every item above:
+  - `tests/test_v2610.py` (48 checks), covering every item above:
     - the doctor's text, with the statuses that `latest_release` really produces;
-    - the real command line run in an isolated folder: with `--offline`, after a network error, and with `--json` (the same keys as v2.6.9);
+    - the real command line run in an isolated folder: with `--offline`; after a network error, through a local proxy that confirms the request to GitHub; and with `--json` (the same keys as v2.6.9, nothing after the JSON);
     - the documented `delta_method` call run on a linearmodels IV fit.
   - The §4 anchor in `tests/test_v2501.py` now also takes documented substitutions (text now, text in v2.5.0) and rebuilds §4 of v2.5.0 with the same SHA-256 (`a820ccbf…`). Each changed piece must appear once and in its place.
 
-  Directed mutation: each of the 34 mutants listed in the development repository (`mutacao_v2610_nucleo.py`, which reverts or weakens each change) is caught by a FAIL line of the tests.
+  Directed mutation: each of the 36 mutants listed in the development repository (`mutacao_v2610_nucleo.py`, which reverts or weakens each change) is caught by a FAIL line of the tests.
 
 ## v2.6.9 — IV: instruments and endogenous regressors counted on the model's columns; instruments counted by rank in the endogeneity test; one check count everywhere
 
