@@ -181,6 +181,25 @@ check("time-series.md section 3 states the same choice of function",
       "Which function (v2.6.10): `diagnostics.stationarity` first" in ts_md
       and "`ts_univariate.adf_bootstrap` when the series is short" in ts_md)
 
+# ----------------------------------------------------------------------------------- 7. --offline in section 7 (3.5)
+sec7 = skill_md[skill_md.index("## 7. Environment"):]
+check("section 7: --offline only without network, not for a sandbox or speed; read the whole report; rerun without it",
+      "Add `--offline` only when the computer has no network, not because you are in a sandbox or to save time" in sec7
+      and "read the whole report (no `tail` or `Select-Object -Last`)" in sec7
+      and "if it ends saying the latest release was not checked, run it again without the flag" in sec7
+      and "`--offline` only without network, never by default" in sec7)
+check("section 7 and the doctor say the same thing at the end of an --offline run",
+      "run --doctor again without --offline" in AGAIN and "run it again without the flag" in sec7)
+
+check("section 7: what left it is said elsewhere: the extras by name in the doctor and the README; --install chooses "
+      "pip itself; section 7 stays within the v2.5.1 size",
+      "any other extra the doctor lists, for its feature" in sec7 and "break-system-packages" not in sec7
+      and all(f"`{x}`" in (ROOT / "README.md").read_text(encoding="utf-8")
+              for x in ("rd", "regimes", "panel", "web", "data-br", "data-intl"))
+      and all(x in se.OPTIONAL for x in ("rd", "regimes", "panel", "web", "data-br", "data-intl"))
+      and "--break-system-packages" in (SKILL / "scripts" / "setup_env.py").read_text(encoding="utf-8")
+      and len(skill_md[skill_md.index("## 7. Environment"):skill_md.index("## 8.")]) <= 2859)
+
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")
 sys.exit(0 if passed == len(results) else 1)
