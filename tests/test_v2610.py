@@ -236,29 +236,55 @@ def run_cli(args, **extra_env):
         env = {k: v for k, v in os.environ.items()
                if not k.upper().startswith(("CLAUDE", "ECONOMETRICS")) and k.upper() not in ("NO_PROXY",)}
         env.update(HOME=tmp, USERPROFILE=tmp, CLAUDE_CONFIG_DIR=str(Path(tmp) / ".claude"), PYTHONIOENCODING="utf-8",
-                   PATH=os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
-                                        if p and shutil.which("claude", path=p) is None))
+                   PATH=os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)   # r3 B1-4: by file, not
+                                        if p and not any((Path(p) / f"claude{x}").is_file()   # which (it also looks
+                                                         for x in ("", ".exe", ".cmd", ".bat", ".ps1"))))  # in the cwd)
         env.update(extra_env)
         try:
             cli = subprocess.run([sys.executable, str(SKILL / "scripts" / "setup_env.py"), *args, "--folder", tmp],
                                  capture_output=True, text=True, encoding="utf-8", env=env, cwd=tmp, timeout=300)
         except subprocess.TimeoutExpired:
-            return 124, [], ""
-    return cli.returncode, [ln for ln in (cli.stdout + cli.stderr).splitlines() if ln.strip()], cli.stdout
+            return 124, [], "", "TimeoutExpired"
+    return cli.returncode, [ln for ln in (cli.stdout + cli.stderr).splitlines() if ln.strip()], cli.stdout, cli.stderr
 
 
-rc, lines, _ = run_cli(["--doctor", "--offline"])
+rc, lines, _, _ = run_cli(["--doctor", "--offline"])
 check("doctor --offline from the command line (stdout and stderr): the last line asks for a run without --offline",
       rc == 0 and bool(lines) and AGAIN in lines[-1], (rc, lines[-3:]))
-DEAD = "http://127.0.0.1:9"                       # review r2 B-2.1: a network error without network, fast and local
-rc_e, lines_e, _ = run_cli(["--doctor"], HTTPS_PROXY=DEAD, https_proxy=DEAD, HTTP_PROXY=DEAD, http_proxy=DEAD)
+import socket  # noqa: E402
+import threading  # noqa: E402
+
+seen = []                                         # review r3 B1-1: a local proxy that records the request, then drops it
+
+
+def _proxy(srv):
+    try:
+        conn, _ = srv.accept()
+        with conn:
+            conn.settimeout(10)
+            seen.append(conn.recv(4096).decode("latin-1").split("\r\n", 1)[0])
+    except OSError:
+        pass
+
+
+_srv = socket.socket()
+_srv.bind(("127.0.0.1", 0))
+_srv.listen(1)
+_t = threading.Thread(target=_proxy, args=(_srv,), daemon=True)
+_t.start()
+DEAD = f"http://127.0.0.1:{_srv.getsockname()[1]}"
+rc_e, lines_e, _, _ = run_cli(["--doctor"], HTTPS_PROXY=DEAD, https_proxy=DEAD, HTTP_PROXY=DEAD, http_proxy=DEAD)
+_t.join(5)
+_srv.close()
+check("doctor without --offline really asks GitHub for the latest release (through the proxy it was given)",
+      bool(seen) and seen[0].startswith("CONNECT api.github.com:443"), seen)
 check("doctor with a network error, from the command line: the last line says the release was not checked; "
       "never 'up to date'; no --offline line",
       rc_e == 0 and bool(lines_e) and lines_e[-1].startswith("Nothing to do in this setup; the latest release was not "
                                                              "checked (")
       and lines_e[-1].endswith("so the skill may be out of date.")
       and not any("up to date" in ln for ln in lines_e) and not any(AGAIN in ln for ln in lines_e), (rc_e, lines_e[-2:]))
-rc_j, _, out_j = run_cli(["--doctor", "--offline", "--json"])
+rc_j, _, out_j, err_j = run_cli(["--doctor", "--offline", "--json"])
 try:
     js = json.loads(out_j)
 except ValueError:
@@ -267,7 +293,8 @@ check("doctor --offline --json from the command line: the same keys as v2.6.9, l
       "To do item, and nothing printed after the JSON (review r2 B-2.2)",
       rc_j == 0 and set(js) == {"claude_dir", "account", "python", "core_missing", "extras", "skill", "copies",
                                 "autoupdate", "listing", "interpreters", "latest", "actions"}
-      and js.get("latest") == OFF and js.get("actions") == [], (rc_j, sorted(js), js.get("latest")))
+      and js.get("latest") == OFF and js.get("actions") == [] and err_j.strip() == "",
+      (rc_j, sorted(js), js.get("latest"), err_j[-200:]))
 check("doctor text: --offline with To do items -> the line before the last says the release was not checked "
       "(review r2 B-2.3)",
       o_off_act.rstrip("\n").splitlines()[-2:-1] == ["The latest release was not checked (--offline), so the skill may "
