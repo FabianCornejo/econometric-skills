@@ -2,22 +2,43 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
-## v2.6.10 — Numbers outside the tables come from the script; the doctor never says "up to date" unchecked; a leaner description; one rule for unit roots
+## v2.6.10 — Computed numbers come from the script; the doctor never says "up to date" unchecked; a leaner description; one rule for unit roots
 
-Origin: the v2.6.9 validation (notebook 2, 2026-11-14) and the review of the structural optimization proposal (2026-11-13). In the validation, the reply worked out two numbers outside its tables (the slope of distance with the subsidy, −0.5174 + 0.4841, and an MDE of 2.8 × SE, the second one flagged as "my own arithmetic"), after the v2.6.8 number rule had already failed the same way in the v2.6.7 validation. The agent also ran `setup_env.py --doctor --offline 2>&1 | Select-Object -Last 25` on a computer with network.
+Origin: the v2.6.9 validation (notebook 2, 2026-11-14) and the review of the structural optimization proposal (2026-11-13).
+- In the validation, the reply worked out two numbers outside its tables: the slope of distance with the subsidy (−0.5174 + 0.4841) and an MDE of 2.8 × SE, the second one flagged as "my own arithmetic". The v2.6.8 number rule had already failed the same way in the v2.6.7 validation.
+- The agent also ran `setup_env.py --doctor --offline 2>&1 | Select-Object -Last 25` on a computer with network.
 
-- **SKILL.md §4, the number rule**: every number in the reply, its summary and the document, including the ones worked out from printed numbers (a sum of coefficients or a combined slope, an MDE, an interval, a percentage), is printed by the script before it is written; calling it your own arithmetic does not exempt it. `interpretation-rules.md` has a new section, "Rules added in v2.6.10", with the validation's example and the way to print each number (`res.t_test`, `estimation.delta_method`, `simulation.power_mde`).
-- **SKILL.md §4, the delivery rule**: the cut sentence "… which the system may delete. and test it on data …" now reads "… Test the script on data …". The locator's paths are no longer listed in the rule: they stay in one place, the "Script skeleton" of `interpretation-rules.md`, which the rule already tells the agent to copy. The prohibitions stay in §4: no sandbox path, and no versioned `plugins/cache/.../<version>/` folder, not even in a comment.
-- **Fix: `setup_env.py --doctor --offline` closed with "Nothing to do: the setup is complete and up to date"** when nothing else was missing, although the latest release had not been checked. It now says the release was not checked and the skill may be out of date. With `--offline`, the report's last line asks for another run without the flag, so a tail of the output still shows it. The JSON (`actions`, `latest.status`) does not change.
-- **SKILL.md §7**: add `--offline` only when the computer has no network, not because of a sandbox or to save time, and read the whole doctor report (no `tail` or `Select-Object -Last`). To pay for it within the §7 size cap of v2.5.1, three things left §7 because they are said elsewhere: where the doctor measures the listing, how `--install` picks pip, and the list of extras by name (the doctor lists the extras, and the README now names `panel` too).
-- **Description**: shortened from 1,022 to 978 characters (the limit is 1,024), leaving room for v2.7.0. The list "Methods: …" is gone and the methods now sit inside the tasks: "any regression (OLS, IV, panel, logit)", "policy evaluation (DiD, RD, synthetic control)" and "forecast (ARIMA, GARCH)". The words probit, DAGs, double ML, VAR and staggered are no longer in the description; the routing rounds of this version measure the effect.
-- **Unit roots**: the routing table had two rows for them with no rule for choosing. Now `diagnostics.stationarity` (DF-GLS with KPSS) comes first; `ts_univariate.adf_bootstrap` gives bootstrap p-values for a short series. The generic "Time series" row became "order of integration before modelling, and cointegration tests once all series are I(1) (Engle-Granger and Johansen)". `time-series.md` §3 says the same.
-- **Blind evals**: a new case, `iv-interaction-numbers`, with its data in `evals/data/treino_regiao_v269.csv` (synthetic, n = 600). It repeats the v2.6.9 validation request and also asks for the first-stage slope of distance with and without the subsidy and for the minimum detectable effect, the two kinds of number that were worked out by hand. `evals/cases.json` is now version 2.6.10 (17 cases).
+- **SKILL.md §4, the number rule**: every number the reply computes or derives is printed by the script before it is written, in the reply, its summary and the document. That includes a sum of coefficients or a combined slope, an MDE, an interval, a percentage and a ratio. Calling it your own arithmetic does not exempt it. A number quoted unchanged from the user or a cited source is attributed to it.
+- **`interpretation-rules.md`, new section "Rules added in v2.6.10"**: the validation's example, and how to print each number:
+  - statsmodels: `res.t_test`;
+  - linearmodels (IV, panel), which has no `t_test`: `estimation.delta_method` with `res.params` and `res.cov`;
+  - few clusters: the interval is rebuilt with t(G − 1);
+  - the MDE of an estimated coefficient: (z₁₋α/₂ + z_power) × SE, printed in the script. `simulation.power_mde` is only for a difference of two means planned before the data exist.
+- **SKILL.md §4, the delivery rule**: the cut sentence "… which the system may delete. and test it on data …" now reads "… Test the script on data …". The locator's paths are no longer listed in the rule. They stay in one place, the "Script skeleton" of `interpretation-rules.md`, which the rule already tells the agent to copy. The prohibitions stay in §4: no sandbox path, and no versioned `plugins/cache/.../<version>/` folder, not even in a comment.
+- **Fix: `setup_env.py --doctor` said "up to date" without having checked the latest release.** With `--offline`, or after a network error, and nothing else to do, it closed with "Nothing to do: the setup is complete and up to date".
+  - Now the end of the report says the release was not checked and the skill may be out of date, also when there are To do items.
+  - With `--offline`, the last line asks for another run without the flag on a computer with network, so a tail of the output still shows it.
+  - The JSON (`actions`, `latest.status`) does not change.
+- **SKILL.md §7**: use `--offline` only on a computer without network, not because of a sandbox or to save time, and read the whole doctor report (no `tail` or `Select-Object -Last`).
+  - To make room within the §7 size cap of v2.5.1, three things left §7 because they are said elsewhere: where the doctor measures the listing; how `--install` picks pip (`setup_env.py` decides); and the list of extras by name (the doctor lists them; the README now names `panel` too).
+  - The sentence about a missing extra stays in a shorter form: a function missing one stops with the install line.
+- **Description**: shortened from 1,022 to 990 characters (the limit is 1,024), leaving room for v2.7.0. The list "Methods: …" is gone; the methods now sit inside the tasks: "any regression (OLS, IV, panel, logit/probit)", "policy evaluation (DiD, RD, synthetic control)" and "forecast (ARIMA, VAR, GARCH)". "DAGs", "double ML" and "staggered" are no longer named; "choice of controls" and "policy evaluation" stand for them. No routing case uses those three terms, so the routing rounds do not measure their loss.
+- **Time-series routing**:
+  - One rule for unit roots: `diagnostics.stationarity` (DF-GLS with KPSS) comes first; `ts_univariate.adf_bootstrap` gives bootstrap p-values when the asymptotic one is not trusted. When the two disagree, report both.
+  - The generic "Time series" row now routes regression with time series (spurious regression, distributed lags, ADL and its long-run effect with `specification.long_run_effect`, HAC errors), the order of integration, and cointegration tests once all series are I(1) (Engle-Granger and Johansen).
+  - `time-series.md` §3 says the same and names `arch.unitroot.ZivotAndrews`.
+- **Blind evals**: a new case, `iv-interaction-numbers`, with its data in `evals/data/treino_regiao_v269.csv` (synthetic, n = 600).
+  - It repeats the v2.6.9 validation request.
+  - It also asks for the first-stage slope of distance with and without the subsidy and for the minimum detectable effect: the two kinds of number that were worked out by hand.
+  - `evals/cases.json` is now version 2.6.10 (17 cases).
 - **Tests**:
-  - `tests/test_v2610.py` (33 checks), covering every item above. It reads the doctor's text in both branches and runs an isolated `--offline` doctor end to end.
+  - `tests/test_v2610.py` (41 checks), covering every item above:
+    - the doctor's text, with the statuses that `latest_release` really produces;
+    - the real command line run in an isolated folder;
+    - the documented `delta_method` call run on a linearmodels IV fit.
   - The §4 anchor in `tests/test_v2501.py` now also takes documented substitutions (text now, text in v2.5.0) and rebuilds §4 of v2.5.0 with the same SHA-256 (`a820ccbf…`). Each changed piece must appear once and in its place.
 
-  Directed mutation: each of the 16 mutants listed in the development repository (`mutacao_v2610_nucleo.py`) is caught by the tests.
+  Directed mutation: each of the 25 mutants listed in the development repository (`mutacao_v2610_nucleo.py`, which reverts or weakens each change) is caught by a FAIL line of the tests.
 
 ## v2.6.9 — IV: instruments and endogenous regressors counted on the model's columns; instruments counted by rank in the endogeneity test; one check count everywhere
 

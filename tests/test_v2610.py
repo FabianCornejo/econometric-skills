@@ -232,7 +232,7 @@ import yaml  # noqa: E402
 _fm = skill_md.splitlines()
 _end = _fm.index("---", 1) if _fm and _fm[0] == "---" and "---" in _fm[1:] else 0
 desc = (yaml.safe_load("\n".join(_fm[1:_end])) or {}).get("description", "") if _end else ""
-check("description: at most 980 characters (room for v2.7.0; it was 1022 of 1024)", 0 < len(desc) <= 980, len(desc))
+check("description: at most 990 characters (room for v2.7.0; it was 1022 of 1024)", 0 < len(desc) <= 990, len(desc))
 kept = ["hypothesis", "two groups", "Welch", "proportions", "variances", "chi-square", "normality", "correlation",
         "power and sample size", "regression", "effect of X on Y", "VaR", "WACC", "forecast", "DiD",
         "even a quick one you could do by hand", "an interval for a proportion", "a sample size", "a p-value",
@@ -242,8 +242,8 @@ kept = ["hypothesis", "two groups", "Welch", "proportions", "variances", "chi-sq
 check("description: every phrase the earlier tests and the routing history need is still there",
       all(k in desc for k in kept), [k for k in kept if k not in desc])
 check("description: the methods sit inside the tasks; no separate 'Methods:' list",
-      "Methods:" not in desc and "any regression (OLS, IV, panel, logit)" in desc
-      and "policy evaluation (DiD, RD, synthetic control)" in desc and "forecast (ARIMA, GARCH)" in desc)
+      "Methods:" not in desc and "any regression (OLS, IV, panel, logit/probit)" in desc
+      and "policy evaluation (DiD, RD, synthetic control)" in desc and "forecast (ARIMA, VAR, GARCH)" in desc)
 
 # ----------------------------------------------------------------------------------- 6. unit roots (item 3.2)
 rows = [ln for ln in skill_md.splitlines() if ln.startswith("| ")]
