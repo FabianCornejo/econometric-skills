@@ -734,10 +734,11 @@ V266 = (V266_OVB, V266_DML, V266_SUM)
 # v2.6.10 (CHANGELOG v2.6.10) added one sentence to the number rule and rewrote three pieces of the delivery rule:
 # the locator's paths, listed again in the "Script skeleton" of interpretation-rules.md, left section 4, and the cut
 # sentence ". and test it" was repaired. Each pair is (text now, text in v2.5.0); swapping them back rebuilds v2.5.0.
-V2610_NUM = (" Every number in the reply, its summary and the document, including the ones worked out from printed "
-             "numbers (a sum of coefficients or a combined slope, an MDE, an interval, a percentage), is printed by the "
-             "script before it is written; saying it is your own arithmetic does not exempt it "
-             "(`interpretation-rules.md`, v2.6.8 and v2.6.10).")
+V2610_NUM = (" Every number the reply computes or derives (a sum of coefficients or a combined slope, an MDE, an "
+             "interval, a percentage or a ratio), in the reply, its summary and the document, is printed by the "
+             "script before it is written; saying it is your own arithmetic does not exempt it, and a number quoted "
+             "unchanged from the user or a cited source is attributed to it (`interpretation-rules.md`, v2.6.8 and "
+             "v2.6.10).")
 V2610_SUBS = (
     ("(\"Script skeleton\"), which finds the skill so the user runs the file without editing paths and turns a "
      "missing package into a one-line install instruction; never put",
