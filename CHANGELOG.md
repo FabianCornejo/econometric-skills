@@ -39,7 +39,7 @@ Origin: the v2.6.9 validation (notebook 2, 2026-11-14) and the review of the str
     - the documented `delta_method` call run on a linearmodels IV fit.
   - The §4 anchor in `tests/test_v2501.py` now also takes documented substitutions (text now, text in v2.5.0) and rebuilds §4 of v2.5.0 with the same SHA-256 (`a820ccbf…`). Each changed piece must appear once and in its place.
 
-  Directed mutation: each of the 30 mutants listed in the development repository (`mutacao_v2610_nucleo.py`, which reverts or weakens each change) is caught by a FAIL line of the tests.
+  Directed mutation: each of the 34 mutants listed in the development repository (`mutacao_v2610_nucleo.py`, which reverts or weakens each change) is caught by a FAIL line of the tests.
 
 ## v2.6.9 — IV: instruments and endogenous regressors counted on the model's columns; instruments counted by rank in the endogeneity test; one check count everywhere
 
