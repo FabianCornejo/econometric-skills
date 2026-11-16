@@ -2,6 +2,45 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.6.10 — Computed numbers come from the script; the doctor never says "up to date" unchecked; a leaner description; one rule for unit roots
+
+Origin: the v2.6.9 validation (notebook 2, 2026-11-14) and the review of the structural optimization proposal (2026-11-13).
+- In the validation, the reply worked out two numbers outside its tables: the slope of distance with the subsidy (−0.5174 + 0.4841) and an MDE of 2.8 × SE, the second one flagged as "my own arithmetic". The number rule added in v2.6.8 had already failed in the v2.6.8 validation, there inside a table (an interval worked out by hand).
+- The agent also ran `setup_env.py --doctor --offline 2>&1 | Select-Object -Last 25` on a computer with network.
+
+- **SKILL.md §4, the number rule**: every number the reply computes or derives is printed by the script before it is written, in the reply, its summary and the document. That includes a sum of coefficients or a combined slope, an MDE, an interval, a percentage and a ratio. Calling it your own arithmetic does not exempt it. A number quoted unchanged from the user or a cited source is attributed to it.
+- **`interpretation-rules.md`, new section "Rules added in v2.6.10"**: the validation's example, and how to print each number:
+  - statsmodels: `res.t_test`;
+  - linearmodels (IV, panel), which has no `t_test`: `estimation.delta_method` with `res.params` and `res.cov`;
+  - few clusters: the interval is rebuilt with t(G − 1);
+  - the MDE of a coefficient already estimated, binary or continuous: (z₁₋α/₂ + z_power) × its SE, with both z values computed in the script (never a typed 2.8 or 1.96). `simulation.power_mde` is for planning, before the data exist.
+- **SKILL.md §4, not rejecting H0**: the effect the test could have detected comes from `inference.power_curve`, from `simulation.power_mde` when planning, and after estimation from (z₁₋α/₂ + z_power) × the coefficient's SE, printed by the script. Before, the rule named only `power_curve` and `power_mde`. The v2.4.0 rule in `interpretation-rules.md` says the same.
+- **SKILL.md §4, the delivery rule**: the cut sentence "… which the system may delete. and test it on data …" now reads "… Test the script on data …". The locator's paths are no longer listed in the rule. They stay in one place, the "Script skeleton" of `interpretation-rules.md`, which the rule already tells the agent to copy. The prohibitions stay in §4: no sandbox path, and no versioned `plugins/cache/.../<version>/` folder, not even in a comment.
+- **Fix: `setup_env.py --doctor` said "up to date" without having checked the latest release.** With `--offline`, or after a network error, and nothing else to do, it closed with "Nothing to do: the setup is complete and up to date".
+  - Now the end of the report says the release was not checked and the skill may be out of date, also when there are To do items.
+  - With `--offline`, the last line asks for another run without the flag on a computer with network, so a tail of the output still shows it.
+  - The JSON (`actions`, `latest.status`) does not change.
+- **SKILL.md §7**: `--offline` stays "only without network, never by default"; it is never added because of a sandbox or to save time, and the agent reads the whole doctor report (no `tail` or `Select-Object -Last`).
+  - §7 got shorter (2,832 → 2,771 characters; the cap of v2.5.1 is 2,859): three things left it because they are said elsewhere: where the doctor measures the listing; how `--install` picks pip (`setup_env.py` decides); and the list of extras by name (the doctor lists them; the README now names `panel` too).
+  - The sentence about a missing extra stays, shorter: a function missing one stops with the install line.
+- **Description**: shortened from 1,022 to 990 characters (the limit is 1,024), leaving room for v2.7.0. The list "Methods: …" is gone; the methods now sit inside the tasks: "any regression (OLS, IV, panel, logit/probit)", "policy evaluation (DiD, RD, synthetic control)" and "forecast (ARIMA, VAR, GARCH)". "DAGs", "double ML" and "staggered" are no longer named; "choice of controls" and "policy evaluation" stand for them. No routing case uses those three terms, so the routing rounds do not measure their loss.
+- **Time-series routing**:
+  - One rule for unit roots: `diagnostics.stationarity` (DF-GLS with KPSS) comes first; `ts_univariate.adf_bootstrap` gives bootstrap p-values when the asymptotic one is not trusted. When the two disagree, report both.
+  - The generic "Time series" row now routes regression with time series (spurious regression, distributed lags, ADL and its long-run effect with `specification.long_run_effect`, HAC errors), the order of integration, and cointegration tests once all series are I(1) (Engle-Granger and Johansen).
+  - `time-series.md` §3 says the same and names `arch.unitroot.ZivotAndrews`.
+- **Blind evals**: a new case, `iv-interaction-numbers`, with its data in `evals/data/treino_regiao_v269.csv` (synthetic, n = 600, generated by `evals/data/make_treino_regiao_v269.py`). `evals/README.md` explains how to run a case with data.
+  - It repeats the v2.6.9 validation request.
+  - It also asks for the first-stage slope of distance with and without the subsidy and for the minimum detectable effect: the two kinds of number that were worked out by hand.
+  - `evals/cases.json` is now version 2.6.10 (17 cases).
+- **Tests**:
+  - `tests/test_v2610.py` (48 checks), covering every item above:
+    - the doctor's text, with the statuses that `latest_release` really produces;
+    - the real command line run in an isolated folder: with `--offline`; after a network error, through a local proxy that confirms the request to GitHub; and with `--json` (the same keys as v2.6.9, nothing after the JSON);
+    - the documented `delta_method` call run on a linearmodels IV fit.
+  - The §4 anchor in `tests/test_v2501.py` now also takes documented substitutions (text now, text in v2.5.0) and rebuilds §4 of v2.5.0 with the same SHA-256 (`a820ccbf…`). Each changed piece must appear once and in its place.
+
+  Directed mutation: each of the 36 mutants listed in the development repository (`mutacao_v2610_nucleo.py`, which reverts or weakens each change) is caught by a FAIL line of the tests.
+
 ## v2.6.9 — IV: instruments and endogenous regressors counted on the model's columns; instruments counted by rank in the endogeneity test; one check count everywhere
 
 Origin: the v2.6.8 review. In round 1, reviewer B found that `diagnostics.iv_report` counted instruments by the formula's terms. In round 2 (NIT 4), `diagnostics.endogeneity_test` counted collinear instrument columns as separate instruments. Item #5 of the structural optimization proposal of 2026-11-13 also goes in: the check count had drifted between the README and the marketplace.
