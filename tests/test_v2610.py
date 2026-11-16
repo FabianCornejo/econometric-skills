@@ -3,7 +3,7 @@ kept in one place, and the doctor's closing lines when the latest release was no
 
 Origin: the v2.6.9 validation (notebook 2, 2026-11-14). (1) The reply worked out two numbers outside the tables (a
 combined slope and an MDE), one of them flagged as "my own arithmetic"; the v2.6.8 rule had failed the same way in the
-v2.6.7 validation. (2) The agent ran `setup_env.py --doctor --offline 2>&1 | Select-Object -Last 25` on a computer with
+v2.6.8 validation, there inside a table. (2) The agent ran `setup_env.py --doctor --offline 2>&1 | Select-Object -Last 25` on a computer with
 network; reading the doctor then showed that with --offline and nothing else to do it closed with "the setup is
 complete and up to date", although no version had been checked. (3) SKILL.md section 4 had a cut sentence
 ("... which the system may delete. and test it on data ...", review of 2026-11-13, item #6).
@@ -112,9 +112,18 @@ check("v2.6.10 section: linearmodels fits (no t_test) use delta_method with res.
       "(review F7); the MDE of an estimated coefficient comes from its SE, power_mde only for two means (review F6)",
       "for linearmodels fits (IV, panel), which have no `t_test`" in v2610 and "res.params, res.cov)" in v2610
       and "with few clusters, build the interval from its printed SE with t(G − 1)" in v2610
-      and "(z₁₋α/₂ + z_power) × SE (2.8 × SE at 5% and 80% power)" in v2610
-      and "`simulation.power_mde` is the two-group formula (a binary treatment" in v2610
-      and "the v2.6.8 validation had shown the same failure" in v2610
+      and "The minimum detectable effect of a coefficient already estimated, binary or continuous, is printed from "
+          "that coefficient's SE inside the script" in v2610
+      and "with both z values computed in the script (about 2.8 × SE at 5% and 80% power; never type 2.8 or 1.96)" in v2610
+      and "`simulation.power_mde` is for planning, before the data exist" in v2610
+      and "the v2.6.8 validation had already shown the rule failing inside a table" in v2610)
+NR = "after estimation, (z₁₋α/₂ + z_power) × the coefficient's SE, printed by the script"
+check("section 4 and the v2.4.0 rule agree with v2.6.10 on the detectable effect after a non-rejection "
+      "(review r3 A SF-2): power_curve; power_mde when planning; after estimation, from the coefficient's SE",
+      f"(`inference.power_curve`; `simulation.power_mde` when planning; {NR})." in sec4
+      and f"(`inference.power_curve`; `simulation.power_mde` when planning; {NR})." in rules
+      and abs(__import__("scipy.stats", fromlist=["norm"]).norm.ppf(0.975)
+              + __import__("scipy.stats", fromlist=["norm"]).norm.ppf(0.8) - 2.8) < 0.005
       and "A number quoted unchanged from the user or a cited source is attributed to it." in v2610)
 
 import numpy as np  # noqa: E402
@@ -307,8 +316,8 @@ sec7 = skill_md[skill_md.index("## 7. Environment"):skill_md.index("## 8.")]    
 check("section 7: --offline only without network, never by default, never because of a sandbox or to save time; "
       "read the whole report (the one rule said once, review r2 A nit 2)",
       "(one request to api.github.com; `--offline` only without network, never by default)" in sec7
-      and "Never add it because of a sandbox or to save time, and read the whole report (no `tail` or "
-          "`Select-Object -Last`)." in sec7 and sec7.count("--offline") == 1)
+      and "Never add `--offline` because of a sandbox or to save time, and read the whole report (no `tail` or "
+          "`Select-Object -Last`)." in sec7 and sec7.count("--offline") == 2)
 check("the doctor's last line says what to do after --offline (read from the printed report, review B-4)",
       "run --doctor again without --offline" in last(o_off))
 check("section 7: what left it is said elsewhere (the doctor lists the extras, the README names them; --install "
@@ -329,10 +338,13 @@ check("blind eval iv-interaction-numbers: data and generator are in the public r
       "the rule (SE of the coefficient, not the two-group formula); strength graded by the AR set, not by a word",
       case.get("data", "").startswith("evals/data/treino_regiao_v269.csv") and gen.is_file()
       and (ROOT / "evals" / "data" / "treino_regiao_v269.csv").is_file()
-      and "(z_{1-α/2} + z_power) × SE of that coefficient" in " ".join(case.get("must", []))
+      and "SE of the 2SLS coefficient of training hours (not the OLS SE)" in " ".join(case.get("must", []))
+      and "both z values computed in the script" in " ".join(case.get("must", []))
+      and "Hard-codes a critical value (1.96, 2.8 or 0.84)" in " ".join(case.get("must_not", []))
       and "any label for the strength is fine if the AR set is reported" in " ".join(case.get("must", []))
       and "{DATA_DIR}" in case.get("prompt", "")
-      and "6. **Cases with data**" in (ROOT / "evals" / "README.md").read_text(encoding="utf-8"))
+      and "**Cases with data** (a `data` field" in (ROOT / "evals" / "README.md").read_text(encoding="utf-8")
+      and "holds **only** the data file" in (ROOT / "evals" / "README.md").read_text(encoding="utf-8"))
 
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")

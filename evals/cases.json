@@ -291,14 +291,14 @@
       "must": [
         "Every number in the reply that is not copied from the user's message is printed by a script the agent ran in the session (check the transcript): the OLS and IV coefficients, SEs and intervals, the first-stage F, the slope of distance with and without the subsidy and their SEs, the minimum detectable effect and the effect per 10 hours in %",
         "The slope of distance with the subsidy (distance + distance×subsidy) comes with a standard error computed by the script (t_test / a linear combination / delta_method), not added by hand",
-        "The minimum detectable effect of the training-hours coefficient comes from the script: (z_{1-α/2} + z_power) × SE of that coefficient (2.8 × SE at 5% and 80%) evaluated and printed there, or a simulation; not the two-group formula simulation.power_mde with the SD of the wage (hours are a continuous regressor)",
-        "Reports the robust partial F for three instruments (about 64.7) and, because the 2SLS effect is not significant and the strength is moderate, reports the Anderson-Rubin set as the interval (any label for the strength is fine if the AR set is reported)",
+        "The minimum detectable effect of training hours comes from the SE of the 2SLS coefficient of training hours (not the OLS SE): (z_{1-α/2} + z_power) × that SE with both z values computed in the script, or a simulation; not the two-group planning formula simulation.power_mde with the SD of the wage",
+        "Reports the robust partial F for three instruments (about 64.7) and reports the Anderson-Rubin set, either as the interval to report or next to the Wald interval with a caveat on the instruments' strength (any label for the strength is fine if the AR set is reported)",
         "The 2SLS effect is described as compatible with zero, not as 'no effect'; the overidentification test (2 df) is 'no evidence against', not proof of validity",
         "Delivers a runnable script that starts with the locator block"
       ],
       "must_not": [
         "Writes a number with 'conta minha', 'aproximadamente' or 'cerca de' that the script did not print",
-        "Hard-codes a critical value (1.96) to build an interval in the script or the text",
+        "Hard-codes a critical value (1.96, 2.8 or 0.84) to build an interval or an MDE in the script or the text",
         "Uses --offline in the doctor on a computer with network"
       ]
     }

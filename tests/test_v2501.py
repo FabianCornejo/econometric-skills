@@ -750,6 +750,9 @@ V2610_SUBS = (
      "(in your own environment, set the variable instead). It also turns a missing package into a one-line "
      "instruction to run `scripts/setup_env.py --install`. In Claude Code"),
     ("which the system may delete. Test the script on data", "which the system may delete. and test it on data"),
+    # v2.6.10 review round 3: after estimation, the detectable effect comes from the coefficient's SE
+    ("(`inference.power_curve`; `simulation.power_mde` when planning; after estimation, (z₁₋α/₂ + z_power) × the "
+     "coefficient's SE, printed by the script).", "(`inference.power_curve`, `simulation.power_mde`)."),
 )
 sec4_v250 = sec4.replace(V251_ASK, "", 1).replace(V251_DID, "", 1)
 for piece in V266:

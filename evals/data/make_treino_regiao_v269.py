@@ -1,9 +1,12 @@
-"""Gera evals/data/treino_regiao_v269.csv para a validação da v2.6.9 (semente 26900).
+"""Generates evals/data/treino_regiao_v269.csv, the data of the blind eval `iv-interaction-numbers` (seed 26900).
 
-Desenho: horas de treinamento (0–200) endógenas (habilidade não observada eleva horas e salário); instrumentos:
-distância ao centro de treinamento (km) e subsídio municipal (0/1), com efeito da distância menor onde há
-subsídio (interação no 1º estágio). Efeito verdadeiro: +0,15% no salário por hora de treinamento (0,0015 em log).
-Escalas plausíveis: salário mensal em R$, experiência em anos, distância em km."""
+Design: training hours (0-200) are endogenous (unobserved ability raises both hours and wages); instruments: distance
+to the training centre (km), a municipal subsidy (0/1) and their interaction (the subsidy weakens the effect of
+distance in the first stage). True effect: +0.15% of the wage per training hour (0.0015 in logs). Plausible scales:
+monthly wage in R$, experience in years, distance in km. Used first in the v2.6.9 validation.
+
+Usage: python make_treino_regiao_v269.py [output.csv]   (prints the SHA-256 and checks it against the committed file's)
+"""
 import numpy as np, pandas as pd, hashlib, sys
 from pathlib import Path
 rng = np.random.default_rng(26900)
@@ -19,5 +22,7 @@ d = pd.DataFrame(dict(salario=np.exp(lsal).round(2), horas_treino=horas.astype(i
                       distancia_km=dist, subsidio=sub))
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("treino_regiao_v269.csv")
 d.to_csv(out, index=False)
-print(out, hashlib.sha256(out.read_bytes()).hexdigest())
+EXPECTED = "7a2d977571858bf8fb194316bf6e5ae2bb81135f1b96075eea315644e56a7a45"
+sha = hashlib.sha256(out.read_bytes()).hexdigest()
+print(out, sha, "(matches the committed file)" if sha == EXPECTED else "(DIFFERS from the committed file: numpy or pandas changed the draws or the CSV format)")
 print(d.describe().round(2).to_string())
