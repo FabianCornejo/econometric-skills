@@ -31,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "econometrics"
 sys.path.insert(0, str(SKILL / "scripts"))
+import _console  # noqa: E402,F401  (non-ASCII text on a Windows console)
 
 import estimation  # noqa: E402
 import setup_env as se  # noqa: E402
