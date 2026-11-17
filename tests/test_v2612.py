@@ -641,5 +641,18 @@ check("outlier 1e6 in W (1 − h_W ≈ 2e-10), HC1: computed, not refused, = sta
       r["high_leverage_rows"] == [] and rel(r["first_stage_F"]["x"], float(ref)) < 1e-6 and np.isfinite(r["statistic"]),
       (r, float(ref)))
 
+# r2-A (scale): the test regression is fitted on unit-norm columns; with x in units of 1e14 the raw fit lost digits
+# (53.687 against 55.268)
+rng = np.random.default_rng(11)
+n = 400
+z1, z2, z3, w, u, v = rng.normal(size=(6, n))
+x1 = 0.5 * z1 + 0.3 * z2 + v + u
+st_ = []
+for sc in (1.0, 1e14, 1e-6):
+    d = pd.DataFrame(dict(y=x1 + u, x1=sc * x1, z1=z1, z2=z2, w=w))
+    st_.append(quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x1"]], d[["z1", "z2"]], cov_type="HC3")[0]["statistic"])
+check("x in units of 1e14 and 1e-6: the same HC3 test as in units of 1 (relative 1e-9)",
+      all(rel(t_, st_[0]) < 1e-9 for t_ in st_[1:]), st_)
+
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)
