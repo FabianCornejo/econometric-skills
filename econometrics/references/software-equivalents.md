@@ -46,7 +46,7 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | `estat imtest, white` | Heteroskedasticity → White | `dg.het_white(res.resid, res.model.exog)` |
 | `estat bgodfrey, lags(p)` | Serial correlation LM test | `dg.acorr_breusch_godfrey(res, nlags=p)` |
 | `estat dwatson` | (in the output) | `statsmodels.stats.stattools.durbin_watson(res.resid)` |
-| `estat vif` | — | `statsmodels.stats.outliers_influence.variance_inflation_factor` |
+| `estat vif` / `estat vif, uncentered` | — | `diagnostics.vif_table(res)` (centered VIF when the model has a constant, uncentered when it has none, as Stata; the column `Kind` says which; statsmodels' `variance_inflation_factor` changed between 0.14 and 0.15 for models without a constant) |
 | `dfbeta`, `predict, cooksd` | Influence statistics | `res.get_influence().summary_frame()` |
 | `predict r, resid` / `predict yhat` | `resid` / forecast | `res.resid` / `res.fittedvalues` |
 | `prais y x` / `prais y x, corc` | AR(1) error term | `specification.prais_winsten(formula, df)` / `method="cochrane"` |

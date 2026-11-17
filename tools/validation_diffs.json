@@ -1,9 +1,9 @@
 {
- "date": "2026-11-13",
+ "date": "2026-11-16",
  "python": "3.13.18",
  "packages": {
-  "numpy": "2.5.4",
-  "pandas": "2.3.3",
+  "numpy": "2.5.5",
+  "pandas": "3.1.1",
   "scipy": "1.18.1",
   "statsmodels": "0.15.0",
   "linearmodels": "7.1",
@@ -46,7 +46,7 @@
   },
   "diagnostics.count_diagnostics": {
    "comparisons": 1,
-   "worst_diff": 0.0032118381823915687,
+   "worst_diff": 0.0032118381823911246,
    "tolerance": 0.005,
    "kind": "abs",
    "what": "test_specification_tools.py: W17.3 Pearson dispersion σ̂² = 1.52 (σ̂ = 1.23)",
@@ -54,15 +54,31 @@
   },
   "diagnostics.endogeneity_test": {
    "comparisons": 1,
-   "worst_diff": 0.0036917983703737,
+   "worst_diff": 0.0036917983703554924,
    "tolerance": 0.02,
    "kind": "abs",
    "what": "test_textbook_replication.py: W15.7 Durbin-Wu-Hausman t = 1.67 (F = t² ≈ 2.79)",
    "all_within_tolerance": true
   },
+  "diagnostics.hausman": {
+   "comparisons": 1,
+   "worst_diff": 0.00036689367354014735,
+   "tolerance": 0.005,
+   "kind": "abs",
+   "what": "test_diagnostics.py: B2.33 Hausman FE vs RE on Grunfeld reproduces Baltagi (2013, 5th ed., p. 81) m1 = 2.33",
+   "all_within_tolerance": true
+  },
+  "diagnostics.influence": {
+   "comparisons": 1,
+   "worst_diff": 3.8571270595915406e-07,
+   "tolerance": 5e-07,
+   "kind": "abs",
+   "what": "test_diagnostics.py: W9.8 influence: the sales coefficient without the largest firm, rebuilt from the function's DFBETA and leverage, reproduces Wooldridge (2000, 1st ed., Example 9.8, p. 301) .000186",
+   "all_within_tolerance": true
+  },
   "diagnostics.iv_report": {
    "comparisons": 2,
-   "worst_diff": 4.04291225430467e-05,
+   "worst_diff": 4.042912254335895e-05,
    "tolerance": 0.0003,
    "kind": "abs",
    "what": "test_v242.py: 2SLS reproduces Wooldridge Example 15.1 (educ .059 (.035))",
@@ -70,7 +86,7 @@
   },
   "diagnostics.ols_diagnostics": {
    "comparisons": 2,
-   "worst_diff": 0.002385504350183254,
+   "worst_diff": 0.002385504350193912,
    "tolerance": 0.01,
    "kind": "abs",
    "what": "test_textbook_replication.py: W8.4 Breusch-Pagan LM = 14.09",
@@ -78,23 +94,39 @@
   },
   "diagnostics.overid_test": {
    "comparisons": 2,
-   "worst_diff": 0.0003628018395133159,
+   "worst_diff": 0.00036280183946235667,
    "tolerance": 0.0006,
    "kind": "abs",
    "what": "test_textbook_replication.py: W15.8 overidentification nR² = .378, p = .539",
    "all_within_tolerance": true
   },
+  "diagnostics.panel_bp_lm": {
+   "comparisons": 2,
+   "worst_diff": 0.00045163093079736427,
+   "tolerance": 0.0005,
+   "kind": "abs",
+   "what": "test_diagnostics.py: B798 Breusch-Pagan LM on Grunfeld pooled residuals reproduces Baltagi (2013, 5th ed., p. 108) 798.162",
+   "all_within_tolerance": true
+  },
   "diagnostics.tobit": {
    "comparisons": 4,
-   "worst_diff": 0.0045587661561512505,
+   "worst_diff": 0.004558766157060745,
    "tolerance": 0.01,
    "kind": "abs",
    "what": "test_textbook_replication.py: W17.2 Tobit σ = 1122.02, log L = −3819.09",
    "all_within_tolerance": true
   },
+  "diagnostics.white_simplified": {
+   "comparisons": 3,
+   "worst_diff": 0.0004149672423851558,
+   "tolerance": 0.0005,
+   "kind": "abs",
+   "what": "test_diagnostics.py: W8.5 special White test reproduces Wooldridge (2000, 1st ed., Example 8.5, p. 260): LM ≈ 3.45, p = .178, R² = .0392",
+   "all_within_tolerance": true
+  },
   "discrete_choice.binary_effects": {
    "comparisons": 5,
-   "worst_diff": 0.00018953332530569078,
+   "worst_diff": 0.00018953332530557976,
    "tolerance": 0.0006,
    "kind": "abs",
    "what": "test_v242.py: LPM reproduces Wooldridge Example 17.1 (nwifeinc −.0034, educ .038, exper .039, age −.016, kidslt6 −.262)",
@@ -102,7 +134,7 @@
   },
   "discrete_choice.heckman": {
    "comparisons": 6,
-   "worst_diff": 3.813768844224824e-05,
+   "worst_diff": 3.813768844280335e-05,
    "tolerance": 0.0002,
    "kind": "abs",
    "what": "test_v242.py: Heckit reproduces Wooldridge Example 17.5 and Stata heckman twostep (educ .1091 (.0155); λ .0323 (.1336); ρ .0486; σ .6636)",
@@ -110,7 +142,7 @@
   },
   "estimation.mle": {
    "comparisons": 10,
-   "worst_diff": 0.0004903634613911065,
+   "worst_diff": 0.0004903634614665878,
    "tolerance": 0.0011,
    "kind": "abs",
    "what": "test_estimation.py: W17.3 tottime",
@@ -134,7 +166,7 @@
   },
   "specification.fgls_het": {
    "comparisons": 6,
-   "worst_diff": 0.004760659662305322,
+   "worst_diff": 0.004760659662204958,
    "tolerance": 0.006,
    "kind": "abs",
    "what": "test_specification_tools.py: W8.7 FGLS log(income) 1.30 (.44), educ −.463 (.120), restaurn −3.46 (.80)",
@@ -142,7 +174,7 @@
   },
   "specification.linear_restriction_test": {
    "comparisons": 2,
-   "worst_diff": 0.0002535219519081977,
+   "worst_diff": 0.00025352195194017213,
    "tolerance": 0.01,
    "kind": "abs",
    "what": "test_v242.py: exclusion F equals statsmodels f_test (Wooldridge Ex. 4.9: F = 9.55)",
@@ -150,7 +182,7 @@
   },
   "specification.long_run_effect": {
    "comparisons": 2,
-   "worst_diff": 0.0002809097202448735,
+   "worst_diff": 0.000280909720244929,
    "tolerance": 0.0006,
    "kind": "abs",
    "what": "test_specification_tools.py: W10.4 LRP = .101 (se .030)",
@@ -174,7 +206,7 @@
   },
   "specification.prais_winsten": {
    "comparisons": 9,
-   "worst_diff": 0.003619506032759512,
+   "worst_diff": 0.003619506032789044,
    "tolerance": 0.006,
    "kind": "abs",
    "what": "test_v242.py: Prais-Winsten reproduces Wooldridge Example 12.4 (ρ̂ = .293; lchempi 2.94 (.63), lgas 1.05 (.98), lrtwex 1.13 (.51), afdec6 −.577 (.342))",
@@ -182,7 +214,7 @@
   },
   "specification.prediction_intervals": {
    "comparisons": 5,
-   "worst_diff": 0.0017493731413893432,
+   "worst_diff": 0.001749373141388899,
    "tolerance": 0.005,
    "kind": "abs",
    "what": "test_specification_tools.py: W6.6 prediction interval for an individual 1.60–3.80",
@@ -198,7 +230,7 @@
   },
   "specification.standardized_coefficients": {
    "comparisons": 5,
-   "worst_diff": 0.0004460142326532246,
+   "worst_diff": 0.00044601423265300255,
    "tolerance": 0.0006,
    "kind": "abs",
    "what": "test_specification_tools.py: W6.1 standardized coefficients",

@@ -26,11 +26,11 @@ The *Tolerance* column is the one the test uses, read from the test. Many tests 
 
 ## Largest observed difference
 
-For the level-A rows whose reference is outside the Python scientific stack the skill is built on (published values, and R, Stata, DoubleML, csdid, lifelines), `tools/validation_diffs.py` redoes the test's comparison and records the largest difference and the tolerance of that comparison, written as *difference of tolerance*. Measured on 2026-11-13 with Python 3.13.18, numpy 2.5.4, scipy 1.18.1, statsmodels 0.15.0, linearmodels 7.1, scikit-learn 1.9.1; output in `tools/validation_diffs.json`. It reads data, designs and reference values from the tests themselves, and CI runs it with `--check` (every comparison within its tolerance) on the latest dependency versions. Rows compared with software run in the test (scipy, statsmodels, linearmodels, arch, pandas) or with a closed form computed in the test are not measured.
+For the level-A rows whose reference is outside the Python scientific stack the skill is built on (published values, and R, Stata, DoubleML, csdid, lifelines), `tools/validation_diffs.py` redoes the test's comparison and records the largest difference and the tolerance of that comparison, written as *difference of tolerance*. Measured on 2026-11-16 with Python 3.13.18, numpy 2.5.5, pandas 3.1.1, scipy 1.18.1, statsmodels 0.15.0, linearmodels 7.1, scikit-learn 1.9.1; output in `tools/validation_diffs.json`. It reads data, designs and reference values from the tests themselves, and CI runs it with `--check` (every comparison within its tolerance) on the latest dependency versions. Rows compared with software run in the test (scipy, statsmodels, linearmodels, arch, pandas) or with a closed form computed in the test are not measured.
 
 ## Summary
 
-289 public functions: level A 88, level B 142, level C 21, level D 38.
+289 public functions: level A 94, level B 143, level C 20, level D 32.
 
 | module | A | B | C | D |
 |---|---|---|---|---|
@@ -39,7 +39,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `dag` | 1 | 7 | 0 | 0 |
 | `data_prep` | 0 | 7 | 1 | 3 |
 | `dependence` | 0 | 5 | 1 | 5 |
-| `diagnostics` | 9 | 1 | 0 | 11 |
+| `diagnostics` | 15 | 1 | 0 | 5 |
 | `discrete_choice` | 2 | 0 | 0 | 0 |
 | `estimation` | 4 | 2 | 0 | 0 |
 | `finance_empirics` | 9 | 4 | 1 | 0 |
@@ -54,7 +54,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `segments` | 1 | 3 | 1 | 0 |
 | `simulation` | 2 | 23 | 0 | 1 |
 | `specification` | 12 | 0 | 0 | 0 |
-| `state_space` | 0 | 3 | 3 | 1 |
+| `state_space` | 0 | 4 | 2 | 1 |
 | `survival` | 1 | 4 | 0 | 0 |
 | `systems` | 2 | 1 | 0 | 0 |
 | `text_data` | 4 | 9 | 4 | 2 |
@@ -67,7 +67,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 - Only the designs in the tests. A function can be right on them and wrong elsewhere.
 - Dependency versions outside the CI jobs (minimum versions on Python 3.12, latest on 3.13 and 3.14, Windows).
 - Rules of thumb in warnings and verdicts (thresholds such as F > 10 or 1.2x excess zeros) are checked for what they print on each side of the threshold, not for being the right threshold.
-- Several Wooldridge examples are checked against numbers without the edition stated in the test (noted per row); `tests/test_v242.py` says 2e. Numbering can differ between editions.
+- Several Wooldridge examples are checked against numbers without the edition stated in the test (noted per row); `tests/test_v242.py` says 2e. Numbering can differ between editions. The rows added in v2.6.11 (`tests/test_diagnostics.py`) fix the edition and page: Wooldridge 1st ed. (2000) and Greene 7th ed. (2012), read in the texts; Baltagi 5th ed. (2013) not read: the pages come from the comments of R's plm tests; the numbers are reproduced to the printed digits.
 - Level D functions have no test; level C functions have no check of their value.
 - Public classes are not rows: `dag.DAG` is exercised through the `dag` functions, which take it or build it.
 
@@ -170,21 +170,21 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | function | level | reference | tolerance | largest observed difference | test | note |
 |---|---|---|---|---|---|---|
 | `diagnostics.newey_west_lags` | D | — | — | — | — |  |
-| `diagnostics.white_simplified` | D | — | — | — | — |  |
+| `diagnostics.white_simplified` | A | Wooldridge, Introductory Econometrics, 1st ed. (2000), Example 8.5, p. 260 (special White test, log housing price: R² = .0392, LM ≈ 3.45, p = .178); n·R² of the auxiliary regression computed by hand in the test | 0.005 on LM, 0.0005 on p, 0.00005 on R² (half the last printed digit); 1e-10 relative against the hand computation | 0.00041 of 0.0005 | test_diagnostics.py: W8.5 special White test; test_diagnostics.py: white_simplified: LM = n·R² | edition and page read in the text (v2.6.11) |
 | `diagnostics.ols_diagnostics` | A | Wooldridge, Introductory Econometrics, Example 8.4 (Breusch-Pagan LM 14.09, p .0028) | 0.01 on LM, 0.0001 on p (looser than half the last printed digit: 0.005 and 0.00005) | 0.0024 of 0.01 | test_textbook_replication.py: W8.4 Breusch-Pagan | edition not stated in the test; tolerance looser than the v2.6.7 rule |
-| `diagnostics.vif_table` | D | — | — | — | — |  |
-| `diagnostics.influence` | D | — | — | — | — |  |
+| `diagnostics.vif_table` | A | closed forms computed in the test: with a constant, the diagonal of the inverse correlation matrix (centered VIF); without one, (X'X)⁻¹_jj·x_j'x_j (uncentered VIF) | 1e-10 relative | not measured (closed form in the test) | test_diagnostics.py: vif_table: equals the diagonal of the inverse correlation matrix; test_diagnostics.py: vif_table: a model without a constant gives the uncentered VIF | v2.6.11: centered when the model has a constant column (any name, 1e-10 tolerance), uncentered when it has none, with a column `Kind`, as Stata's `estat vif` and `estat vif, uncentered` (review r1: a full set of dummies without a constant gave an infinite centered VIF); weights (WLS) are ignored |
+| `diagnostics.influence` | A | Wooldridge, Introductory Econometrics, 1st ed. (2000), Example 9.8, p. 301 (sales .000186 without the largest firm, rebuilt from the function's DFBETA and leverage); leverage by QR and DFBETA and Cook's distance by n refits, computed in the test | 5e-7 (half the last printed digit); 1e-10 relative against the refits | 3.9e-07 of 5e-07 | test_diagnostics.py: W9.8 influence; test_diagnostics.py: influence: leverage (QR) | p. 302 prints σ̂ = 1.82, which the data do not give (1.862); not used |
 | `diagnostics.chow` | A | Chow F from three least-squares fits (numpy), computed in the test | 1e-8 absolute (looser than the 1e-10 rule for closed forms) | not measured (closed form in the test) | test_show_text.py: chow: F label F(2, 196) and F equal to the three-fit Chow F | tolerance looser than the v2.6.7 rule |
 | `diagnostics.compare_standard_errors` | D | — | — | — | — |  |
 | `diagnostics.comparison_table` | D | — | — | — | — |  |
 | `diagnostics.stationarity` | B | simulated AR(0.9), random walk and white noise; Selic series | verdict at each alpha (exact) | — | test_v2472.py: stationarity |  |
 | `diagnostics.stationarity_many` | D | — | — | — | — |  |
-| `diagnostics.cointegration` | D | — | — | — | — |  |
+| `diagnostics.cointegration` | A | the basic Engle-Granger test (Δû on û₋₁) and Johansen's reduced-rank regression, written in the test, on the data of Wooldridge (2000, 1st ed., §18.4 and Table 18.4, p. 587-588, INTQRT); statsmodels coint with autolag aic and bic | 1e-10 relative (hand computations); 1e-12 against coint | not measured (closed form in the test) | test_diagnostics.py: W18.4 cointegration: BIC picks no lags; test_diagnostics.py: cointegration known truth | known truth (bands fixed before running): 'Cointegrated' in 92.5% of 200 cointegrated samples (≥ 80%) and 5.5% of 200 independent walks (≤ 10%). v2.6.11: AIC and BIC lags, 'Inconclusive' when they disagree; full rank with det_order=0 not read as I(0) (the 'ci' case is v2.6.12) |
 | `diagnostics.endogeneity_test` | A | Wooldridge, Introductory Econometrics, Example 15.7 (Durbin-Wu-Hausman t = 1.67) | 0.02 on F = t², about 0.006 on t = 1.67 (looser than half the last printed digit, 0.005) | 0.0037 of 0.02 | test_textbook_replication.py: W15.7 Durbin-Wu-Hausman; test_v268.py: endogeneity_test, exactly identified; test_v269.py: HC3: first-stage F = statsmodels F test on the original columns; test_v269.py: HC0: the Durbin-Wu-Hausman F = linearmodels' robust Wooldridge regression test | edition not stated in the test; tolerance looser than the v2.6.7 rule |
 | `diagnostics.overid_test` | A | Wooldridge, Introductory Econometrics, Example 15.8 (nR² = .378, p = .539) | 0.0006 (looser than half the last printed digit, 0.0005) | 0.00036 of 0.0006 | test_textbook_replication.py: W15.8 overidentification | edition not stated in the test; nR² also equal to n·R² of the auxiliary regression (1e-9, test_show_text.py); tolerance looser than the v2.6.7 rule |
 | `diagnostics.iv_report` | A | Wooldridge, Introductory Econometrics, Example 15.1 (educ .059 (.035)); Example 15.7 overidentification | 0.0003 on the coefficient and SE; 0.01 on the overidentification nR² and p (looser than half the last printed digit, 0.0005) | 4e-05 of 0.0003 | test_v242.py: 2SLS reproduces Wooldridge Example 15.1; test_v268.py: iv_report, exactly identified and weak; test_v269.py: robust partial F with z1*z2 = statsmodels HC0 Wald F on the 3 columns | the test says 2e; the overidentification comparison is not measured; test_v242.py calls the overidentification nR² = .378 Example 15.7, test_textbook_replication.py calls the same number W15.8; the editions are not stated; tolerance looser than the v2.6.7 rule |
-| `diagnostics.hausman` | D | — | — | — | — |  |
-| `diagnostics.panel_bp_lm` | D | — | — | — | — |  |
+| `diagnostics.hausman` | A | Baltagi, Econometric Analysis of Panel Data, 5th ed. (2013), p. 81 (Grunfeld, 10 firms: m1 = 2.33; page from the plm tests, not read); FE and Swamy-Arora RE written in the test | 0.005 (half the last printed digit); 1e-10 relative against the hand-written estimators | 0.00037 of 0.005 | test_diagnostics.py: B2.33 Hausman; test_diagnostics.py: hausman: equals the statistic; test_diagnostics.py: hausman: a negative statistic | Grunfeld from statsmodels.datasets (public domain), American Steel dropped. v2.6.11: no verdict when a fit used robust or clustered covariances (Greene 2012, 7th ed., p. 380); a negative statistic → 'Not interpretable' |
+| `diagnostics.panel_bp_lm` | A | Baltagi, Econometric Analysis of Panel Data, 5th ed. (2013), p. 108, Table 4.2 (Grunfeld: LM_μ = 798.162; page from the plm tests, not read); Greene, Econometric Analysis, 7th ed. (2012), eq. (11-42) and Example 11.6, p. 377 (LM = 3881.34 from the printed sums); known truth: size under H0 in 2000 samples, balanced and unbalanced | 0.0005 on 798.162 (half the last printed digit); 0.01 on 3881.34 (the rounding of the printed sums plus half the last digit); size in [3.5%, 6.5%] (5% ± 3 Monte Carlo SEs) | 0.00045 of 0.0005 | test_diagnostics.py: B798 Breusch-Pagan; test_diagnostics.py: G11.6 Breusch-Pagan; test_diagnostics.py: panel_bp_lm: size under H0; test_diagnostics.py: panel_bp_lm (review r2): every T_i = 1; test_diagnostics.py: panel_bp_lm (review r3): NaN rows | Greene's data (Cornwell-Rupert) are not in the repository: residuals with the published sums stand in. v2.6.11 review r1: unbalanced panels use Baltagi and Li's (1990) factor (the mean T rejected about 21%); NaN rows are dropped; no entity with two observations or all-zero residuals → NaN, no verdict |
 | `diagnostics.mundlak_test` | A | linearmodels PanelOLS fixed effects on the data of Wooldridge, Introductory Econometrics, Example 14.4 (CRE = FE identity) | 1e-6 | not measured (software run in the test) | test_specification_tools.py: Mundlak/CRE coefficients equal FE | the book's FE numbers are compared with linearmodels, not with this function, in test_textbook_replication.py |
 | `diagnostics.count_diagnostics` | A | Wooldridge, Introductory Econometrics, Example 17.3 (Pearson dispersion σ̂² = 1.52) | 0.005 | 0.0032 of 0.005 | test_specification_tools.py: W17.3 Pearson dispersion | edition not stated in the test |
 | `diagnostics.tobit` | A | Wooldridge, Introductory Econometrics, Example 17.2 (educ 80.65, kidslt6 −894.02, σ 1122.02, log L −3819.09) | 0.01 to 0.05 (looser than half the last printed digit, 0.005) | 0.0046 of 0.01 | test_textbook_replication.py: W17.2 Tobit | edition not stated in the test; tolerance looser than the v2.6.7 rule |
@@ -423,7 +423,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `state_space.hurst_exponent` | B | OU and random walk | < 0.4 and in (0.4, 0.6) | — | test_financial_modules.py: Hurst < 0.5 for OU |  |
 | `state_space.pairs_position` | C | — | — | — | test_financial_modules.py: pairs returns computed, no NaN |  |
 | `state_space.pairs_returns` | C | — | — | — | test_financial_modules.py: pairs returns computed, no NaN |  |
-| `state_space.cointegration_pretest` | C | — | — | — | test_financial_modules.py (called, no check of its own) |  |
+| `state_space.cointegration_pretest` | B | known truth: independent random walks are not cointegrated; each branch (direction, AIC/BIC, Johansen rejection, full rank) with Engle-Granger and Johansen replaced by controlled values | the verdict and flags exactly | — | test_diagnostics.py: cointegration_pretest: independent random walks; test_diagnostics.py: cointegration_pretest: each direction counts only; test_diagnostics.py: cointegration_pretest: Johansen not rejecting | also called in test_financial_modules.py. v2.6.11: a direction counts only when AIC and BIC both reject; full rank of Johansen det_order=0 → no verdict. The INTQRT check against statsmodels' coint (the call the function makes) only confirms the assembly, so it is not level A (review r1) |
 
 ## `survival`
 

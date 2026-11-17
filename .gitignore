@@ -4,3 +4,8 @@ __pycache__/
 .cache/
 routing-results/
 evals/results/
+.coverage
+.coverage.*
+coverage.json
+coverage.xml
+coverage-report.md

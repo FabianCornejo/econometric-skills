@@ -115,6 +115,9 @@ GENERIC = {
         "specification.robustness_value": ["Cinelli-Hazlett Darfur"]}),
     "test_v26.py": ("same", {
         "specification.ovb_bounds": ["R Darfur", "R sim"]}),
+    "test_diagnostics.py": ("close", {                       # v2.6.11
+        "diagnostics.hausman": ["B2.33"], "diagnostics.panel_bp_lm": ["B798", "G11.6 Breusch-Pagan"],
+        "diagnostics.white_simplified": ["W8.5"], "diagnostics.influence": ["W9.8 influence"]}),
 }
 
 

@@ -105,7 +105,7 @@ R² is not affected by heteroskedasticity.
 ## 8. Multicollinearity
 
 - Biases nothing; inflates variances. Classic symptom: high R² and significant F with weak individual t's, "wrong" signs, coefficients that are unstable when observations are dropped.
-- VIF_j = 1/(1 − R²_j): > 5 watch, > 10 worrying. A condition number of X above 30 suggests a problem.
+- VIF_j = 1/(1 − R²_j): > 5 watch, > 10 worrying. These thresholds are for the centered VIF (model with a constant); `diagnostics.vif_table` gives the uncentered one for a model without a constant (column `Kind`); it is not comparable with the centered VIF (it can be larger or smaller: a low uncentered VIF does not rule out collinearity) and has no such threshold. A condition number of X above 30 suggests a problem.
 - Remedies: more data; combine variables (index, ratio); drop one of the near-redundant variables (beware of omitted-variable bias); theoretical restrictions; accept it when the collinearity is only among controls and does not affect the coefficient of interest.
 
 ## 9. Influential observations

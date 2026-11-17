@@ -53,19 +53,36 @@ title = top.group(2) if top else ""
 check("the v2.6.7 entry names the three subjects (show tests, validation diary, Cox SEs) in its title",
       "`show`" in title and "validation diary" in title and "Cox" in title, title)
 val = (ROOT / "VALIDATION.md").read_text(encoding="utf-8")
+# v2.6.11: the counts move when a function changes level, so they are read from the NEWEST entry that states them in
+# the canonical form (the v2.6.7 entry until v2.6.10, then v2.6.11 on); the v2.6.7 entry keeps its own history.
+_heads = list(re.finditer(r"^## v(\S+) — ", cl, re.M))
+_entries = [cl[h.start():(_heads[i + 1].start() if i + 1 < len(_heads) else len(cl))] for i, h in enumerate(_heads)]
+counts_entry = next((e for e in _entries if "A replicated against a fixed reference: " in e), "")
+check("CHANGELOG: an entry states the level counts in the canonical form, the v2.6.7 one or a newer one",
+      counts_entry != "" and _vt(re.match(r"## v(\S+) — ", counts_entry).group(1)) >= (2, 6, 7))
 lv = Counter(m.group(1) for m in re.finditer(r"^\| `[a-z_]+\.[A-Za-z0-9_]+` \| ([ABCD]) \|", val, re.M))
 diffs = json.loads((ROOT / "tools" / "validation_diffs.json").read_text(encoding="utf-8"))["functions"]
+def _total():   # review r3: the "(N)" right before the level list, not any "(N)" in the entry
+    m = re.search(r"\((\d+)\)[^()]{0,60}?A replicated against a fixed reference: ", counts_entry)
+    return int(m.group(1)) if m else None
+
+
+def _num(label):   # review r2: integers, so 94 → 940 is caught (a substring test passed it)
+    m = re.search(re.escape(label) + r"(\d+)(?!\d)", counts_entry)
+    return int(m.group(1)) if m else None
+
+
 check("CHANGELOG: the level counts are those of VALIDATION.md",
-      f"({sum(lv.values())})" in entry and f"A replicated against a fixed reference: {lv['A']}" in entry
-      and f"B known truth: {lv['B']}" in entry and f"C execution only: {lv['C']}" in entry
-      and f"D no test: {lv['D']}" in entry, dict(lv))
+      _total() == sum(lv.values())
+      and _num("A replicated against a fixed reference: ") == lv["A"] and _num("B known truth: ") == lv["B"]
+      and _num("C execution only: ") == lv["C"] and _num("D no test: ") == lv["D"], dict(lv))
 check("CHANGELOG: the number of measured functions is that of tools/validation_diffs.json",
-      f"For the {len(diffs)} level-A functions whose reference is outside the Python scientific stack" in entry,
+      f"For the {len(diffs)} level-A functions whose reference is outside the Python scientific stack" in counts_entry,
       len(diffs))
 worst = max(diffs.items(), key=lambda kv: kv[1]["worst_diff"] / kv[1]["tolerance"] if kv[1]["tolerance"] else 0)
 check("CHANGELOG: the closest comparison named is the one with the largest difference/tolerance ratio",
       worst[0] == "causal.did_imputation"
-      and re.sub(r"e-0*", "e-", f"{worst[1]['worst_diff']:.2g} of {worst[1]['tolerance']:g}") in entry,
+      and re.sub(r"e-0*", "e-", f"{worst[1]['worst_diff']:.2g} of {worst[1]['tolerance']:g}") in counts_entry,
       (worst[0], worst[1]["worst_diff"], worst[1]["tolerance"]))
 check("CHANGELOG: the eight sentences fixed are named, each by its function",
       all(f in entry for f in ("dag.test_implications", "dependence.fit_copulas", "causal.event_study",

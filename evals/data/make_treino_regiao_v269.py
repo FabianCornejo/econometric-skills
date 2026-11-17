@@ -21,7 +21,7 @@ lsal = 7.6 + 0.0015 * horas + 0.03 * exper - 0.0005 * exper**2 + 0.12 * hab + rn
 d = pd.DataFrame(dict(salario=np.exp(lsal).round(2), horas_treino=horas.astype(int), experiencia=exper,
                       distancia_km=dist, subsidio=sub))
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("treino_regiao_v269.csv")
-d.to_csv(out, index=False)
+d.to_csv(out, index=False, lineterminator="\n")   # LF on every system (v2.6.11: Windows wrote CRLF)
 EXPECTED = "7a2d977571858bf8fb194316bf6e5ae2bb81135f1b96075eea315644e56a7a45"
 sha = hashlib.sha256(out.read_bytes()).hexdigest()
 print(out, sha, "(matches the committed file)" if sha == EXPECTED else "(DIFFERS from the committed file: numpy or pandas changed the draws or the CSV format)")

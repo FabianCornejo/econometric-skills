@@ -43,15 +43,41 @@ jobs:
             pip install -r requirements-dev.txt
           fi
           pip list
+      # v2.6.11: the latest job on Python 3.13 runs the suites under coverage; the report has no threshold.
       - name: Test suites
+        env:
+          COVERAGE_FILE: ${{ github.workspace }}/.coverage
         run: |
           status=0
+          run="python"
+          if [ "${{ matrix.deps }}" = "latest" ] && [ "${{ matrix.python }}" = "3.13" ]; then
+            pip install "coverage>=7.6"
+            run="python -m coverage run -p --source=econometrics/scripts"
+          fi
           for t in tests/test_*.py; do
             echo "::group::$t"
-            python "$t" || status=1
+            $run "$t" || status=1
             echo "::endgroup::"
           done
           exit $status
+      - name: Line coverage report by VALIDATION.md level (no threshold)
+        if: ${{ !cancelled() && matrix.deps == 'latest' && matrix.python == '3.13' }}
+        env:
+          COVERAGE_FILE: ${{ github.workspace }}/.coverage
+        run: |
+          python -m coverage combine
+          python -m coverage json -o coverage.json
+          python -m coverage xml -o coverage.xml
+          python tools/coverage_report.py coverage.json --all > coverage-report.md
+          cat coverage-report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() && matrix.deps == 'latest' && matrix.python == '3.13' }}
+        with:
+          name: coverage-python-3.13
+          path: |
+            coverage.json
+            coverage.xml
+            coverage-report.md
       - name: Worked examples run end to end
         working-directory: examples
         run: |
