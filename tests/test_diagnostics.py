@@ -152,6 +152,9 @@ hv = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.01, 0.03])), fb, show=Fals
 check("hausman: V_FE − V_RE not positive semidefinite → valid False and the Mundlak warning",
       hv["valid"] is False and "not positive semidefinite" in hv["conclusion"], hv)
 hneg = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.01, 0.005])), fb, show=False)
+hneg2 = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.02 + 0.04 / 0.3, 0.01 - 0.0125])), fb, show=False)  # 0.3 − 0.8
+check("hausman (review r2): a small negative statistic is also 'Not interpretable'",
+      close(hneg2["statistic"], -0.5, 1e-10) and hneg2["conclusion"].startswith("Not interpretable"), hneg2)
 check("hausman: a negative statistic (−0.2²/0.01 − 0.1²/0.005 = −6) is 'Not interpretable', never 'random effects "
       "acceptable' (review r1)", close(hneg["statistic"], -6.0, 1e-10) and hneg["conclusion"].startswith("Not interpretable")
       and "acceptable" not in hneg["conclusion"], hneg)
@@ -181,6 +184,9 @@ def _bp_size(unbalanced, reps=2000):
 size_bal, size_unb = _bp_size(False), _bp_size(True)
 check("panel_bp_lm: size under H0 in [3.5%, 6.5%], balanced (40 x 5) and unbalanced (T_i from 2 to 8), 2000 samples",
       0.035 <= size_bal <= 0.065 and 0.035 <= size_unb <= 0.065, (size_bal, size_unb))
+one, one_txt = quiet(dg.panel_bp_lm, pd.Series(np.arange(5.0) - 2, index=pd.MultiIndex.from_arrays([range(5), [0] * 5])))
+check("panel_bp_lm (review r2): every T_i = 1 → not defined (NaN), no verdict", np.isnan(one["LM"])
+      and "not defined" in one_txt and "acceptable" not in one_txt, (one, one_txt))
 check("panel_bp_lm: printed verdict when p < 5%", "individual effects present" in bp_txt, bp_txt)
 # Greene's Example 11.6 has no open data; residuals with the published sufficient statistics give the same LM.
 n6, T6, sq_means, ssr6 = 595, 7, 53.824384, 607.1265
@@ -253,6 +259,25 @@ vc = dg.vif_table(sm.OLS(hp2.price, hp2[["k", "lotsize", "sqrft", "sqrft2"]]).fi
 check("vif_table: a constant column under another name is skipped; perfect collinearity gives inf",
       list(vc.Variable) == ["lotsize", "sqrft", "sqrft2"] and np.isinf(vc.VIF.iloc[1]) and np.isinf(vc.VIF.iloc[2])
       and np.isfinite(vc.VIF.iloc[0]), vc)
+vk = vc.set_index("Variable")
+Xk = hp2[["lotsize", "sqrft"]].to_numpy(float)
+check("vif_table (review r2): a constant column named 'k' makes it centered — Kind and the value of lotsize "
+      "(perfectly collinear sqrft/sqrft2 aside)", set(vc.Kind) == {"centered"} and np.isfinite(vk.VIF["lotsize"])
+      and vk.VIF["lotsize"] > 1, vc)
+hz = hp.assign(z=0.0)
+vz = dg.vif_table(sm.OLS(hz.price, hz[["z", "lotsize", "sqrft", "bdrms"]]).fit())
+check("vif_table (review r2): an all-zero column is not a constant (uncentered) and has no row",
+      set(vz.Kind) == {"uncentered"} and list(vz.Variable) == ["lotsize", "sqrft", "bdrms"]
+      and rel(vz.VIF, vif_unc) < 1e-10, vz)
+_r = np.random.default_rng(3)
+hn_ = hp.assign(s2=hp.sqrft + _r.normal(0, 1.0, len(hp)))
+vn = dg.vif_table(smf.ols("price ~ sqrft + s2", hn_).fit())
+check("vif_table (review r2): near (not exact) collinearity gives a large finite VIF", np.isfinite(vn.VIF).all()
+      and vn.VIF.min() > 1e3, vn)
+hcst = hp.assign(const=3.7 + 4e-15 * np.arange(len(hp)) % 2)
+vcs = dg.vif_table(sm.OLS(hcst.price, hcst[["const", "lotsize", "sqrft", "bdrms"]]).fit())
+check("vif_table (review r2): a constant with 1e-15 noise is still a constant (centered, same values)",
+      set(vcs.Kind) == {"centered"} and rel(vcs.VIF, vif_corr) < 1e-8, vcs)
 v1 = dg.vif_table(smf.ols("price ~ sqrft", hp).fit())
 check("vif_table: a single regressor has VIF 1", len(v1) == 1 and close(v1.VIF.iloc[0], 1.0, 1e-12), v1)
 v_none = dg.vif_table(smf.ols("price ~ 1", hp).fit())
@@ -427,25 +452,30 @@ check("cointegration_pretest: independent random walks are not cointegrated",
 import statsmodels.tsa.vector_ar.vecm as _vecm
 
 
-def _fake_joh(lr1, lr2=None, cv=(15.494, 3.841), cvm=(14.264, 3.841)):
-    lr2 = lr1 if lr2 is None else lr2
-    return SimpleNamespace(lr1=np.array(lr1, float), lr2=np.array(lr2, float),
+def _fake_joh(lr2, cv=(15.494, 3.841), cvm=(14.264, 3.841)):
+    # review r2: the identities of the real object hold (trace = cumulative sum of max-eigen from the end)
+    lr2 = np.array(lr2, float)
+    lr1 = np.cumsum(lr2[::-1])[::-1]
+    return SimpleNamespace(lr1=lr1, lr2=lr2,
                            cvt=np.column_stack([np.zeros(2), np.array(cv), np.zeros(2)]),
                            cvm=np.column_stack([np.zeros(2), np.array(cvm), np.zeros(2)]))
+
+
+joh_calls = []
 
 
 def _run(fn, pmap, joh, *a, **kw):
     o_eg, o_j = dg._engle_granger, _vecm.coint_johansen
     try:
         dg._engle_granger = lambda y, xs, trend, crit: {"statistic": -1.0, "p": pmap[(y.name, crit)], "lags": 0}
-        _vecm.coint_johansen = lambda *aa, **kk: joh
+        _vecm.coint_johansen = lambda *aa, **kk: (joh_calls.append((aa, kk)), joh)[1]
         return quiet(fn, *a, **kw)
     finally:
         dg._engle_granger, _vecm.coint_johansen = o_eg, o_j
 
 
-J_r1 = _fake_joh([30.0, 1.0])          # rank 1: rejects r = 0, not r ≤ 1
-J_full = _fake_joh([30.0, 9.0])        # full rank
+J_r1 = _fake_joh([29.0, 1.0])          # trace 30, 1: rank 1 (rejects r = 0, not r ≤ 1)
+J_full = _fake_joh([21.0, 9.0])        # trace 30, 9: full rank
 cases = {
     "y~x both reject": ({("r6", "aic"): .01, ("r6", "bic"): .01, ("r3", "aic"): .5, ("r3", "bic"): .5}, J_r1, True, False),
     "x~y both reject, y~x sensitive": ({("r6", "aic"): .01, ("r6", "bic"): .2, ("r3", "aic"): .01, ("r3", "bic"): .01},
@@ -459,26 +489,35 @@ check("cointegration_pretest: each direction counts only when AIC and BIC reject
           and res_c[k]["johansen_full_rank"] is False for k, (_, _, exp, sens) in cases.items()),
       {k: (v["cointegrated_5%"], v["EG_lag_sensitive"]) for k, v in res_c.items()})
 pm_ok = cases["y~x both reject"][0]
-r_j, _ = _run(ss.cointegration_pretest, pm_ok, _fake_joh([10.0, 1.0]), iq.r6, iq.r3)
+joh_calls.clear()
+r_j, j_txt = _run(ss.cointegration_pretest, pm_ok, _fake_joh([9.0, 1.0]), iq.r6, iq.r3)
+pre_det = [kk.get("det_order", aa[1] if len(aa) > 1 else None) for aa, kk in joh_calls]
+r_z, z_txt = _run(ss.cointegration_pretest, pm_ok, _fake_joh([10.21, 5.05]), iq.r6, iq.r3)
 r_f, f_txt = _run(ss.cointegration_pretest, pm_ok, J_full, iq.r6, iq.r3)
-check("cointegration_pretest: Johansen not rejecting r = 0 → not cointegrated; full rank → no verdict, flagged",
-      not r_j["cointegrated_5%"] and not r_j["johansen_full_rank"]
-      and not r_f["cointegrated_5%"] and r_f["johansen_full_rank"] and "no verdict" in f_txt, (r_j, r_f))
+check("cointegration_pretest: Johansen not rejecting r = 0 → 'NOT clearly cointegrated'; full rank → no verdict, "
+      "flagged; Johansen called with det_order=0",
+      not r_j["cointegrated_5%"] and not r_j["johansen_full_rank"] and "NOT clearly cointegrated" in j_txt
+      and not r_f["cointegrated_5%"] and r_f["johansen_full_rank"] and "no verdict" in f_txt and pre_det == [0],
+      (r_j, r_f, pre_det))
+check("cointegration_pretest (review r2): r = 0 not rejected but r ≤ 1 rejected (trace 15.26, 5.05) is rank 0, "
+      "not 'full rank'", not r_z["johansen_full_rank"] and "full rank" not in z_txt
+      and "NOT clearly cointegrated" in z_txt, (r_z, z_txt))
 
 pm_agree = {("r6", "aic"): .01, ("r6", "bic"): .01}
 pm_sens = {("r6", "aic"): .2, ("r6", "bic"): .01}
 d0, d0_txt = _run(dg.cointegration, pm_sens, J_full, iq[["r6", "r3"]], det_order=0)
 dm, dm_txt = _run(dg.cointegration, pm_agree, J_full, iq[["r6", "r3"]], det_order=-1)
 d1, _ = _run(dg.cointegration, pm_agree, J_full, iq[["r6", "r3"]], det_order=1)
-dmx, _ = _run(dg.cointegration, pm_agree, _fake_joh([30.0, 1.0], lr2=[30.0, 9.0]), iq[["r6", "r3"]], det_order=0)
 dok, _ = _run(dg.cointegration, pm_agree, J_r1, iq[["r6", "r3"]], det_order=0)
-check("cointegration: full rank with det_order=0 → FULL_RANK_DET0 (also when only the max-eigenvalue rank is full); "
-      "with det_order −1 or 1 → the I(0) note; rank 1 → no note",
-      d0["johansen_note"] == dg.FULL_RANK_DET0 and dmx["johansen_note"] == dg.FULL_RANK_DET0
-      and dmx["rank_trace"] == 1 and dmx["rank_max_eigen"] == 2
+dsi, dsi_txt = _run(dg.cointegration, pm_sens, J_full, iq[["r6", "r3"]], det_order=1)
+check("cointegration: full rank with det_order=0 → FULL_RANK_DET0; with det_order −1 or 1 → the I(0) note; rank 1 → "
+      "no note (the max-eigenvalue-only full rank cannot happen with two series: review r2)",
+      d0["johansen_note"] == dg.FULL_RANK_DET0
       and dm["johansen_note"] and "probably I(0)" in dm["johansen_note"]
       and d1["johansen_note"] and "probably I(0)" in d1["johansen_note"] and dok["johansen_note"] is None,
-      (d0["johansen_note"], dmx["johansen_note"], dm["johansen_note"], d1["johansen_note"], dok["johansen_note"]))
+      (d0["johansen_note"], dm["johansen_note"], d1["johansen_note"], dok["johansen_note"]))
+check("cointegration: Inconclusive with another note still tells to weigh the Johansen result",
+      dsi["engle_granger"]["lag_sensitive"] and "weigh the Johansen result below" in dsi_txt, dsi_txt)
 check("cointegration: Inconclusive with the det_order=0 full rank does not tell to weigh that Johansen result",
       d0["engle_granger"]["lag_sensitive"] and "not usable here" in d0_txt and "weigh the Johansen" not in d0_txt,
       d0_txt)

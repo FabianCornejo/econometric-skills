@@ -195,14 +195,17 @@ def vif_table(res) -> pd.DataFrame:
       regressors without a constant (Stata's `estat vif, uncentered`; Stata refuses the centered one after `nocons`).
       With a full set of dummies and no constant the centered VIF is infinite by construction, not collinearity.
     v2.6.11: computed here, the same on every statsmodels version (0.14 returned the uncentered VIF for models
-    without a constant, 0.15 the centered one).
+    without a constant, 0.15 the centered one). The rules of thumb (> 5 watch, > 10 worrying) are for the centered
+    VIF; the uncentered one is larger by construction and has no such threshold.
     """
     exog = np.asarray(res.model.exog, dtype=float)
     names = list(res.model.exog_names)
-    const_cols = [i for i in range(exog.shape[1]) if np.ptp(exog[:, i]) == 0 and exog[0, i] != 0]
+    def _is_const(col):   # same tolerance idea as specification._has_intercept (allclose), and not all zero
+        return bool(np.allclose(col, col[0], rtol=1e-10, atol=1e-12)) and abs(col[0]) > 1e-12
+    const_cols = [i for i in range(exog.shape[1]) if _is_const(exog[:, i])]
     centered = len(const_cols) > 0
-    keep = [i for i, name in enumerate(names)
-            if name.lower() not in ("const", "intercept") and np.ptp(exog[:, i]) != 0]
+    keep = [i for i in range(exog.shape[1])
+            if i not in const_cols and not np.allclose(exog[:, i], 0, atol=1e-12)]
     rows = []
     for i in keep:
         others = [exog[:, j] for j in keep if j != i]
@@ -831,8 +834,8 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
     if not valid:
         concl += " (WARNING: V_FE − V_RE is not positive semidefinite; prefer the Mundlak test)"
     if stat < 0:   # v2.6.11 review r1: a negative quadratic form is not a χ² draw; p = 1 says nothing
-        concl = ("Not interpretable: the statistic is negative (V_FE − V_RE is not positive semidefinite); "
-                 "use mundlak_test")
+        concl = ("Not interpretable: the statistic is negative"
+                 + ("" if valid else " (V_FE − V_RE is not positive semidefinite)") + "; use mundlak_test")
     if classical_cov is False:
         concl = (f"Not interpretable: fitted with {kinds[0]}/{kinds[1]} covariances; the classical Hausman "
                  "needs cov_type='unadjusted' in both (refit them, or use mundlak_test for a robust comparison)")
@@ -857,6 +860,10 @@ def panel_bp_lm(resid_pooled: pd.Series, show: bool = True) -> dict:
     n = Ti.sum()
     num = (groups.sum() ** 2).sum()
     den = (e ** 2).sum()
+    if (Ti ** 2).sum() - n <= 0:   # v2.6.11 review r2: every T_i = 1, no within-entity information
+        if show:
+            print("\nBreusch-Pagan LM (panel): not defined — every entity has a single observation")
+        return {"LM": np.nan, "p": np.nan}
     lm = n ** 2 / (2 * ((Ti ** 2).sum() - n)) * (num / den - 1) ** 2
     p = 1 - stats.chi2.cdf(lm, 1)
     if show:

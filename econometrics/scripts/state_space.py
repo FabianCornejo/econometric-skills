@@ -180,7 +180,7 @@ def cointegration_pretest(y: pd.Series, x: pd.Series, show: bool = True) -> dict
     sensitive = any((pa < 0.05) != (pb < 0.05) for pa, pb in ((p_yx, p_yx_b), (p_xy, p_xy_b)))
     j = coint_johansen(d, det_order=0, k_ar_diff=1)
     trace, cv95 = j.lr1[0], j.cvt[0, 1]
-    full_rank = bool(j.lr1[-1] > j.cvt[-1, 1])
+    full_rank = bool(j.lr1[0] > j.cvt[0, 1] and j.lr1[-1] > j.cvt[-1, 1])   # rank k: every trace H0 rejected (r2)
     out = {"EG_p_y_on_x": p_yx, "EG_p_x_on_y": p_xy, "EG_p_y_on_x_bic": p_yx_b, "EG_p_x_on_y_bic": p_xy_b,
            "EG_lag_sensitive": sensitive, "Johansen_trace_r0": trace, "Johansen_cv95": cv95,
            "johansen_full_rank": full_rank, "cointegrated_5%": bool(robust and trace > cv95 and not full_rank)}
