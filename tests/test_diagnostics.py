@@ -12,6 +12,8 @@ the signs below come from the definitions. Baltagi not read: the pages come from
       6.37, residual of the largest firm 1.62, sigma-hat 1.82.
       Section 18.4, p. 587-588 (INTQRT): the basic Engle-Granger test regresses u_t on u_{t-1} (no lags);
       5% critical value -3.34 (Table 18.4). Example 18.6, p. 591: OLS of r6 on r3 gives 1.026 (.0077).
+      Example 15.1, p. 467 and Example 15.8, p. 485 (MROZ; section 8, iv_report, added in v2.6.12; read in the PDF
+      on 2026-11-17): first stage .269 (.029), R² .173, 2SLS .059 (.035); overidentification R² .0009.
   Baltagi, B.H. (2013), Econometric Analysis of Panel Data, 5th ed., Wiley (Grunfeld data, 10 firms):
       p. 81, Hausman m1 = 2.33; p. 108, Table 4.2, Breusch-Pagan LM_mu = 798.162.
   Greene, W.H. (2012), Econometric Analysis, 7th ed., Pearson: eq. (11-42) and Example 11.6, p. 376-377
@@ -156,12 +158,45 @@ hneg2 = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.02 + 0.04 / 0.3, 0.01 -
 check("hausman (review r2): a small negative statistic is also 'Not interpretable'",
       close(hneg2["statistic"], -0.5, 1e-10) and hneg2["conclusion"].startswith("Not interpretable"), hneg2)
 hpsd = dg.hausman(fake([1.0, 0.5, 0.2 + 1e-6], np.diag([1.0, 0.04, 0.01 - 1e-12])), fb, show=False)
-check("hausman (review r3): a negative statistic with valid True does not claim 'not positive semidefinite'",
-      hpsd["valid"] and hpsd["statistic"] < 0 and hpsd["conclusion"].startswith("Not interpretable")
-      and "semidefinite" not in hpsd["conclusion"], hpsd)
+# v2.6.12 (v2.6.11 leftover): this check fixed a statistic of −1 made of rounding (an eigenvalue of −1e-12 inverted)
+# next to valid True. That eigenvalue is within the zero cut, so it is zero: df 1, statistic
+# 0.2²/0.02 = 2, valid True, and a verdict (after review r2 the cut is on D⁻¹VD⁻¹, D = √diag V_FE: −1e-12/0.01 = −1e-10,
+# within 1e-8 of the largest eigenvalue of D⁻¹V_FE D⁻¹, which is 1)
+check("hausman (v2.6.12): an eigenvalue of −1e-12 (−1e-10 after scaling, within the 1e-8 cut) is zero: df 1, statistic "
+      "0.2²/0.02 = 2, valid True, no 'Not interpretable'",
+      hpsd["valid"] and hpsd["df"] == 1 and close(hpsd["statistic"], 2.0, 1e-9)
+      and not hpsd["conclusion"].startswith("Not interpretable"), hpsd)
+hpsd2 = dg.hausman(fake([1.0, 0.5, 0.2 + 1e-6], np.diag([1.0, 0.04, 0.01 - 1e-9])), fb, show=False)
+check("hausman (v2.6.12): the other side, an eigenvalue of −1e-9 (−1e-7 after scaling, beyond the 1e-8 cut) keeps df 2, "
+      "valid False and 'Not interpretable'", hpsd2["df"] == 2 and not hpsd2["valid"] and hpsd2["statistic"] < 0
+      and hpsd2["conclusion"].startswith("Not interpretable"), hpsd2)
 check("hausman: a negative statistic (−0.2²/0.01 − 0.1²/0.005 = −6) is 'Not interpretable', never 'random effects "
       "acceptable' (review r1)", close(hneg["statistic"], -6.0, 1e-10) and hneg["conclusion"].startswith("Not interpretable")
       and "acceptable" not in hneg["conclusion"], hneg)
+
+# v2.6.12 review r1 (r1-B): the zero-eigenvalue cut is made on D⁻¹(V_FE − V_RE)D⁻¹, D = √diag(V_FE), so it does not
+# depend on units. Grunfeld with value × 1e4 and WAGEPAN with exper in days give the same statistic and df
+gr4 = gr.assign(value=gr.value * 1e4)
+GX4 = sm.add_constant(gr4[["value", "capital"]])
+h4 = dg.hausman(PanelOLS(gr4.invest, GX4, entity_effects=True).fit(cov_type="unadjusted"),
+                RandomEffects(gr4.invest, GX4).fit(cov_type="unadjusted"), show=False)
+check("hausman (v2.6.12): Grunfeld with value × 1e4 → the same 2.33 with df 2 (it gave χ²(1) = 0.634)",
+      rel(h4["statistic"], h["statistic"]) < 1e-6 and h4["df"] == 2, h4)
+wp = woo.data("wagepan").set_index(["nr", "year"])
+hw = []
+for sc in (1.0, 365.0):
+    dw = wp.assign(exper=wp.exper * sc, expersq=(wp.exper * sc) ** 2)
+    fw = "lwage ~ 1 + exper + expersq + union + married + hours"
+    hw.append(dg.hausman(PanelOLS.from_formula(fw + " + EntityEffects", dw, drop_absorbed=True).fit(cov_type="unadjusted"),
+                         RandomEffects.from_formula(fw, dw).fit(cov_type="unadjusted"), show=False))
+check("hausman (v2.6.12): WAGEPAN, exper in years and in days → the same statistic (relative 1e-6) and df 5, 'Not "
+      "interpretable' (V not PSD); the unscaled cut gave χ²(4) = 163.6, 'Reject'", rel(hw[0]["statistic"], hw[1]["statistic"])
+      < 1e-6 and hw[0]["df"] == hw[1]["df"] == 5 and not hw[0]["valid"]
+      and hw[0]["conclusion"].startswith("Not interpretable"), hw)
+hz = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.04, 0.03])), fake([1.0, 0.5, 0.2], np.diag([1.0, 0.04, 0.03])),
+                show=False)
+check("hausman (v2.6.12): V_FE − V_RE = 0 → df 0 and 'Not computed', never 'random effects acceptable'",
+      hz["df"] == 0 and hz["conclusion"].startswith("Not computed") and "acceptable" not in hz["conclusion"], hz)
 
 # -------------------------------------------------------------------------------------------- 2. panel_bp_lm
 pooled = PooledOLS(gr.invest, GX).fit()
@@ -535,6 +570,30 @@ check("cointegration: Inconclusive with another note still tells to weigh the Jo
 check("cointegration: Inconclusive with the det_order=0 full rank does not tell to weigh that Johansen result",
       d0["engle_granger"]["lag_sensitive"] and "not usable here" in d0_txt and "weigh the Johansen" not in d0_txt,
       d0_txt)
+
+# -------------------------------------------------------------------------------------------- 8. iv_report (v2.6.12)
+# Wooldridge (2000, 1st ed.) Example 15.1, p. 467 (MROZ, working women): first stage educ = 10.24 + .269 fatheduc,
+# (.28) (.029), n = 428, R² = .173; 2SLS educ .059 (.035). The book's "t = 9.28" is .269/.029, computed from the
+# rounded numbers (the data give 9.4255), so the F is checked against the classical F by another route instead.
+# Example 15.8, p. 485: overidentification R² = .0009 (the book's nR² = .3852 is 428 × .0009, the rounded R²).
+mroz = woo.data("mroz").dropna(subset=["wage"]).assign(expersq=lambda t: t.exper ** 2)
+r151, _ = quiet(dg.iv_report, "lwage ~ 1 + [educ ~ fatheduc]", mroz, cov_type="unadjusted")
+fsr = sm.OLS(mroz.educ, sm.add_constant(mroz[["fatheduc"]])).fit()
+check("W15.1 (1st ed., p. 467): n = 428, first-stage .269 (.029), R² .173 and partial R² .173 (half the last digit), "
+      "2SLS .059 (.035)", r151["n"] == 428 and close(fsr.params.fatheduc, 0.269, 0.0005)
+      and close(fsr.bse.fatheduc, 0.029, 0.0005) and close(fsr.rsquared, 0.173, 0.0005)
+      and close(r151["first_stage"]["partial R²"].iloc[0], 0.173, 0.0005)
+      and close(r151["table"].loc["educ", "2SLS"], 0.059, 0.0005)
+      and close(r151["table"].loc["educ", "2SLS se"], 0.035, 0.0005), r151["first_stage"])
+check("iv_report (v2.6.12): unadjusted first-stage F on W15.1 = t² of the simple regression (one instrument, "
+      "classical F; relative 1e-10; linearmodels' own Wald is 428/426 times it)",
+      rel(r151["first_stage"]["partial F"].iloc[0], fsr.tvalues.fatheduc ** 2) < 1e-10,
+      (r151["first_stage"]["partial F"].iloc[0], fsr.tvalues.fatheduc ** 2))
+r158, _ = quiet(dg.iv_report, "lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]", mroz, cov_type="unadjusted")
+check("W15.8 (1st ed., p. 485): Sargan R² = nR²/n = .0009 (half the last digit); nR² .378 and p .539 from the data, "
+      "not the book's .3852 (428 × the rounded R²)", close(r158["tests"].iloc[1]["statistic"] / 428, 0.0009, 0.00005)
+      and close(r158["tests"].iloc[1]["statistic"], 0.378, 0.0005) and close(r158["tests"].iloc[1]["p"], 0.539, 0.0005),
+      r158["tests"])
 
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")
