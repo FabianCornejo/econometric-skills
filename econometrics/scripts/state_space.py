@@ -161,19 +161,37 @@ def pairs_returns(y_price: pd.Series, x_price: pd.Series, hedge: pd.Series, posi
 
 
 def cointegration_pretest(y: pd.Series, x: pd.Series, show: bool = True) -> dict:
-    """Engle-Granger is not symmetric: run it both ways and confirm with Johansen."""
-    from statsmodels.tsa.stattools import coint
+    """Engle-Granger is not symmetric: run it both ways and confirm with Johansen.
+
+    v2.6.11: each Engle-Granger direction runs with the residual-ADF lags chosen by AIC (the EG_p_* keys, as
+    before) and by BIC (EG_p_*_bic). A direction counts as evidence only when both criteria reject at 5%; when
+    they disagree (EG_lag_sensitive) the pretest says so. Johansen uses det_order=0, which declares full rank
+    too often for driftless random walks (time-series.md §7): johansen_full_rank flags that case.
+    """
     from statsmodels.tsa.vector_ar.vecm import coint_johansen
+    from diagnostics import FULL_RANK_DET0, _engle_granger
     d = pd.concat([y, x], axis=1).dropna()
-    p_yx = coint(d.iloc[:, 0], d.iloc[:, 1])[1]
-    p_xy = coint(d.iloc[:, 1], d.iloc[:, 0])[1]
+    eg = {(a, b, crit): _engle_granger(d.iloc[:, a], d.iloc[:, [b]], "c", crit)
+          for a, b in ((0, 1), (1, 0)) for crit in ("aic", "bic")}
+    p_yx, p_xy = eg[(0, 1, "aic")]["p"], eg[(1, 0, "aic")]["p"]
+    p_yx_b, p_xy_b = eg[(0, 1, "bic")]["p"], eg[(1, 0, "bic")]["p"]
+    robust = (max(p_yx, p_yx_b) < 0.05) or (max(p_xy, p_xy_b) < 0.05)
+    sensitive = any((pa < 0.05) != (pb < 0.05) for pa, pb in ((p_yx, p_yx_b), (p_xy, p_xy_b)))
     j = coint_johansen(d, det_order=0, k_ar_diff=1)
     trace, cv95 = j.lr1[0], j.cvt[0, 1]
-    out = {"EG_p_y_on_x": p_yx, "EG_p_x_on_y": p_xy, "Johansen_trace_r0": trace,
-           "Johansen_cv95": cv95, "cointegrated_5%": bool(min(p_yx, p_xy) < 0.05 and trace > cv95)}
+    full_rank = bool(j.lr1[-1] > j.cvt[-1, 1])
+    out = {"EG_p_y_on_x": p_yx, "EG_p_x_on_y": p_xy, "EG_p_y_on_x_bic": p_yx_b, "EG_p_x_on_y_bic": p_xy_b,
+           "EG_lag_sensitive": sensitive, "Johansen_trace_r0": trace, "Johansen_cv95": cv95,
+           "johansen_full_rank": full_rank, "cointegrated_5%": bool(robust and trace > cv95)}
     if show:
-        print(f"\nCointegration pretest: EG p (y~x) = {p_yx:.3f}, EG p (x~y) = {p_xy:.3f}, "
+        print(f"\nCointegration pretest: EG p (y~x) = {p_yx:.3f} AIC / {p_yx_b:.3f} BIC, "
+              f"EG p (x~y) = {p_xy:.3f} AIC / {p_xy_b:.3f} BIC, "
               f"Johansen trace r=0: {trace:.2f} vs 5% cv {cv95:.2f} → "
               + ("cointegrated" if out["cointegrated_5%"] else
                  "NOT clearly cointegrated: a mean-reversion strategy rests on an unproven relationship"))
+        if sensitive:
+            print("Engle-Granger changes conclusion with the lag choice of the residual ADF (AIC vs BIC): "
+                  "only a direction where both reject counts.")
+        if full_rank:
+            print(FULL_RANK_DET0)
     return out

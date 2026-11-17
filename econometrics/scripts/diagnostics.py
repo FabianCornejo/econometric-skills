@@ -49,9 +49,9 @@ from statsmodels.stats.diagnostic import (
     het_white,
     linear_reset,
 )
-from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.stats.stattools import durbin_watson, jarque_bera
 from statsmodels.tsa.stattools import adfuller, coint, kpss
+from statsmodels.tsa.tsatools import add_trend
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
 ALPHA = 0.05
@@ -187,16 +187,21 @@ def ols_diagnostics(res, bg_lags: int | None = None, time_series: bool = False,
 
 
 def vif_table(res) -> pd.DataFrame:
-    exog = np.asarray(res.model.exog)
+    """Centered VIF of each non-constant regressor: 1/(1 − R²_j), with R²_j from the regression of x_j on
+    the other non-constant regressors plus a constant. Same value whether or not the model has a constant
+    (v2.6.11: statsmodels 0.14 returned the uncentered VIF for models without a constant, 0.15 the centered
+    one; the skill no longer depends on that)."""
+    exog = np.asarray(res.model.exog, dtype=float)
     names = list(res.model.exog_names)
+    keep = [i for i, name in enumerate(names)
+            if name.lower() not in ("const", "intercept") and np.ptp(exog[:, i]) != 0]
     rows = []
-    for i, name in enumerate(names):
-        if name.lower() in ("const", "intercept") or np.ptp(exog[:, i]) == 0:
-            continue
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            rows.append({"Variable": name, "VIF": variance_inflation_factor(exog, i)})
-    return pd.DataFrame(rows)
+    for i in keep:
+        others = [j for j in keep if j != i]
+        Z = np.column_stack([np.ones(len(exog))] + [exog[:, j] for j in others])
+        r2 = sm.OLS(exog[:, i], Z).fit().rsquared
+        rows.append({"Variable": names[i], "VIF": np.inf if r2 >= 1 else 1.0 / (1.0 - r2)})
+    return pd.DataFrame(rows, columns=["Variable", "VIF"])
 
 
 def influence(res, top: int = 10, show: bool = True) -> pd.DataFrame:
@@ -388,19 +393,52 @@ def stationarity_many(df: pd.DataFrame, show: bool = True, alpha: float = ALPHA)
 # =============================================================================
 # Cointegration
 # =============================================================================
+FULL_RANK_DET0 = ("Full rank with det_order=0 (statsmodels' unrestricted constant): this case declares full rank "
+                  "too often for random walks without drift (time-series.md §7), so do not conclude I(0) from it. "
+                  "Run multivariate.johansen_trace(df, k_ar_diff, deterministic='ci'), and revisit stationarity.")
+
+
+def _engle_granger(y, xs, trend: str, autolag: str) -> dict:
+    """statsmodels' coint (statistic and MacKinnon p-value) plus the lag its residual ADF chose.
+
+    coint runs adfuller(resid, autolag=..., regression="n") on the residuals of y on xs and the trend terms;
+    the same ADF is re-run here only to read the lag. If its statistic does not match coint's, the lag is
+    reported as unknown (None) rather than guessed.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        stat, p, _ = coint(y, xs, trend=trend, autolag=autolag)
+        X = add_trend(np.asarray(xs, dtype=float), trend=trend, prepend=True)
+        resid = sm.OLS(np.asarray(y, dtype=float), X).fit().resid
+        adf = adfuller(resid, autolag=autolag, regression="n")
+    lags = int(adf[2]) if np.isclose(adf[0], stat, rtol=1e-8, atol=1e-10) else None
+    return {"statistic": float(stat), "p": float(p), "lags": lags}
+
+
 def cointegration(df: pd.DataFrame, k_ar_diff: int = 1, det_order: int = 0, show: bool = True) -> dict:
     """Engle-Granger (1st column as dependent) and Johansen (trace and max-eigenvalue, 5%).
 
     det_order: -1 no deterministics, 0 constant, 1 linear trend.
     k_ar_diff: lags in differences (choose with vecm.select_order).
     Prerequisite: all series I(1).
+    Engle-Granger is run with the residual-ADF lags chosen by AIC and by BIC (v2.6.11). The keys
+    statistic/p are the AIC run (as before); statistic_bic/p_bic/lags_aic/lags_bic are added. When the two
+    disagree at 5%, lag_sensitive is True and the conclusion is "Inconclusive" instead of either verdict
+    (Wooldridge 2000, 1st ed., p. 587-588: r6 on r3 is clearly cointegrated with no ADF lags, while AIC picks
+    6 lags and does not reject).
     """
     from statsmodels.tsa.vector_ar.vecm import coint_johansen
     data = df.dropna()
     y, xs = data.iloc[:, 0], data.iloc[:, 1:]
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        eg_t, eg_p, _ = coint(y, xs, trend="c" if det_order <= 0 else "ct", autolag="aic")
+    trend = "c" if det_order <= 0 else "ct"
+    eg = {crit: _engle_granger(y, xs, trend, crit) for crit in ("aic", "bic")}
+    eg_t, eg_p = eg["aic"]["statistic"], eg["aic"]["p"]
+    lag_sensitive = (eg["aic"]["p"] < ALPHA) != (eg["bic"]["p"] < ALPHA)
+    if lag_sensitive:
+        eg_concl = ("Inconclusive: the conclusion depends on the lag choice of the residual ADF "
+                    "(AIC vs BIC); report both")
+    else:
+        eg_concl = "Cointegrated" if eg_p < ALPHA else "No evidence of cointegration"
     joh = coint_johansen(data.values, det_order, k_ar_diff)
     k = data.shape[1]
     rows, r_tr, r_mx = [], None, None
@@ -415,18 +453,33 @@ def cointegration(df: pd.DataFrame, k_ar_diff: int = 1, det_order: int = 0, show
     r_tr = k if r_tr is None else r_tr
     r_mx = k if r_mx is None else r_mx
     tab = pd.DataFrame(rows)
-    out = {"engle_granger": {"statistic": eg_t, "p": eg_p,
-                             "conclusion": "Cointegrated" if eg_p < ALPHA else "No evidence of cointegration"},
-           "johansen": tab, "rank_trace": r_tr, "rank_max_eigen": r_mx}
+    johansen_note = None
+    if max(r_tr, r_mx) == k and det_order == 0:
+        johansen_note = FULL_RANK_DET0
+    elif r_tr == k:
+        johansen_note = "Full rank: the series are probably I(0) — revisit stationarity."
+    out = {"engle_granger": {"statistic": eg_t, "p": eg_p, "conclusion": eg_concl,
+                             "lags_aic": eg["aic"]["lags"], "statistic_bic": eg["bic"]["statistic"],
+                             "p_bic": eg["bic"]["p"], "lags_bic": eg["bic"]["lags"],
+                             "lag_sensitive": lag_sensitive},
+           "johansen": tab, "rank_trace": r_tr, "rank_max_eigen": r_mx, "johansen_note": johansen_note}
     if show:
-        print(f"\nEngle-Granger ({y.name} ~ {', '.join(map(str, xs.columns))}): t={eg_t:.3f}, p={eg_p:.4f} "
-              f"→ {out['engle_granger']['conclusion']} (MacKinnon critical values)")
+        def _lags(v):
+            return "?" if v is None else str(v)
+        print(f"\nEngle-Granger ({y.name} ~ {', '.join(map(str, xs.columns))}), ADF on the residuals "
+              f"(MacKinnon critical values):")
+        for crit in ("aic", "bic"):
+            print(f"  lags chosen by {crit.upper()}: {_lags(eg[crit]['lags'])} → t={eg[crit]['statistic']:.3f}, "
+                  f"p={eg[crit]['p']:.4f}")
+        print(f"  → {eg_concl}")
+        if lag_sensitive:
+            print("  Check the autocorrelation of the residual-ADF regression and weigh the Johansen result below.")
         print(f"Johansen (det_order={det_order}, k_ar_diff={k_ar_diff}):")
         print(tab.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
         print(f"Cointegration rank: trace = {r_tr}, max eigenvalue = {r_mx}"
               + ("" if r_tr == r_mx else " (they differ: report both and decide on theory)"))
-        if r_tr == k:
-            print("Full rank: the series are probably I(0) — revisit stationarity.")
+        if johansen_note:
+            print(johansen_note)
     return out
 
 
@@ -750,10 +803,20 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
     df_ = len(common)
     p = float(1 - stats.chi2.cdf(stat, df_))
     valid = bool(np.all(eig > -1e-10))
+    # v2.6.11: the classical statistic needs both fits with the unadjusted covariance. linearmodels keeps the
+    # estimator only in the private _cov_type ("Unadjusted", "Robust", "Clustered", "Driscoll-Kraay"; same in
+    # 6.1 and 7.1); when it is missing, nothing is claimed (None).
+    kinds = [getattr(r, "_cov_type", None) for r in (fe_res, re_res)]
+    classical_cov = None if None in kinds else all(str(c).lower() in ("unadjusted", "homoskedastic")
+                                                     for c in kinds)
     concl = "Reject H0 → fixed effects" if p < ALPHA else "Do not reject H0 → random effects acceptable"
     if not valid:
         concl += " (WARNING: V_FE − V_RE is not positive semidefinite; prefer the Mundlak test)"
-    out = {"statistic": stat, "df": df_, "p": p, "valid": valid, "conclusion": concl}
+    if classical_cov is False:
+        concl = (f"Not interpretable: fitted with {kinds[0]}/{kinds[1]} covariances; the classical Hausman "
+                 "needs cov_type='unadjusted' in both (refit them, or use mundlak_test for a robust comparison)")
+    out = {"statistic": stat, "df": df_, "p": p, "valid": valid, "classical_cov": classical_cov,
+           "conclusion": concl}
     if show:
         print(f"\nHausman: χ²({df_}) = {stat:.3f}, p = {p:.4f} → {concl}")
     return out
