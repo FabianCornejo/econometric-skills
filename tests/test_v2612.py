@@ -383,8 +383,8 @@ for z6, hc0_nan, hc3_nan in ((1e-4, True, False), (3e-4, False, False)):
     d = pd.DataFrame(dict(y=x + u, x=x, z=z, zb=zb, w=w))
     r0, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z", "zb"]], cov_type="HC0")
     r3, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z", "zb"]], cov_type="HC3")
-    check(f"leverage 1 − {z6 ** 2:.0e} (zb[6] = {z6:g}): HC0 {'refused' if hc0_nan else 'computed with the high-leverage '
-          'warning'}, HC3 computed (≈ 25.8)", (np.isnan(r0["first_stage_F"]["x"]) == hc0_nan)
+    hc0_txt = "refused" if hc0_nan else "computed with the high-leverage warning"
+    check(f"leverage 1 − {z6 ** 2:.0e} (zb[6] = {z6:g}): HC0 {hc0_txt}, HC3 computed (≈ 25.8)", (np.isnan(r0["first_stage_F"]["x"]) == hc0_nan)
           and (hc0_nan or any(m.startswith("HC0 with a row with leverage") for m in r0["warnings"]))
           and np.isfinite(r3["first_stage_F"]["x"]) and abs(r3["first_stage_F"]["x"] - 25.8) < 0.1
           and not any("leverage" in m for m in r3["warnings"]), (r0["first_stage_F"], r3["first_stage_F"], r0["warnings"]))
