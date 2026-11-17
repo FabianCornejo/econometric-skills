@@ -190,9 +190,9 @@ for pi in (1.0, 0.12, 0.05):
 fs = lambda r_: r_["first_stage_F"]["xe"]  # noqa: E731
 check("endogeneity_test: F > 104.7 -> 'strong', and F printed is the returned one",
       fs(rs) > 104.7 and has(ts, f"= {fs(rs):.2f} → strong"), ts)
-check("endogeneity_test: 10 < F <= 104.7 -> 'acceptable (>10); also report Anderson-Rubin'",
-      10 < fs(ra) <= 104.7 and has(ta, "acceptable (>10); also report Anderson-Rubin"), ta)
-check("endogeneity_test: F <= 10 -> 'WEAK'", fs(rw) <= 10 and has(tw, "→ WEAK"), tw)
+check("endogeneity_test: 10 <= F <= 104.7 -> 'acceptable (10 ≤ F ≤ 104.7); also report Anderson-Rubin'",
+      10 <= fs(ra) <= 104.7 and has(ta, "acceptable (10 ≤ F ≤ 104.7); also report Anderson-Rubin"), ta)
+check("endogeneity_test: F < 10 -> 'WEAK'", fs(rw) < 10 and has(tw, "→ WEAK"), tw)
 check("endogeneity_test: strong instruments and rejection -> 'endogenous: use IV/2SLS'",
       rs["p"] < 0.05 and has(ts, "endogenous: use IV/2SLS"), ts)
 check("endogeneity_test: weak instruments -> never 'use IV/2SLS'; says 2SLS is unreliable and points to "
@@ -200,10 +200,11 @@ check("endogeneity_test: weak instruments -> never 'use IV/2SLS'; says 2SLS is u
       and has(tw, "weak instruments") and has(tw, "Anderson-Rubin"), tw)
 check("endogeneity_test: the printed DWH line carries cov_type and the returned F and p",
       has(ts, f"(control function, HC3): F = {rs['statistic']:.3f}, p = {rs['p']:.4f}"), ts)
-# the label of the first stage at the exact thresholds (the helper the show block uses)
+# the label of the first stage at the exact thresholds (the helper the show block uses). v2.6.12 (user's decision 2):
+# one convention with iv_report, F < 10 weak; this check fixed F = 10 as WEAK before
 lab = getattr(dg, "_first_stage_label", None)
-check("endogeneity_test: F = 10 is WEAK, just above 10 is acceptable; 104.7 is acceptable, just above is strong",
-      lab is not None and lab(10.0) == "WEAK" and lab(10.0 + 1e-9).startswith("acceptable")
+check("endogeneity_test: just below 10 is WEAK, F = 10 is acceptable; 104.7 is acceptable, just above is strong",
+      lab is not None and lab(10.0 - 1e-9) == "WEAK" and lab(10.0).startswith("acceptable")
       and lab(104.7).startswith("acceptable") and lab(104.7 + 1e-9) == "strong")
 # exogenous regressor, strong instruments: no rejection, and no claim that OLS is consistent
 xe = Z[:, 0] + Z[:, 1] + rng.normal(size=n2)
@@ -235,8 +236,8 @@ check("endogeneity_test: one instrument for two endogenous regressors -> 'not id
 x2w = 0.03 * Z[:, 0] + 0.03 * Z[:, 1] + v2               # one strong, one weak first stage
 r, t = run(dg.endogeneity_test, pd.Series(1 + x1r + x2w + u, name="y"), None, pd.DataFrame({"x1": x1r, "x2": x2w}), Zdf)
 fs2 = r["first_stage_F"]
-check("endogeneity_test: one strong and one weak first stage -> the weak-instrument verdict (any F <= 10 counts)",
-      fs2["x1"] > 104.7 and fs2["x2"] <= 10 and has(t, "weak instruments") and "use IV/2SLS" not in t, t)
+check("endogeneity_test: one strong and one weak first stage -> the weak-instrument verdict (any F < 10 counts)",
+      fs2["x1"] > 104.7 and fs2["x2"] < 10 and has(t, "weak instruments") and "use IV/2SLS" not in t, t)
 
 # overid_test
 import linearmodels.iv as lmiv  # noqa: E402
