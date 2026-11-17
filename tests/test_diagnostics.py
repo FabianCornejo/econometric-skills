@@ -155,6 +155,10 @@ hneg = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.01, 0.005])), fb, show=F
 hneg2 = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.02 + 0.04 / 0.3, 0.01 - 0.0125])), fb, show=False)  # 0.3 − 0.8
 check("hausman (review r2): a small negative statistic is also 'Not interpretable'",
       close(hneg2["statistic"], -0.5, 1e-10) and hneg2["conclusion"].startswith("Not interpretable"), hneg2)
+hpsd = dg.hausman(fake([1.0, 0.5, 0.2 + 1e-6], np.diag([1.0, 0.04, 0.01 - 1e-12])), fb, show=False)
+check("hausman (review r3): a negative statistic with valid True does not claim 'not positive semidefinite'",
+      hpsd["valid"] and hpsd["statistic"] < 0 and hpsd["conclusion"].startswith("Not interpretable")
+      and "semidefinite" not in hpsd["conclusion"], hpsd)
 check("hausman: a negative statistic (−0.2²/0.01 − 0.1²/0.005 = −6) is 'Not interpretable', never 'random effects "
       "acceptable' (review r1)", close(hneg["statistic"], -6.0, 1e-10) and hneg["conclusion"].startswith("Not interpretable")
       and "acceptable" not in hneg["conclusion"], hneg)
@@ -187,6 +191,13 @@ check("panel_bp_lm: size under H0 in [3.5%, 6.5%], balanced (40 x 5) and unbalan
 one, one_txt = quiet(dg.panel_bp_lm, pd.Series(np.arange(5.0) - 2, index=pd.MultiIndex.from_arrays([range(5), [0] * 5])))
 check("panel_bp_lm (review r2): every T_i = 1 → not defined (NaN), no verdict", np.isnan(one["LM"])
       and "not defined" in one_txt and "acceptable" not in one_txt, (one, one_txt))
+nan_e = pd.Series([1.0, np.nan, -2.0, np.nan, 0.5, np.nan, 3.0, np.nan],
+                  index=pd.MultiIndex.from_arrays([[0, 0, 1, 1, 2, 2, 3, 3], [0, 1] * 4]))
+nn, nn_txt = quiet(dg.panel_bp_lm, nan_e)
+zz, zz_txt = quiet(dg.panel_bp_lm, pd.Series(0.0, index=pd.MultiIndex.from_product([range(3), range(2)])))
+check("panel_bp_lm (review r3): NaN rows are dropped first (here every T_i becomes 1) and zero residuals give no "
+      "verdict", np.isnan(nn["LM"]) and "not defined" in nn_txt and np.isnan(zz["LM"]) and "acceptable" not in zz_txt,
+      (nn_txt, zz_txt))
 check("panel_bp_lm: printed verdict when p < 5%", "individual effects present" in bp_txt, bp_txt)
 # Greene's Example 11.6 has no open data; residuals with the published sufficient statistics give the same LM.
 n6, T6, sq_means, ssr6 = 595, 7, 53.824384, 607.1265
@@ -260,7 +271,6 @@ check("vif_table: a constant column under another name is skipped; perfect colli
       list(vc.Variable) == ["lotsize", "sqrft", "sqrft2"] and np.isinf(vc.VIF.iloc[1]) and np.isinf(vc.VIF.iloc[2])
       and np.isfinite(vc.VIF.iloc[0]), vc)
 vk = vc.set_index("Variable")
-Xk = hp2[["lotsize", "sqrft"]].to_numpy(float)
 check("vif_table (review r2): a constant column named 'k' makes it centered — Kind and the value of lotsize "
       "(perfectly collinear sqrft/sqrft2 aside)", set(vc.Kind) == {"centered"} and np.isfinite(vk.VIF["lotsize"])
       and vk.VIF["lotsize"] > 1, vc)
@@ -274,10 +284,14 @@ hn_ = hp.assign(s2=hp.sqrft + _r.normal(0, 1.0, len(hp)))
 vn = dg.vif_table(smf.ols("price ~ sqrft + s2", hn_).fit())
 check("vif_table (review r2): near (not exact) collinearity gives a large finite VIF", np.isfinite(vn.VIF).all()
       and vn.VIF.min() > 1e3, vn)
-hcst = hp.assign(const=3.7 + 4e-15 * np.arange(len(hp)) % 2)
+hcst = hp.assign(const=3.7 + 4e-15 * (np.arange(len(hp)) % 2))
 vcs = dg.vif_table(sm.OLS(hcst.price, hcst[["const", "lotsize", "sqrft", "bdrms"]]).fit())
-check("vif_table (review r2): a constant with 1e-15 noise is still a constant (centered, same values)",
+check("vif_table (review r2): a constant with 4e-15 noise is still a constant (centered, same values)",
       set(vcs.Kind) == {"centered"} and rel(vcs.VIF, vif_corr) < 1e-8, vcs)
+hnm = hp.assign(const=hp.lotsize)
+vnm = dg.vif_table(sm.OLS(hnm.price, hnm[["const", "sqrft", "bdrms"]]).fit())
+check("vif_table (review r3): a non-constant column named 'const' is a regressor (its row is there, uncentered)",
+      list(vnm.Variable) == ["const", "sqrft", "bdrms"] and rel(vnm.VIF, vif_unc) < 1e-10, vnm)
 v1 = dg.vif_table(smf.ols("price ~ sqrft", hp).fit())
 check("vif_table: a single regressor has VIF 1", len(v1) == 1 and close(v1.VIF.iloc[0], 1.0, 1e-12), v1)
 v_none = dg.vif_table(smf.ols("price ~ 1", hp).fit())

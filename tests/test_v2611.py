@@ -149,6 +149,13 @@ check("evaluator (review r2): the exclusion holds for every form of 'tratamento 
                                     "O intermediador financeiro é não observável."))
       and all(g.search(x) for x in ("É um mediating variable; unmeasured confounders matter.",
                                     "Pós-tratamento; variáveis omitidas importam.")))
+check("evaluator (review r3): the exclusion is only for data treatment — 'pós-tratamento do programa', 'depois do "
+      "tratamento do grupo', 'após o tratamento de 2019' pass; 'tratamento estatístico', 'after the treatment period' fail",
+      all(g.search(x) for x in ("O emprego é pós-tratamento do programa; há viés de seleção.",
+                                 "Foi medido depois do tratamento do grupo; há confundidores não observados.",
+                                 "É medida após o tratamento de 2019; existem fatores não observados."))
+      and not any(g.search(x) for x in ("Depois do tratamento estatístico dos dados, há fatores não observados.",
+                                        "After the treatment period, check for unobserved heterogeneity.")))
 
 # ------------------------------------------------------------------------- 4. eval data byte for byte
 ga = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()

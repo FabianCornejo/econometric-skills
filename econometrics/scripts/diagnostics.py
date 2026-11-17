@@ -196,11 +196,11 @@ def vif_table(res) -> pd.DataFrame:
       With a full set of dummies and no constant the centered VIF is infinite by construction, not collinearity.
     v2.6.11: computed here, the same on every statsmodels version (0.14 returned the uncentered VIF for models
     without a constant, 0.15 the centered one). The rules of thumb (> 5 watch, > 10 worrying) are for the centered
-    VIF; the uncentered one is larger by construction and has no such threshold.
+    VIF; the uncentered one is not comparable with it (it can be larger or smaller) and has no such threshold.
     """
     exog = np.asarray(res.model.exog, dtype=float)
     names = list(res.model.exog_names)
-    def _is_const(col):   # same tolerance idea as specification._has_intercept (allclose), and not all zero
+    def _is_const(col):   # allclose, tighter than specification._has_intercept's defaults; never all zero
         return bool(np.allclose(col, col[0], rtol=1e-10, atol=1e-12)) and abs(col[0]) > 1e-12
     const_cols = [i for i in range(exog.shape[1]) if _is_const(exog[:, i])]
     centered = len(const_cols) > 0
@@ -854,17 +854,19 @@ def panel_bp_lm(resid_pooled: pd.Series, show: bool = True) -> dict:
     n = ΣT_i, which is NT/(2(T−1))·[…]² when every T_i = T (v2.6.11: the mean T was used before, which over-rejects
     on unbalanced panels).
     """
-    e = resid_pooled
+    e = resid_pooled.dropna()   # review r3: T_i counted the NaN rows that the sums skipped
     groups = e.groupby(level=0)
     Ti = groups.size().to_numpy(float)
     n = Ti.sum()
     num = (groups.sum() ** 2).sum()
     den = (e ** 2).sum()
-    if (Ti ** 2).sum() - n <= 0:   # v2.6.11 review r2: every T_i = 1, no within-entity information
+    lm = (n ** 2 / (2 * ((Ti ** 2).sum() - n)) * (num / den - 1) ** 2
+          if (Ti ** 2).sum() - n > 0 and den > 0 else np.nan)
+    if not np.isfinite(lm):   # v2.6.11 reviews r2-r3: every T_i = 1, all-zero or empty residuals
         if show:
-            print("\nBreusch-Pagan LM (panel): not defined — every entity has a single observation")
+            print("\nBreusch-Pagan LM (panel): not defined — no entity with two or more observations, "
+                  "or residuals all zero")
         return {"LM": np.nan, "p": np.nan}
-    lm = n ** 2 / (2 * ((Ti ** 2).sum() - n)) * (num / den - 1) ** 2
     p = 1 - stats.chi2.cdf(lm, 1)
     if show:
         print(f"\nBreusch-Pagan LM (panel): {lm:.3f}, p = {p:.4f} → "

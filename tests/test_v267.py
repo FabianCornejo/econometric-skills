@@ -62,13 +62,18 @@ check("CHANGELOG: an entry states the level counts in the canonical form, the v2
       counts_entry != "" and _vt(re.match(r"## v(\S+) — ", counts_entry).group(1)) >= (2, 6, 7))
 lv = Counter(m.group(1) for m in re.finditer(r"^\| `[a-z_]+\.[A-Za-z0-9_]+` \| ([ABCD]) \|", val, re.M))
 diffs = json.loads((ROOT / "tools" / "validation_diffs.json").read_text(encoding="utf-8"))["functions"]
+def _total():   # review r3: the "(N)" right before the level list, not any "(N)" in the entry
+    m = re.search(r"\((\d+)\)[^()]{0,60}?A replicated against a fixed reference: ", counts_entry)
+    return int(m.group(1)) if m else None
+
+
 def _num(label):   # review r2: integers, so 94 → 940 is caught (a substring test passed it)
     m = re.search(re.escape(label) + r"(\d+)(?!\d)", counts_entry)
     return int(m.group(1)) if m else None
 
 
 check("CHANGELOG: the level counts are those of VALIDATION.md",
-      re.search(rf"\({sum(lv.values())}\)", counts_entry) is not None
+      _total() == sum(lv.values())
       and _num("A replicated against a fixed reference: ") == lv["A"] and _num("B known truth: ") == lv["B"]
       and _num("C execution only: ") == lv["C"] and _num("D no test: ") == lv["D"], dict(lv))
 check("CHANGELOG: the number of measured functions is that of tools/validation_diffs.json",
