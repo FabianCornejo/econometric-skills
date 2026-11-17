@@ -607,5 +607,39 @@ check("repeated labels and a NaN at position 5: results indexed by position in t
       "y at those positions is the 2SLS y", 5 not in idx and 6 in idx and len(idx) == 299
       and np.allclose(yfit, r["iv"].model.dependent.ndarray.ravel()), list(idx[:8]))
 
+# ============================================================ 14. review round 3
+# r3 B1: jointly degenerate endogenous regressors stored with offsets (the rank rule with the offset floor; the
+# condition check alone let them through and the verdict changed with the environment)
+rng = np.random.default_rng(11)
+n = 400
+z1, z2, z3, w, u, v = rng.normal(size=(6, n))
+x1 = 0.5 * z1 + 0.3 * z2 + v + u
+e = rng.normal(size=n)
+cases = [("x2 = x1 + 3w, w stored as 1e8 + w", dict(x1=x1, x2=x1 + 3 * (w + 1e8), w=w + 1e8, z1=z1), True),
+         ("x1 at 1e-3, x2 = 1e6 + 2·x1", dict(x1=1e-3 * x1, x2=1e6 + 2e-3 * x1, w=w, z1=z1), True),
+         ("x2 = x1 + z1, z1 stored as 1e9 + z1", dict(x1=x1, x2=x1 + z1 + 1e9, w=w, z1=z1 + 1e9), True),
+         ("x2 = x1 + 3w + 0.3·e, w as 1e8 + w (the other side)", dict(x1=x1, x2=x1 + 3 * (w + 1e8) + 0.3 * e, w=w + 1e8,
+                                                                     z1=z1), False)]
+for lab, cols, deg in cases:
+    d = pd.DataFrame(dict(y=2 * x1 + u, z2=z2, z3=z3, **cols))
+    r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x1", "x2"]], d[["z1", "z2", "z3"]], cov_type="HC3")
+    check(f"{lab}: {'jointly degenerate, test NaN' if deg else 'computed'}",
+          (np.isnan(r["statistic"]) and any("jointly degenerate" in m for m in r["warnings"])) if deg else
+          (np.isfinite(r["statistic"]) and not any("jointly degenerate" in m for m in r["warnings"])), r)
+# r3 S1: an outlier in W with 1 − h_W = 2e-10 and HC1: the instruments do not reach that row, so no refusal; the F
+# equals statsmodels on the original columns (no row dropped, the same n)
+rng = np.random.default_rng(1)
+n = 200
+z, u, v, w = rng.normal(size=(4, n))
+w2 = w.copy(); w2[0] = 1e6
+x = 0.5 * z + v + u
+d = pd.DataFrame(dict(y=x + u, x=x, z=z, w=w2))
+r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z"]], cov_type="HC1")
+ref = sm.OLS(d.x, sm.add_constant(d[["w", "z"]])).fit(cov_type="HC1").wald_test(
+    np.array([[0, 0, 1.0]]), scalar=True, use_f=True).statistic
+check("outlier 1e6 in W (1 − h_W ≈ 2e-10), HC1: computed, not refused, = statsmodels (relative 1e-6)",
+      r["high_leverage_rows"] == [] and rel(r["first_stage_F"]["x"], float(ref)) < 1e-6 and np.isfinite(r["statistic"]),
+      (r, float(ref)))
+
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

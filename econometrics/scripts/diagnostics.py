@@ -676,6 +676,16 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     perfect, joint_degenerate = [], False
     if n_z > 0 and not fs_saturated:
         perfect = [c for j, c in enumerate(xcols) if _new_dirs(XV[:, [j]], QWZ, s_wz, amp_wz, n_obs)[1] == 0]
+        if not perfect and n_x > 1:
+            # the rank rule on the block, with the offset floor (review r3: without it, x2 = x1 + 3w with w stored as
+            # 1e8 + w gave a test made of rounding that changed with the environment); the condition check below
+            # covers residuals that differ by less than √eps
+            k_x = _new_dirs(XV, QWZ, s_wz, amp_wz, n_obs)[1]
+            joint_degenerate = k_x < n_x
+    if joint_degenerate:
+        warn.append(f"the {n_x} endogenous regressors are jointly degenerate: only {k_x} direction(s) of them lie "
+                    "outside the exogenous regressors and the instruments (a combination of them is a combination of "
+                    "those, as in x2 = 2·x1 or x2 = x1 + z1), so the Durbin-Wu-Hausman test is not defined (NaN).")
     if perfect:
         warn.append(", ".join(perfect) + (" is" if len(perfect) == 1 else " are") + " an exact linear combination of "
                     "the exogenous regressors and the instruments: the first stage fits perfectly (F = inf), no "
@@ -687,9 +697,12 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
         h = np.sum(QWZ ** 2, axis=1)
         # r2: the high-leverage warning counts the instruments' part only (h − h_W): leverage from group dummies
         # in W (FE with T = 2) does not inflate the F of the instruments (measured size 3–6.5% with HC1)
-        h_max = float(np.max(np.sum(UZ ** 2, axis=1)))
+        hz = np.sum(UZ ** 2, axis=1)
+        h_max = float(np.max(hz))
         if robust:
-            lev_rows = list(d.index[h > 1 - lev_cut])
+            # leverage 1 that involves the instruments (review r3: an outlier in W with 1 − h_W = 2e-10 was refused
+            # with HC1 although the instruments do not reach that row)
+            lev_rows = list(d.index[(h > 1 - lev_cut) & (hz > 1e-4)])
     f_first, f_nonrobust = {}, {}
     V = np.zeros((n_obs, 0))
     with warnings.catch_warnings():         # E5: statsmodels' rank warnings; the function reports its own
@@ -738,9 +751,10 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
             Ut, st, _ = np.linalg.svd(Xn, full_matrices=False)
             Ut = Ut[:, : int(np.sum(st > _rank_tol(st.max(), n_obs)))]
             ht = np.sum(Ut ** 2, axis=1)
-            h_t_max = float(np.max(ht - np.sum(QW ** 2, axis=1)))
+            hxv = ht - np.sum(QW ** 2, axis=1)      # the part of [x net of W, v̂] (beyond what W gives the row)
+            h_t_max = float(np.max(hxv))
             if robust and not lev_rows:
-                test_lev = list(d.index[ht > 1 - lev_cut])
+                test_lev = list(d.index[(ht > 1 - lev_cut) & (hxv > 1e-4)])
             if not (robust and (lev_rows or test_lev)):
                 est = sm.OLS(yv, Xn).fit(cov_type=cov_type)
                 Rv = np.zeros((n_x, Xt.shape[1])); Rv[:, -n_x:] = np.eye(n_x)
@@ -1069,16 +1083,16 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
 def hausman(fe_res, re_res, show: bool = True) -> dict:
     """Classical Hausman test FE vs RE (linearmodels). Fit both with cov_type="unadjusted".
 
-    df = rank of V_FE − V_RE (v2.6.12): eigenvalues of D⁻¹(V_FE − V_RE)D⁻¹, D = √diag(V_FE), within 1e-8 of the
-    largest eigenvalue of D⁻¹V_FE D⁻¹ count as zero, so the cut does not depend on units; the statistic uses the
+    df = rank of V_FE − V_RE (v2.6.12): eigenvalues λ of D⁻¹(V_FE − V_RE)D⁻¹, D = √diag(V_FE), with |λ| ≤ 1e-8 times
+    the largest eigenvalue of D⁻¹V_FE D⁻¹ count as zero, so the cut does not depend on units; the statistic uses the
     generalized inverse over the others. When V_FE − V_RE is zero the result is "Not computed"."""
     common = [c for c in fe_res.params.index if c in re_res.params.index and c.lower() not in ("const", "intercept")]
     b = fe_res.params[common] - re_res.params[common]
     v = fe_res.cov.loc[common, common] - re_res.cov.loc[common, common]
-    # v2.6.12: V_FE − V_RE is a difference, so its rounding is relative to V_FE. Eigenvalues within ±1e-8·max eig(V_FE)
-    # are zero: the statistic is b'V⁻b with the generalized inverse over the other eigenvalues (negative ones
-    # included, as pinv did), df = their number (rank of V, as Stata's hausman), and V is "not positive semidefinite"
-    # only below −1e-8·max eig(V_FE). Before: df = number of coefficients, and an absolute −1e-10.
+    # v2.6.12: V_FE − V_RE is a difference, so its rounding is relative to V_FE. On the scaled matrices below,
+    # eigenvalues within ±1e-8·max eig(D⁻¹V_FE D⁻¹) are zero: the statistic is b'V⁻b with the generalized inverse over
+    # the other eigenvalues (negative ones included, as pinv did), df = their number (rank of V, as Stata's hausman),
+    # and V is "not positive semidefinite" only below −tol. Before: df = number of coefficients, and an absolute −1e-10.
     # The cut is made on D⁻¹VD⁻¹ with D = √diag(V_FE), so it does not depend on the units of the regressors (review
     # r1: on WAGEPAN an eigenvalue of −3.5e-12 is −2.3e-4 against 0.16 once scaled, a real direction); the statistic
     # b'V⁻b is the same in either scale.
