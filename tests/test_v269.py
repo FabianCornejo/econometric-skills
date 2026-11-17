@@ -10,7 +10,7 @@ claude/scripts/ of that repository (repro_iv_contagem_v269.py, busca_endog_colin
 
 The references do not reuse the implementation's arithmetic. The robust partial F is checked against the
 statsmodels HC0 Wald F. The unadjusted partial F is checked against an F from the two sums of squared residuals,
-with sigma² = SSR/n, the convention linearmodels uses for its Wald statistic. The Sargan statistic is n·R² of the
+with sigma² = SSR/(n − k), the classical F (v2.6.12; linearmodels' own Wald uses SSR/n, which this check fixed before). The Sargan statistic is n·R² of the
 2SLS residuals on all instrument columns, computed by hand. A metamorphic check compares [x ~ z1*z2] with the same
 three columns written out as [x ~ z1 + z2 + z12]. Every boundary has a case on each side, and every section has its
 own generator.
@@ -100,8 +100,10 @@ check("robust partial F with z1*z2 = statsmodels HC0 Wald F on the 3 columns (1e
       close(rob["first_stage"]["partial F"].iloc[0], f_hc0, 1e-8), (rob["first_stage"]["partial F"].iloc[0], f_hc0))
 una, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z1*z2]", dr, cov_type="unadjusted")
 fu, fr = sm.OLS(dr.x, Zf).fit(), sm.OLS(dr.x, np.ones(n)).fit()
-f_ssr = ((fr.ssr - fu.ssr) / 3) / (fu.ssr / n)            # Wald with sigma² = SSR/n, divided by q = 3
-check("unadjusted partial F with z1*z2 = F from the two SSRs with q = 3 (sigma² = SSR/n, linearmodels' Wald; 1e-8)",
+# v2.6.12: the unadjusted F is now the classical one, sigma² = SSR/(n − k) (k = 4 first-stage columns); this check
+# fixed linearmodels' SSR/n before. q = 3 columns is what it protects, and the divisor keeps it on the q side
+f_ssr = ((fr.ssr - fu.ssr) / 3) / (fu.ssr / (n - 4))      # classical F, divided by q = 3
+check("unadjusted partial F with z1*z2 = classical F from the two SSRs with q = 3 (sigma² = SSR/(n − 4); 1e-8)",
       close(una["first_stage"]["partial F"].iloc[0], f_ssr, 1e-8), (una["first_stage"]["partial F"].iloc[0], f_ssr))
 aux = sm.OLS(np.asarray(una["iv"].resids), Zf).fit()
 sargan, p_sargan = n * aux.rsquared, stats.chi2.sf(n * aux.rsquared, 2)
@@ -131,14 +133,18 @@ xx = 0.4 * z1 + 0.3 * z2 + v + 0.5 * u
 ww_ = 0.3 * z1 - 0.4 * z1 * z2 + wv + 0.3 * u
 de = pd.DataFrame(dict(y=1 + 0.5 * xx + 0.3 * ww_ + u, x=xx, w=ww_, z1=z1, z2=z2, z12=z1 * z2))
 two, _ = quiet(dg.iv_report, "y ~ 1 + [x + w ~ z1 + z2 + z12]", de)
-check("two endogenous, three instruments: overidentified by 1, overidentification test run, no Anderson-Rubin set",
+# v2.6.12: with several endogenous regressors the AR set is not computed (pieces None) and the joint AR test of
+# beta = 0 is reported with F(3, n − 4); anderson_rubin was None before
+check("two endogenous, three instruments: overidentified by 1, overidentification test run, no Anderson-Rubin set "
+      "(joint AR test with 3 and n − 4 df)",
       two["endogenous"] == ["x", "w"] and two["overidentified_by"] == 1 and len(two["tests"]) == 2
-      and "1 df" in two["tests"].index[1] and two["anderson_rubin"] is None, two["tests"])
+      and "1 df" in two["tests"].index[1] and two["anderson_rubin"]["pieces"] is None
+      and two["anderson_rubin"]["df"] == (3, n - 4), two["tests"])
 inter, ti = quiet(dg.iv_report, "y ~ 1 + [x*w ~ z1*z2]", de)
 check("[x*w ~ z1*z2]: three endogenous columns (x, w, x:w) and three instruments, exactly identified, no AR set "
       "(the old count saw one endogenous term, 'x*w', and stopped with KeyError: 'x*w')",
       inter["endogenous"] == ["x", "w", "x:w"] and inter["overidentified_by"] == 0 and len(inter["tests"]) == 1
-      and inter["anderson_rubin"] is None and "Exactly identified" in ti and "Anderson-Rubin 95%" not in ti,
+      and inter["anderson_rubin"]["pieces"] is None and "Exactly identified" in ti and "Anderson-Rubin 95%" not in ti,
       (inter["endogenous"], inter["overidentified_by"]))
 
 Zt = sm.add_constant(de[["z1", "z2", "z12"]])
