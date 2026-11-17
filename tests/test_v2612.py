@@ -587,11 +587,14 @@ except ValueError as ex:
     m = str(ex); ok = "no clusters argument" in m
 check("iv_report cov_type='clustered': ValueError (without clusters it was the robust SE under another name)", ok, m)
 # r2-B S1: the constant-in-span check on scaled columns
-g = np.repeat(np.arange(4), n // 4)
-d2 = d.assign(g=g, w=1e7 * rng.normal(size=n))
+rng_c = np.random.default_rng(3)                     # the design of review r2-B (p4.py)
+nc = 3000
+zc, wc, uc = rng_c.normal(size=(3, nc))
+xc = 0.5 * zc + 0.5 * uc + rng_c.normal(size=nc)
+d2 = pd.DataFrame(dict(y=1 + xc + wc + uc, x=xc, z=zc, w=(wc + 5) * 1e7, g=rng_c.integers(0, 3, nc)))
 r, _, _ = quiet(dg.iv_report, "y ~ 0 + C(g) + w + [x ~ z]", d2)
-check("0 + C(g) + w with w at 1e7: no false 'no constant' warning", not any("no constant" in m for m in r["warnings"]),
-      r["warnings"])
+check("0 + C(g) + w with w = (N(0, 1) + 5)·1e7, n = 3000: no false 'no constant' warning (unscaled, it warned)",
+      not any("no constant" in m for m in r["warnings"]), r["warnings"])
 # r2-B S3: with repeated labels, result k is row k of the data, also after a NaN row
 rng = np.random.default_rng(26126)
 n = 150
