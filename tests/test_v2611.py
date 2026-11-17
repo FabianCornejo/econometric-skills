@@ -21,6 +21,7 @@ Run from the repository root:  python3 tests/test_v2611.py
 import hashlib
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -84,10 +85,12 @@ check("coverage_report: says what it is not (no threshold; coverage is not valid
 tmp = ROOT / "tests" / "_cov_v2611.json"
 try:
     tmp.write_text(json.dumps(cov), encoding="utf-8")
+    # CI Windows job: the child wrote cp1252 ("—" = 0x97) and the parent read UTF-8; ask the child for UTF-8
+    _env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     r_ok = subprocess.run([sys.executable, str(ROOT / "tools" / "coverage_report.py"), str(tmp)],
-                          capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+                          capture_output=True, text=True, encoding="utf-8", cwd=ROOT, env=_env)
     r_bad = subprocess.run([sys.executable, str(ROOT / "tools" / "coverage_report.py")],
-                           capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
+                           capture_output=True, text=True, encoding="utf-8", cwd=ROOT, env=_env)
 finally:
     tmp.unlink(missing_ok=True)
 check("coverage_report: exit 0 with a report whatever the percentages; exit 2 and the usage line without input",
