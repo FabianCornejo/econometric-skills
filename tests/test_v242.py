@@ -1,7 +1,8 @@
 """Tests for v2.4.2: classical regression and discrete choice, teaching demos, and robustness of the plugin.
 
 Each function is checked against an independent route, never by repeating its own formula:
-textbook results (Wooldridge 2e examples 12.4, 15.1, 15.7, 17.1, 17.5 and Stata's heckman twostep),
+textbook results (Wooldridge examples 12.4, 15.1, 15.7, 17.1, 17.5 and Stata's heckman twostep; the edition was not
+stated; v2.6.12 checked the IV ones against the 1st ed., 2000: 15.1 p. 467, overidentification = 15.8 p. 485),
 statsmodels/linearmodels/sklearn where they compute the same thing another way, exact GLS with the AR(1)
 covariance matrix, a bootstrap of the whole Heckman procedure, finite differences for marginal effects,
 and direct regressions for restricted least squares and the Anderson-Rubin statistic.

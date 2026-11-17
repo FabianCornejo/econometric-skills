@@ -525,6 +525,9 @@ def _first_stage_label(f: float) -> str:
 # v2.6.12 (claude/medicoes-v2.6.12.md, E3): with HC0, HC1 or HC2 and fewer residual degrees of freedom than this, a
 # first-stage F above 10 on pure noise had probability above 5% (HC0 up to 15 df with 8 instruments); HC3 never did
 _ROBUST_SMALL_DF = 30
+# v2.6.12 (review r1, measured with one high-leverage row): with HC0-HC2 the size of the first-stage F passed 10% from
+# leverage 0.5 on (HC0 12%, HC2 10.1%; HC0 70% at 0.985); HC3 stayed at or below 9.5% and P(F > 10) at or below 3.7%
+_ROBUST_HIGH_LEVERAGE = 0.5
 
 
 def _rank_tol(s_max: float, n: int) -> float:
@@ -545,6 +548,33 @@ def _scaled_centred(M):
     return C[:, keep] / m[keep], amp
 
 
+def _new_dirs(M, Q, s_ref, amp_ref, n_obs):
+    """Directions of M (centred and scaled) outside span(Q): left singular vectors and their count. The tolerance is
+    _rank_tol, with a floor for the rounding that centring a column with a large offset leaves, in M or in the
+    columns behind Q (amp_ref; v2.6.9 round 3 and v2.6.12 review r1)."""
+    eps = np.finfo(float).eps
+    Mc, amp = _scaled_centred(M)
+    if not Mc.shape[1]:
+        return np.zeros((n_obs, 0)), 0
+    Mr = Mc - Q @ (Q.T @ Mc)
+    U, s, _ = np.linalg.svd(Mr, full_matrices=False)
+    s_all = max(s_ref, np.linalg.svd(Mc, compute_uv=False).max())
+    tol = max(_rank_tol(s_all, n_obs), 2 * eps * max(amp, amp_ref) * (np.sqrt(n_obs) + np.sqrt(Mc.shape[1] + Q.shape[1])))
+    k = int(np.sum(s > tol))
+    return U[:, :k], k
+
+
+def _w_basis(X0, n_obs):
+    """Orthonormal basis of the exogenous regressors (centred, scaled, constant put back) and its rounding factor."""
+    eps = np.finfo(float).eps
+    Wc, amp = _scaled_centred(X0)
+    Wm = np.column_stack([np.ones(n_obs), Wc])
+    UW, sW, _ = np.linalg.svd(Wm, full_matrices=False)
+    tol = max(_rank_tol(sW.max(), n_obs), 2 * eps * amp * (np.sqrt(n_obs) + np.sqrt(Wm.shape[1])))
+    r_w = int(np.sum(sW > tol))
+    return UW[:, :r_w], sW.max(), amp
+
+
 def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = True) -> dict:
     """Regression-based Durbin-Wu-Hausman test (control function), as in Wooldridge.
 
@@ -563,63 +593,66 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     Degenerate data (v2.6.12; they gave "strong" or "endogenous" before):
     - an endogenous regressor that is an exact linear combination of the exogenous regressors and the instruments
       (nothing left in its first-stage residual): first_stage_F = inf, the test is NaN, and a warning says so;
-    - a row with leverage 1 in the first stage or in the test regression (an instrument, or a combination of them,
-      that lives on that row alone, such as a dummy with a single 1): the robust covariance (HC0-HC3) is
-      degenerate there, so the robust F and test are NaN; the warning names the rows and gives the nonrobust F;
-    - HC0, HC1 or HC2 with fewer than 30 residual degrees of freedom: a warning that the robust F and test reject
-      too often (simulated: P(F > 10) above 5% with no first stage at all); HC3, the default, did not.
+      endogenous regressors that are jointly degenerate (x2 = 2·x1, or x2 = x1 + z1): the test is NaN;
+    - rows fitted exactly by the exogenous regressors (a group dummy with one observation) carry no information on
+      the instruments and are left out (a note in "warnings");
+    - a row with leverage 1 coming from the instruments (an instrument, or a combination of them, that lives on that
+      row alone, such as a dummy with a single 1), in the first stage or in the test regression: the robust
+      covariance (HC0-HC3) is degenerate there, so the robust F and test are NaN; the warning names the rows and
+      gives the nonrobust F;
+    - HC0, HC1 or HC2 with fewer than 30 residual degrees of freedom, or with a row of leverage 0.5 or more: a warning
+      that the robust F and test reject too often (simulated: size above 10% from leverage 0.5, and P(F > 10) above
+      5% with few df and no first stage at all); HC3, the default, did not.
     Keys: first_stage_F (dict by endogenous regressor), statistic, p, n_instruments, warnings, high_leverage_rows
     (index labels of the rows with leverage 1; empty if none), perfect_first_stage (list of regressors).
     """
-    names = ([y.name] + (list(X_exog.columns) if X_exog is not None else []) + list(x_endog.columns)
-             + list(Z.columns))
     if y.name is None:
         raise ValueError("endogeneity_test: y must be a named Series (y.name is used to find it in the data)")
+    names = ([y.name] + (list(X_exog.columns) if X_exog is not None else []) + list(x_endog.columns)
+             + list(Z.columns))
     rep = sorted({str(c) for c in names if names.count(c) > 1})
     if rep:
-        raise ValueError("endogeneity_test: column name(s) " + ", ".join(rep) + " appear in more than one of y, "
-                         "X_exog, x_endog and Z; a variable is either exogenous, endogenous or an excluded "
-                         "instrument (rename the columns if they hold different data)")
+        raise ValueError("endogeneity_test: column name(s) " + ", ".join(rep) + " appear more than once across y, "
+                         "X_exog, x_endog and Z; a variable is either exogenous, endogenous or an excluded instrument, "
+                         "once (rename the columns if they hold different data)")
     parts = [y, x_endog, Z] if X_exog is None else [y, X_exog, x_endog, Z]
     d = pd.concat(parts, axis=1).dropna()
-    yy = d[y.name]
-    Xe = sm.add_constant(d[X_exog.columns]) if X_exog is not None and len(X_exog.columns) else \
-        pd.DataFrame({"const": np.ones(len(d))}, index=d.index)
+    if not np.all(np.isfinite(d.to_numpy(dtype=float))):
+        raise ValueError("endogeneity_test: the data contain inf; replace or drop those rows first")
+    xcols = list(x_endog.columns)
+    wcols = list(X_exog.columns) if X_exog is not None else []
+    robust = str(cov_type).lower() != "nonrobust"
+    # leverage 1: HC0/HC1 degrade continuously (warned from leverage 0.5) and are refused within 1e-8 of 1; HC2/HC3
+    # divide by 1 − h and stay accurate until 1 − h approaches the rounding of h itself (review r1: HC3 = 25.8 with
+    # 1 − h = 9.4e-10), so they are refused within 1e-12
+    lev_cut = 1e-12 if str(cov_type).upper() in ("HC2", "HC3") else 1e-8
+    warn = []
+    # v2.6.12 (review r1): a row fitted exactly by W alone (a dummy with one 1) has leverage 1 from W; it says nothing
+    # about the instruments, and HC2/HC3 would divide 0 by 0 there. It is left out before anything else.
+    QW0, _, _ = _w_basis(d[wcols].to_numpy(dtype=float).reshape(len(d), len(wcols)), len(d))
+    single = np.sum(QW0 ** 2, axis=1) > 1 - 1e-8
+    if single.any() and single.sum() < len(d):
+        lab = ", ".join(str(i) for i in d.index[single][:5]) + (" …" if single.sum() > 5 else "")
+        warn.append(f"row(s) {lab} are fitted exactly by the exogenous regressors (for example a group dummy with one "
+                    "observation): they carry no information on the instruments and are left out")
+        d = d.loc[~single] if d.index.is_unique else d.iloc[np.flatnonzero(~single)]
+    n_obs = len(d)
+    yv = d[y.name].to_numpy(dtype=float)
+    XV = d[xcols].to_numpy(dtype=float)
     # One rule counts the excluded instruments and picks the directions the first-stage F tests (v2.6.9):
     # - W: orthonormal basis Q_W of the exogenous regressors (centred, the constant put back, columns divided by
     #   their largest entry). Using Q_W keeps the span, so v̂, the F and the test are unchanged, and the leverages
     #   of HC2/HC3 stay accurate with near-collinear W.
     # - Z: centred (the constant is always in W), divided by the largest entry, projected off Q_W.
     # - n_z = number of singular values of that residual above the tolerance (_rank_tol, v2.6.12; and a floor for
-    #   the rounding left by centring a column with a large offset, v2.6.9 round 3). z and 2z count once; z and 3w
+    #   the rounding left by centring a column with a large offset, in Z or in W). z and 2z count once; z and 3w
     #   (w exogenous) count once, and the F is the F of z alone.
-    if not np.all(np.isfinite(d.to_numpy(dtype=float))):
-        raise ValueError("endogeneity_test: the data contain inf; replace or drop those rows first")
-    n_obs = len(d)
-    eps = np.finfo(float).eps
-    robust = str(cov_type).lower() != "nonrobust"
-    Wc, _ = _scaled_centred(Xe.to_numpy(dtype=float))
-    Wm = np.column_stack([np.ones(n_obs), Wc])
-    UW, sW, _ = np.linalg.svd(Wm, full_matrices=False)
-    r_w = int(np.sum(sW > _rank_tol(sW.max(), n_obs))) if sW.size else 0
-    QW = UW[:, :r_w]
-
-    def _new_dirs(M, Q, s_ref):
-        """Directions of M (scaled, centred) outside span(Q): left singular vectors and their count."""
-        Mc, amp = _scaled_centred(M)
-        if not Mc.shape[1]:
-            return np.zeros((n_obs, 0)), 0
-        Mr = Mc - Q @ (Q.T @ Mc)
-        U, s, _ = np.linalg.svd(Mr, full_matrices=False)
-        s_all = max(s_ref, np.linalg.svd(Mc, compute_uv=False).max())
-        tol = max(_rank_tol(s_all, n_obs), 2 * eps * amp * (np.sqrt(n_obs) + np.sqrt(Mc.shape[1])))
-        k = int(np.sum(s > tol))
-        return U[:, :k], k
-
-    s_w = sW.max() if sW.size else 0.0
-    UZ, n_z = _new_dirs(d[Z.columns].to_numpy(dtype=float), QW, s_w)
-    n_x = len(x_endog.columns)
-    warn = []
+    QW, s_w, amp_w = _w_basis(d[wcols].to_numpy(dtype=float).reshape(n_obs, len(wcols)), n_obs)
+    r_w = QW.shape[1]
+    Zraw = d[list(Z.columns)].to_numpy(dtype=float)
+    UZ, n_z = _new_dirs(Zraw, QW, s_w, amp_w, n_obs)
+    _, amp_z = _scaled_centred(Zraw)
+    n_x = len(xcols)
     if n_z < len(Z.columns):
         warn.append(f"{len(Z.columns)} instrument column(s), but only {n_z} add information beyond each other and the "
                     "exogenous regressors (the rest are constant or linear combinations): the model is counted with "
@@ -633,79 +666,109 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
                     "degrees of freedom, so " + ("the first-stage F and the test are" if fs_saturated else
                                                  "the test is") + " not computed.")
     saturated = fs_saturated or test_saturated
-    Wq = pd.DataFrame(QW, index=d.index, columns=[f"_wdir{k + 1}" for k in range(r_w)])
-    Zeff = pd.DataFrame(UZ, index=d.index, columns=[f"_zdir{k + 1}" for k in range(n_z)])
     QWZ = np.column_stack([QW, UZ])
+    s_wz = np.linalg.svd(QWZ, compute_uv=False).max() if QWZ.size else 0.0
+    amp_wz = max(amp_w, amp_z)
     # v2.6.12 (E2): an endogenous regressor with no direction outside span(W, Z) has a first-stage residual made of
-    # rounding (F of 1e32 and "endogenous" before); the same rank rule decides it
-    perfect = [c for c in x_endog.columns
-               if n_z > 0 and _new_dirs(d[[c]].to_numpy(dtype=float), QWZ, np.linalg.svd(QWZ, compute_uv=False).max()
-                                        if QWZ.size else 0.0)[1] == 0]
+    # rounding (F of 1e32 and "endogenous" before); the same rank rule decides it, for each regressor and jointly
+    perfect, joint_degenerate = [], False
+    if n_z > 0 and not fs_saturated:
+        perfect = [c for j, c in enumerate(xcols) if _new_dirs(XV[:, [j]], QWZ, s_wz, amp_wz, n_obs)[1] == 0]
+        if not perfect and n_x > 1:
+            k_x = _new_dirs(XV, QWZ, s_wz, amp_wz, n_obs)[1]
+            joint_degenerate = k_x < n_x
     if perfect:
         warn.append(", ".join(perfect) + (" is" if len(perfect) == 1 else " are") + " an exact linear combination of "
                     "the exogenous regressors and the instruments: the first stage fits perfectly (F = inf), no "
                     "endogenous variation is left, and the Durbin-Wu-Hausman test is not defined (NaN). Check how the "
                     "variable was built.")
-    # v2.6.12 (E1): leverages of the first stage are the squared row norms of its orthonormal basis [Q_W, Z dirs]
-    lev_rows = []
-    if robust and n_z > 0 and not fs_saturated:
+    if joint_degenerate:
+        warn.append(f"the {n_x} endogenous regressors are jointly degenerate: only {k_x} direction(s) of them lie "
+                    "outside the exogenous regressors and the instruments (a combination of them is a combination of "
+                    "those, as in x2 = 2·x1 or x2 = x1 + z1), so the Durbin-Wu-Hausman test is not defined (NaN).")
+    # leverages of the first stage are the squared row norms of its orthonormal basis [Q_W, Z dirs]
+    lev_rows, h_max = [], 0.0
+    if n_z > 0 and not fs_saturated:
         h = np.sum(QWZ ** 2, axis=1)
-        lev_rows = list(d.index[h > 1 - 1e-8])
-    resids, f_first, f_nonrobust = {}, {}, {}
+        h_max = float(h.max())
+        if robust:
+            lev_rows = list(d.index[h > 1 - lev_cut])
+    f_first, f_nonrobust = {}, {}
+    V = np.zeros((n_obs, 0))
     with warnings.catch_warnings():         # E5: statsmodels' rank warnings; the function reports its own
         warnings.simplefilter("ignore")
-        for c in x_endog.columns:
+        if n_z > 0:
+            R = np.zeros((n_z, QWZ.shape[1])); R[:, -n_z:] = np.eye(n_z)
+        Vcols = []
+        for j, c in enumerate(xcols):
             if n_z > 0 and not fs_saturated and c not in perfect:
-                X1 = pd.concat([Wq, Zeff], axis=1)
-                R = np.zeros((n_z, X1.shape[1])); R[:, -n_z:] = np.eye(n_z)
-                fs_nr = sm.OLS(d[c], X1).fit()
+                fs_nr = sm.OLS(XV[:, j], QWZ).fit()
                 f_nonrobust[c] = float(fs_nr.wald_test(R, scalar=True, use_f=True).statistic)
-                if lev_rows:
+                if not robust:
+                    f_first[c] = f_nonrobust[c]
+                elif lev_rows:
                     f_first[c] = float("nan")
                 else:
-                    fs = sm.OLS(d[c], X1).fit(cov_type=cov_type)
-                    f_first[c] = float(fs.wald_test(R, scalar=True, use_f=True).statistic)
-                resids[f"vhat_{c}"] = fs_nr.resid
+                    f_first[c] = float(sm.OLS(XV[:, j], QWZ).fit(cov_type=cov_type)
+                                       .wald_test(R, scalar=True, use_f=True).statistic)
             else:
-                fs_nr = sm.OLS(d[c], pd.concat([Wq, Zeff], axis=1) if n_z > 0 else Wq).fit()
-                f_first[c] = float("inf") if c in perfect and not fs_saturated else float("nan")
-                resids[f"vhat_{c}"] = fs_nr.resid
-        V = pd.DataFrame(resids)
-        identified = n_z >= n_x and n_z > 0 and not saturated and not perfect
-        test_lev = []
+                fs_nr = sm.OLS(XV[:, j], QWZ if n_z > 0 else QW).fit()
+                f_first[c] = float("inf") if c in perfect else float("nan")
+            Vcols.append(np.asarray(fs_nr.resid))
+        V = np.column_stack(Vcols)
+        if n_x > 1 and not perfect and not joint_degenerate and n_z >= n_x and not saturated:
+            # v2.6.12 (review r1): residuals that differ by 1e-12 (x2 = x1 + z1 + 1e-12·e) count as two directions,
+            # but the test regression then has a condition number of 1e12 and its verdict depended on the
+            # environment; with the columns of v̂ at unit norm, σ_min/σ_max below √eps counts as degenerate too
+            Vn = V / np.maximum(np.linalg.norm(V, axis=0), 1e-300)
+            sv = np.linalg.svd(Vn, compute_uv=False)
+            if sv.min() < np.sqrt(np.finfo(float).eps) * sv.max():
+                joint_degenerate, k_x = True, int(np.sum(sv >= np.sqrt(np.finfo(float).eps) * sv.max()))
+                warn.append(f"the {n_x} endogenous regressors are jointly degenerate: only {k_x} direction(s) of "
+                            "them lie clearly outside the exogenous regressors and the instruments (their first-stage "
+                            "residuals are collinear to within √eps), so the Durbin-Wu-Hausman test is not defined (NaN).")
+        identified = n_z >= n_x and n_z > 0 and not saturated and not perfect and not joint_degenerate
+        test_lev, h_t_max = [], 0.0
+        stat_, p_ = float("nan"), float("nan")
         if identified:
-            Xt = pd.concat([Wq, d[x_endog.columns], V], axis=1)
+            Xt = np.column_stack([QW, XV, V])
+            # leverage of the test regression on columns of unit norm (v2.6.12 review r1: raw columns at 1e13 hid it)
+            Xn = Xt / np.maximum(np.linalg.norm(Xt, axis=0), 1e-300)
+            Ut, st, _ = np.linalg.svd(Xn, full_matrices=False)
+            Ut = Ut[:, : int(np.sum(st > _rank_tol(st.max(), n_obs)))]
+            ht = np.sum(Ut ** 2, axis=1)
+            h_t_max = float(ht.max())
             if robust and not lev_rows:
-                Ut, st, _ = np.linalg.svd(Xt.to_numpy(dtype=float), full_matrices=False)
-                Ut = Ut[:, : int(np.sum(st > _rank_tol(st.max(), n_obs)))]
-                test_lev = list(d.index[np.sum(Ut ** 2, axis=1) > 1 - 1e-8])
-            if robust and (lev_rows or test_lev):
-                stat_, p_ = float("nan"), float("nan")
-            else:
-                est = sm.OLS(yy, Xt).fit(cov_type=cov_type)
-                Rv = np.zeros((V.shape[1], est.params.shape[0])); Rv[:, -V.shape[1]:] = np.eye(V.shape[1])
+                test_lev = list(d.index[ht > 1 - lev_cut])
+            if not (robust and (lev_rows or test_lev)):
+                est = sm.OLS(yv, Xt).fit(cov_type=cov_type)
+                Rv = np.zeros((n_x, Xt.shape[1])); Rv[:, -n_x:] = np.eye(n_x)
                 w = est.wald_test(Rv, scalar=True, use_f=True)
                 stat_, p_ = float(w.statistic), float(w.pvalue)
-        else:
-            stat_, p_ = float("nan"), float("nan")
     high_lev = list(dict.fromkeys(lev_rows + test_lev))
+    nr = "; ".join(f"{c}: {f:.2f}" for c, f in f_nonrobust.items())
     if high_lev:
         shown = ", ".join(str(i) for i in high_lev[:5]) + (" …" if len(high_lev) > 5 else "")
-        nr = "; ".join(f"{c}: {f:.2f}" for c, f in f_nonrobust.items())
         warn.append(f"row(s) {shown} have leverage 1 in the {'first stage' if lev_rows else 'test regression'}: an "
-                    "instrument (or a combination of them) lives on those rows alone, so its residual there is zero and "
-                    f"the {cov_type} covariance is degenerate; the robust "
+                    "instrument (or a combination of the regressors) lives on those rows alone, so its residual there is "
+                    f"zero and the {cov_type} covariance is degenerate; the robust "
                     + ("first-stage F and the test are" if lev_rows else "test is") + " not computed (NaN)"
                     + (f" (nonrobust first-stage F: {nr})" if nr else "") + ". Drop those rows or the instrument "
                     "that only they identify, then test again.")
     df_res = n_obs - r_w - n_z
-    if (str(cov_type).upper() in ("HC0", "HC1", "HC2") and n_z >= n_x and n_z > 0 and not saturated
-            and df_res < _ROBUST_SMALL_DF and not high_lev):
-        warn.append(f"{cov_type} with {df_res} residual degrees of freedom in the first stage: the robust F and the "
-                    "test reject too often with few degrees of freedom (simulated with no first stage at all, "
-                    "P(F > 10) above 5%); use cov_type='HC3' (the default)"
-                    + (f"; nonrobust first-stage F: {'; '.join(f'{c}: {f:.2f}' for c, f in f_nonrobust.items())}"
-                       if f_nonrobust else "") + ".")
+    reasons = []
+    if str(cov_type).upper() in ("HC0", "HC1", "HC2") and n_z >= n_x and n_z > 0 and not saturated \
+            and not high_lev and not perfect:
+        if df_res < _ROBUST_SMALL_DF:
+            reasons.append(f"{df_res} residual degrees of freedom in the first stage")
+        lev_seen = max(h_max, h_t_max)
+        if lev_seen >= _ROBUST_HIGH_LEVERAGE:
+            reasons.append(f"a row with leverage {lev_seen:.2f}")
+    if reasons:
+        warn.append(f"{cov_type} with " + " and ".join(reasons) + ": the robust F and the test reject too often in that "
+                    "case (simulated with no first stage at all: size above 10% from leverage 0.5, P(F > 10) above 5% "
+                    "with few degrees of freedom); use cov_type='HC3' (the default)"
+                    + (f"; nonrobust first-stage F: {nr}" if nr else "") + ".")
     out = {"first_stage_F": f_first, "statistic": stat_, "p": p_, "n_instruments": n_z,
            "warnings": warn, "high_leverage_rows": high_lev, "perfect_first_stage": perfect}
     if show:
@@ -727,6 +790,8 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
             verdict = "not computed: the regressions are saturated (see the warning)."
         elif perfect:
             verdict = "not defined: the first stage fits perfectly (see the warning)."
+        elif joint_degenerate:
+            verdict = "not defined: the endogenous regressors are jointly degenerate (see the warning)."
         elif high_lev:
             verdict = f"not computed with {cov_type}: rows with leverage 1 (see the warning)."
         else:
@@ -825,15 +890,24 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
       first_stage       partial F, its p, partial R² and strength label, one row per endogenous regressor;
       tests             endogeneity and (if overidentified) overidentification: statistic and p;
       anderson_rubin    one endogenous regressor: {"estimand", "ci_low", "ci_high", "pieces", "shape",
-                        "p_at_zero", "level"}; several: {"estimand" (list), "joint_F_at_zero", "joint_p_at_zero",
-                        "df", "pieces": None, "shape", "level"};
+                        "p_at_zero", "level", "cov"}; several: {"estimand" (list), "joint_F_at_zero",
+                        "joint_p_at_zero", "df", "pieces": None, "shape", "level", "cov"}; "cov" is the covariance
+                        of the AR regressions (HC1 when cov_type is robust, clustered or kernel);
       n, n_dropped      rows used, and rows dropped for missing values;
       endogenous, instruments   the model's columns; overidentified_by; cov_type; warnings;
       iv, ols           the linearmodels results."""
     from linearmodels.iv import IV2SLS
-    robust = str(cov_type).lower() not in ("unadjusted", "homoskedastic")
+    cov_type = str(cov_type).lower()    # v2.6.12: linearmodels 6.1 raised KeyError on "Unadjusted"
+    robust = cov_type not in ("unadjusted", "homoskedastic")
     used = _formula_rows(formula, data)
     n_dropped = len(data) - len(used)
+    warn = []
+    if not used.index.is_unique:
+        # v2.6.12 (review r1): with repeated index labels, .loc[rows] picked every row with a label, and OLS ran on
+        # more rows than 2SLS; the rows are matched by position instead
+        used = used.reset_index(drop=True)
+        warn.append("the data index has repeated labels: rows are matched by position, and the results are indexed "
+                    "0, 1, 2, …")
     iv = IV2SLS.from_formula(formula, used).fit(cov_type=cov_type)
     rows = iv.model.dependent.pandas.index
     lhs, rhs = formula.split("~", 1)
@@ -841,7 +915,6 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     endog_names = [e.strip() for e in endog_part.split("~")[0].split("+")]
     exog_rhs = (rhs[:rhs.index("[")] + rhs[rhs.index("]") + 1:]).strip().strip("+").strip()
     ols_rhs = " + ".join([p for p in (exog_rhs, " + ".join(endog_names)) if p])
-    warn = []
     if n_dropped or len(rows) < len(used):
         warn.append(f"{len(data) - len(rows)} of {len(data)} rows dropped for missing or undefined values; OLS and 2SLS "
                     "use the same rows")
@@ -850,7 +923,8 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     if W0.shape[1]:
         one = np.ones(W0.shape[0])
         res1 = one - W0 @ np.linalg.lstsq(W0, one, rcond=None)[0]
-        has_const = float(np.linalg.norm(res1)) <= 1e-8 * np.sqrt(W0.shape[0])
+        # relative to ‖1‖ = √n; 1e-10 (review r1: with 1e-8, w = 1e8 + N(0, 1) passed for a constant)
+        has_const = float(np.linalg.norm(res1)) <= 1e-10 * np.sqrt(W0.shape[0])
     else:
         has_const = False
     if not has_const:
@@ -907,6 +981,10 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
                       "H0": "the extra instruments are valid given that the others are", "statistic": float(ov.stat),
                       "p": float(ov.pval)})
     tests = pd.DataFrame(tests).set_index("test")
+    # v2.6.12 (review r1): the AR uses HC1 when robust; with "kernel" or "clustered" it is robust to
+    # heteroskedasticity only, and the text says so
+    ar_note = ("" if cov_type in ("unadjusted", "homoskedastic", "robust", "heteroskedastic") else
+               f"; it uses HC1 (heteroskedasticity only), not the {cov_type} covariance")
     yv = np.asarray(iv.model.dependent.ndarray).ravel()
     W = np.asarray(iv.model.exog.ndarray)
     Z = np.asarray(iv.model.instruments.ndarray)
@@ -937,7 +1015,8 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         lo = pieces[0][0] if pieces else np.nan
         hi = pieces[-1][1] if pieces else np.nan
         ar = {"estimand": endog_cols[0], "ci_low": lo, "ci_high": hi, "pieces": pieces, "shape": shape,
-              "p_at_zero": _ar_pvalue(yv, xv, W, Z, 0.0, robust), "level": 1 - alpha}
+              "p_at_zero": _ar_pvalue(yv, xv, W, Z, 0.0, robust), "level": 1 - alpha,
+              "cov": "HC1" if robust else "nonrobust"}
         if shape != "bounded interval":
             warn.append(f"Anderson-Rubin set is {shape}: the data do not pin down the effect")
     else:
@@ -947,7 +1026,7 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         ar = {"estimand": endog_cols, "joint_F_at_zero": f0, "joint_p_at_zero": p0,
               "df": (q_instr, n_used - W.shape[1] - q_instr), "pieces": None,
               "shape": f"not computed (with {n_endog} endogenous regressors the set is {n_endog}-dimensional)",
-              "level": 1 - alpha}
+              "level": 1 - alpha, "cov": "HC1" if robust else "nonrobust"}
     out = {"table": table, "first_stage": fs, "tests": tests, "anderson_rubin": ar, "n": n_used,
            "n_dropped": len(data) - len(rows), "endogenous": endog_cols, "instruments": instr_cols,
            "overidentified_by": q, "cov_type": cov_type, "warnings": warn, "iv": iv, "ols": ols}
@@ -964,11 +1043,11 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         if n_endog == 1:
             txt = " ∪ ".join(f"[{a_:.4f}, {b_:.4f}]" for a_, b_ in ar["pieces"]) or "empty"
             print(f"\nAnderson-Rubin {ar['level']:.0%} set for {ar['estimand']}: {txt} ({ar['shape']}); "
-                  f"AR p-value of β = 0: {ar['p_at_zero']:.4f}")
+                  f"AR p-value of β = 0: {ar['p_at_zero']:.4f}{ar_note}")
         else:
             print(f"\nAnderson-Rubin, joint test that the coefficients of {', '.join(endog_cols)} are all zero: "
                   f"F({ar['df'][0]}, {ar['df'][1]}) = {ar['joint_F_at_zero']:.3f}, p = {ar['joint_p_at_zero']:.4f} "
-                  f"(valid with weak instruments); the confidence set is {ar['shape']}")
+                  f"(valid with weak instruments{ar_note}); the confidence set is {ar['shape']}")
         for w in warn:
             print("Warning:", w)
     return out
@@ -983,11 +1062,19 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
     # are zero: the statistic is b'V⁻b with the generalized inverse over the other eigenvalues (negative ones
     # included, as pinv did), df = their number (rank of V, as Stata's hausman), and V is "not positive semidefinite"
     # only below −1e-8·max eig(V_FE). Before: df = number of coefficients, and an absolute −1e-10.
-    lam, vec = np.linalg.eigh(v.values)
-    tol = 1e-8 * max(float(np.max(np.abs(np.linalg.eigvalsh(fe_res.cov.loc[common, common].values)))), 1e-300)
+    # The cut is made on D⁻¹VD⁻¹ with D = √diag(V_FE), so it does not depend on the units of the regressors (review
+    # r1: on WAGEPAN an eigenvalue of −3.5e-12 is −2.3e-4 against 0.16 once scaled, a real direction); the statistic
+    # b'V⁻b is the same in either scale.
+    dvar = np.diag(fe_res.cov.loc[common, common].values)
+    dfe = np.sqrt(dvar) if np.all(dvar > 0) else np.ones(len(common))   # no scale without positive variances
+    Vs = v.values / np.outer(dfe, dfe)
+    lam, vec = np.linalg.eigh(Vs)
+    tol = 1e-8 * max(float(np.max(np.abs(np.linalg.eigvalsh(fe_res.cov.loc[common, common].values
+                                                             / np.outer(dfe, dfe))))), 1e-300)
     keep = np.abs(lam) > tol
     eig = lam
-    stat = float(np.sum((vec[:, keep].T @ b.values) ** 2 / lam[keep])) if keep.any() else float("nan")
+    bs = b.values / dfe
+    stat = float(np.sum((vec[:, keep].T @ bs) ** 2 / lam[keep])) if keep.any() else float("nan")
     df_ = int(keep.sum())
     p = float(stats.chi2.sf(stat, df_)) if df_ and stat >= 0 else (1.0 if df_ else float("nan"))
     valid = bool(np.all(eig > -tol))
@@ -1003,6 +1090,9 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
     if stat < 0:   # v2.6.11 review r1: a negative quadratic form is not a χ² draw; p = 1 says nothing
         concl = ("Not interpretable: the statistic is negative"
                  + ("" if valid else " (V_FE − V_RE is not positive semidefinite)") + "; use mundlak_test")
+    if df_ == 0:   # v2.6.12 (review r1): V_FE − V_RE ≈ 0 gave df 0, NaN and "random effects acceptable"
+        concl = ("Not computed: V_FE − V_RE is zero (FE and RE are equally precise), so the Hausman statistic is not "
+                 "defined; use mundlak_test")
     if classical_cov is False:
         concl = (f"Not interpretable: fitted with {kinds[0]}/{kinds[1]} covariances; the classical Hausman "
                  "needs cov_type='unadjusted' in both (refit them, or use mundlak_test for a robust comparison)")

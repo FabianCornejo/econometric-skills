@@ -173,6 +173,30 @@ check("hausman: a negative statistic (−0.2²/0.01 − 0.1²/0.005 = −6) is '
       "acceptable' (review r1)", close(hneg["statistic"], -6.0, 1e-10) and hneg["conclusion"].startswith("Not interpretable")
       and "acceptable" not in hneg["conclusion"], hneg)
 
+# v2.6.12 review r1 (r1-B): the zero-eigenvalue cut is made on D⁻¹(V_FE − V_RE)D⁻¹, D = √diag(V_FE), so it does not
+# depend on units. Grunfeld with value × 1e4 and WAGEPAN with exper in days give the same statistic and df
+gr4 = gr.assign(value=gr.value * 1e4)
+GX4 = sm.add_constant(gr4[["value", "capital"]])
+h4 = dg.hausman(PanelOLS(gr4.invest, GX4, entity_effects=True).fit(cov_type="unadjusted"),
+                RandomEffects(gr4.invest, GX4).fit(cov_type="unadjusted"), show=False)
+check("hausman (v2.6.12): Grunfeld with value × 1e4 → the same 2.33 with df 2 (it gave χ²(1) = 0.634)",
+      rel(h4["statistic"], h["statistic"]) < 1e-6 and h4["df"] == 2, h4)
+wp = woo.data("wagepan").set_index(["nr", "year"])
+hw = []
+for sc in (1.0, 365.0):
+    dw = wp.assign(exper=wp.exper * sc, expersq=(wp.exper * sc) ** 2)
+    fw = "lwage ~ 1 + exper + expersq + union + married + hours"
+    hw.append(dg.hausman(PanelOLS.from_formula(fw + " + EntityEffects", dw, drop_absorbed=True).fit(cov_type="unadjusted"),
+                         RandomEffects.from_formula(fw, dw).fit(cov_type="unadjusted"), show=False))
+check("hausman (v2.6.12): WAGEPAN, exper in years and in days → the same statistic (relative 1e-6) and df 5, 'Not "
+      "interpretable' (V not PSD); the unscaled cut gave χ²(4) = 163.6, 'Reject'", rel(hw[0]["statistic"], hw[1]["statistic"])
+      < 1e-6 and hw[0]["df"] == hw[1]["df"] == 5 and not hw[0]["valid"]
+      and hw[0]["conclusion"].startswith("Not interpretable"), hw)
+hz = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.04, 0.03])), fake([1.0, 0.5, 0.2], np.diag([1.0, 0.04, 0.03])),
+                show=False)
+check("hausman (v2.6.12): V_FE − V_RE = 0 → df 0 and 'Not computed', never 'random effects acceptable'",
+      hz["df"] == 0 and hz["conclusion"].startswith("Not computed") and "acceptable" not in hz["conclusion"], hz)
+
 # -------------------------------------------------------------------------------------------- 2. panel_bp_lm
 pooled = PooledOLS(gr.invest, GX).fit()
 bp, bp_txt = quiet(dg.panel_bp_lm, pooled.resids)

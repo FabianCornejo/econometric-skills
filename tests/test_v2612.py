@@ -166,9 +166,8 @@ for dl in (1e-10, 1e-12):
 dd = d.assign(z2=d.z + 1e-15 * e)
 r, _, _ = quiet(dg.endogeneity_test, dd.y, dd[["w"]], dd[["x"]], dd[["z", "z2"]], cov_type="nonrobust")
 check("n = 1e5, z and z + 1e-15·e (the other side, rounding): one instrument", r["n_instruments"] == 1, r)
-eps = np.finfo(float).eps
-check("_rank_tol = eps·s_max·max(100, √n): 100 below n = 1e4, √n above",
-      rel(dg._rank_tol(2.0, 900), 2 * 100 * eps) < 1e-15 and rel(dg._rank_tol(2.0, 1_000_000), 2 * 1000 * eps) < 1e-15)
+# (review r1: a check of _rank_tol against its own formula was dropped; the two cases above fix the tolerance by
+# behavior, one on each side)
 
 # ============================================================ 5. endogeneity_test: names
 rng = np.random.default_rng(26125)
@@ -185,7 +184,7 @@ for lab, args in (("instrument named like an exogenous column (other data)",
         ok, m = False, "no error"
     except ValueError as ex:
         m = str(ex)
-        ok = "appear in more than one of y, X_exog, x_endog and Z" in m
+        ok = "appear more than once across y, X_exog, x_endog and Z" in m
     check(f"{lab}: ValueError naming the repeated column (main dropped the instrument silently)", ok, m)
 try:
     dg.endogeneity_test(pd.Series(d.y.to_numpy()), d[["w"]], d[["x"]], d[["z"]], show=False)
@@ -302,9 +301,14 @@ check("two endogenous, weak: the warning points to the joint Anderson-Rubin test
 # ============================================================ 10. one convention for F = 10
 check("endogeneity_test label: below 10 WEAK, 10 acceptable (the iv_report rule, F < 10 weak)",
       dg._first_stage_label(9.999) == "WEAK" and dg._first_stage_label(10.0).startswith("acceptable"))
-src = Path(dg.__file__).read_text(encoding="utf-8")
-check("verdict texts say 'first-stage F < 10' (they said '<= 10')",
-      src.count("first-stage F < 10") == 2 and "first-stage F <= 10" not in src)
+rng = np.random.default_rng(261213)
+n = 400
+z, u, v = rng.normal(size=(3, n))
+x = 0.05 * z + v + 0.8 * u
+r, t, _ = quiet(dg.endogeneity_test, pd.Series(1 + x + u, name="y"), None, pd.DataFrame({"x": x}),
+                pd.DataFrame({"z": z}))
+check("weak-instrument verdict prints '(first-stage F < 10)' (it printed '<= 10')",
+      r["first_stage_F"]["x"] < 10 and "(first-stage F < 10)" in t and "<= 10" not in t, t[-300:])
 
 # ============================================================ 11. v2.6.11 leftovers
 rng = np.random.default_rng(261210)
@@ -349,6 +353,164 @@ lv2 = list(st2.loc[st2.Transform == "level", "Verdict"])
 check("stationarity: random walk with no 'Conflict' (the other side) → plain 'I(1)'",
       not any(x_.startswith("Conflict") for x_ in lv2) and st2.attrs["suggested_order"] == "I(1)",
       (lv2, st2.attrs["suggested_order"]))
+
+# ============================================================ 12. review round 1 (r1-A and r1-B)
+# r1-A B1: a row fitted exactly by W alone (an exogenous group dummy with one observation) is left out: the F equals
+# statsmodels on the original columns (the reviewer's design)
+rng = np.random.default_rng(1)
+n = 300
+z, w, u, v = rng.normal(size=(4, n))
+g = np.zeros(n); g[3] = 1.0
+x = 0.5 * z + v + u + 2 * g
+d = pd.DataFrame(dict(y=x + u, x=x, z=z, w=w, g=g))
+for cov in ("HC0", "HC3"):
+    r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w", "g"]], d[["x"]], d[["z"]], cov_type=cov)
+    ref = sm.OLS(d.x, sm.add_constant(d[["w", "g", "z"]])).fit(cov_type=cov).wald_test(
+        np.array([[0, 0, 0, 1.0]]), scalar=True, use_f=True).statistic
+    check(f"exogenous dummy with one 1, {cov}: F = statsmodels on the original columns (relative 1e-10), test "
+          "computed, a note that row 3 is left out, no leverage-1 refusal", rel(r["first_stage_F"]["x"], ref) < 1e-10
+          and np.isfinite(r["statistic"]) and r["high_leverage_rows"] == []
+          and any(m.startswith("row(s) 3 are fitted exactly by the exogenous regressors") for m in r["warnings"]),
+          (r, float(ref)))
+# r1-A S1: leverage near 1 from an instrument. HC0/HC1 warned from leverage 0.5 (measured: size above 10%),
+# refused within 1e-8 of 1; HC2/HC3 refused only within 1e-12 of 1 (HC3 stays accurate)
+rng = np.random.default_rng(4)
+n = 1000
+z, w, u, v = rng.normal(size=(4, n))
+for z6, hc0_nan, hc3_nan in ((1e-4, True, False), (3e-4, False, False)):
+    zb = np.zeros(n); zb[5] = 1.0; zb[6] = z6
+    x = 0.3 * z + v + u + 2 * zb
+    d = pd.DataFrame(dict(y=x + u, x=x, z=z, zb=zb, w=w))
+    r0, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z", "zb"]], cov_type="HC0")
+    r3, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z", "zb"]], cov_type="HC3")
+    check(f"leverage 1 − {z6 ** 2:.0e} (zb[6] = {z6:g}): HC0 {'refused' if hc0_nan else 'computed with the high-leverage '
+          'warning'}, HC3 computed (≈ 25.8)", (np.isnan(r0["first_stage_F"]["x"]) == hc0_nan)
+          and (hc0_nan or any(m.startswith("HC0 with a row with leverage") for m in r0["warnings"]))
+          and np.isfinite(r3["first_stage_F"]["x"]) and abs(r3["first_stage_F"]["x"] - 25.8) < 0.1
+          and not any("leverage" in m for m in r3["warnings"]), (r0["first_stage_F"], r3["first_stage_F"], r0["warnings"]))
+
+
+def lev_design(h, cov, seed=261214):
+    rng_ = np.random.default_rng(seed)
+    n_ = 200
+    w_, z_, x_, y_ = rng_.normal(size=(4, n_))
+    z_ = z_ - z_.mean(); z_[0] = 0.0
+    s_ = np.sum(z_[1:] ** 2)
+    z_[0] = np.sqrt((h - 1 / n_) * s_ / ((1 - 1 / n_) * (1 - h + 1 / n_)))
+    dd = pd.DataFrame(dict(y=y_, x=x_, z=z_, w=w_))
+    return quiet(dg.endogeneity_test, dd.y, dd[["w"]], dd[["x"]], dd[["z"]], cov_type=cov)[0]
+
+
+for cov in ("HC0", "HC1", "HC2"):
+    hi, lo = lev_design(0.52, cov), lev_design(0.45, cov)
+    check(f"{cov}: a row with leverage 0.52 → high-leverage warning (use HC3); 0.45 → none (threshold 0.5, "
+          "claude/dados/v2612/size_leverage.txt)", any("with a row with leverage 0.5" in m for m in hi["warnings"])
+          and not any("with a row with leverage" in m for m in lo["warnings"]), (hi["warnings"], lo["warnings"]))
+check("HC3 with leverage 0.9: no high-leverage warning", not any("leverage" in m for m in lev_design(0.9, "HC3")["warnings"]))
+check("the high-leverage threshold is 0.5", dg._ROBUST_HIGH_LEVERAGE == 0.5)
+# r1-A S2: endogenous regressors jointly degenerate
+rng = np.random.default_rng(11)
+n = 400
+z1, z2, z3, w, u, v = rng.normal(size=(6, n))
+x1 = 0.5 * z1 + 0.3 * z2 + v + u
+e = rng.normal(size=n)
+for lab, x2, deg in (("x2 = x1 + z1", x1 + z1, True), ("x2 = 2·x1", 2 * x1, True),
+                     ("x2 = x1 + z1 + 1e-12·e", x1 + z1 + 1e-12 * e, True), ("x2 = x1 + z1 + 0.3·e", x1 + z1 + 0.3 * e, False)):
+    d = pd.DataFrame(dict(y=x1 + x2 + u, x1=x1, x2=x2, z1=z1, z2=z2, z3=z3, w=w))
+    r, t, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x1", "x2"]], d[["z1", "z2", "z3"]], cov_type="HC3")
+    check(f"{lab}: {'jointly degenerate → test NaN, warning, verdict not defined' if deg else 'the other side: computed'}",
+          (np.isnan(r["statistic"]) and any("jointly degenerate" in m for m in r["warnings"])
+           and "jointly degenerate (see the warning)" in t) if deg else
+          (np.isfinite(r["statistic"]) and not any("jointly degenerate" in m for m in r["warnings"])), (r, t[-200:]))
+# r1-A S3: leverage of the test regression does not depend on the scale of x
+rng = np.random.default_rng(26122)
+n = 300
+z, w, u = rng.normal(size=(3, n))
+e7 = np.zeros(n); e7[7] = 3.0
+for sc in (1e13, 1e15):
+    x = sc * (2 * z + w + e7)
+    d = pd.DataFrame(dict(y=x / sc + u, x=x, z=z, w=w))
+    r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z"]], cov_type="HC1")
+    check(f"x at scale {sc:g} with leverage 1 in the test regression: row 7 found, test NaN (it gave 170.07)",
+          r["high_leverage_rows"] == [7] and np.isnan(r["statistic"]), r)
+# r1-A S4: the offset floor applies to W
+for n in (200, 5000):
+    rng = np.random.default_rng(21)
+    z, a, b, u, v = rng.normal(size=(5, n))
+    w1 = 1e5 + a; w3 = 0.1 * w1 + 0.7 * b
+    x = 0.4 * z + v + u
+    d = pd.DataFrame(dict(y=x + u, x=x, z=z, w1=w1, w2=b, w3=w3))
+    r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w1", "w2", "w3"]], d[["x"]], d[["z"]], cov_type="nonrobust")
+    ref = f_ssr(d.x.to_numpy(), np.column_stack([np.ones(n), a, b]), np.column_stack([np.ones(n), a, b, z]))
+    check(f"n = {n}, w3 = 0.1·(1e5 + a) + 0.7·b: W has 3 directions, F = F from two SSRs with (1, a, b) (relative 1e-6)",
+          rel(r["first_stage_F"]["x"], ref) < 1e-6, (r["first_stage_F"], ref))
+rng = np.random.default_rng(7)
+n = 500
+z, w, u, e = rng.normal(size=(4, n))
+d = pd.DataFrame(dict(y=2 * z + w + u, x=2 * z + w, z=z, w=1e8 + w))
+r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z"]], cov_type="nonrobust")
+check("W stored as 1e8 + w, x = 2z + w: perfect first stage (it gave F = 9.3e19, 'strong')",
+      r["perfect_first_stage"] == ["x"] and r["first_stage_F"]["x"] == np.inf and np.isnan(r["statistic"]), r)
+d2 = d.assign(x=d.x + 1e-4 * e)
+r, _, _ = quiet(dg.endogeneity_test, d2.y, d2[["w"]], d2[["x"]], d2[["z"]], cov_type="nonrobust")
+check("the other side, x + 1e-4·e: not perfect, F finite", r["perfect_first_stage"] == []
+      and np.isfinite(r["first_stage_F"]["x"]), r)
+# r1-A N1, N2, N3
+rng = np.random.default_rng(3)
+M = rng.normal(size=(4, 5))
+d = pd.DataFrame(M, columns=["y", "x", "w", "z1", "z2"])
+r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z1", "z2"]])
+check("saturated first stage: no 'perfect' claim (F NaN)", r["perfect_first_stage"] == []
+      and not any("exact linear combination" in m for m in r["warnings"]), r)
+rng = np.random.default_rng(26125)
+n = 30
+z, w, u = rng.normal(size=(3, n))
+d = pd.DataFrame(dict(y=2 * z + w + u, x=2 * z + w, z=z, w=w))
+r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z"]], cov_type="HC0")
+check("perfect first stage with HC0 and few df: no few-df warning", r["perfect_first_stage"] == ["x"]
+      and not any("reject too often" in m for m in r["warnings"]), r["warnings"])
+rng = np.random.default_rng(5)
+n = 200
+z, z2, u, v, v2 = rng.normal(size=(5, n))
+x1, x2 = 0.5 * z + v + u, 0.5 * z2 + v2
+d = pd.DataFrame({"y": x1 + x2 + u, "_wdir1": x1, "vhat__wdir1": x2, "z": z, "z2": z2})
+r, _, _ = quiet(dg.endogeneity_test, d.y, None, d[["_wdir1", "vhat__wdir1"]], d[["z", "z2"]])
+check("endogenous regressors named '_wdir1' and 'vhat__wdir1' (internal names before): no AssertionError, F and test "
+      "finite", all(np.isfinite(f) for f in r["first_stage_F"].values()) and np.isfinite(r["statistic"]), r)
+# r1-B B2: repeated index labels
+rng = np.random.default_rng(26126)
+n = 150
+z, w, u, v = rng.normal(size=(4, 2 * n))
+x = 0.5 * z + v + u
+dd = pd.DataFrame(dict(y=1 + x + 0.5 * w + u, x=x, z=z, w=w))
+dup = pd.concat([dd.iloc[:n].reset_index(drop=True), dd.iloc[n:].reset_index(drop=True)])
+r, _, _ = quiet(dg.iv_report, "y ~ 1 + w + [x ~ z]", dup)
+ols_h = sm.OLS(dup.y.to_numpy(), sm.add_constant(dup[["w", "x"]].to_numpy())).fit()
+check("repeated index labels (two halves concatenated): OLS on the same 300 rows as 2SLS (it ran on 600), equal to OLS "
+      "by hand (relative 1e-10), warning", r["n"] == 300 and int(r["ols"].nobs) == 300
+      and rel(r["table"].loc["x", "OLS"], ols_h.params[2]) < 1e-10 and any("repeated labels" in m for m in r["warnings"]),
+      (r["n"], r["ols"].nobs))
+r, _, _ = quiet(dg.iv_report, "y ~ 1 + w + [x ~ z]", dd)
+check("unique index (the other side): no repeated-labels warning, index kept",
+      not any("repeated labels" in m for m in r["warnings"]) and list(r["iv"].resids.index[:2]) == [0, 1])
+# r1-B N1: constant tolerance; N4 (f): AR with clustered covariance; (g) "Unadjusted"
+rng = np.random.default_rng(261215)
+n = 400
+z, u, v, w = rng.normal(size=(4, n))
+x = 0.5 * z + v + u
+d = pd.DataFrame(dict(y=1 + x + u, x=x, z=z, w=1e8 + w, g=np.repeat(np.arange(40), 10)))
+r, _, _ = quiet(dg.iv_report, "y ~ 0 + w + [x ~ z]", d)
+check("0 + w with w = 1e8 + N(0, 1): no constant in the span → the warning (it disappeared with 1e-8)",
+      any("no constant" in m for m in r["warnings"]), r["warnings"])
+rc, tc, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d, cov_type="kernel")
+check("cov_type='kernel': the AR line says it uses HC1, not the kernel covariance; key cov = 'HC1'",
+      "it uses HC1 (heteroskedasticity only), not the kernel covariance" in tc and rc["anderson_rubin"]["cov"] == "HC1", tc[-300:])
+rr, tr, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d, cov_type="robust")
+check("cov_type='robust': no such note", "not the" not in tr.split("Anderson-Rubin")[-1] and rr["anderson_rubin"]["cov"] == "HC1")
+ru1, _, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d, cov_type="Unadjusted")
+ru2, _, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d, cov_type="unadjusted")
+check("cov_type='Unadjusted' = 'unadjusted' (linearmodels 6.1 raised KeyError)",
+      np.allclose(ru1["tests"]["statistic"], ru2["tests"]["statistic"], rtol=1e-12) and ru1["cov_type"] == "unadjusted")
 
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)
