@@ -12,6 +12,8 @@ the signs below come from the definitions. Baltagi not read: the pages come from
       6.37, residual of the largest firm 1.62, sigma-hat 1.82.
       Section 18.4, p. 587-588 (INTQRT): the basic Engle-Granger test regresses u_t on u_{t-1} (no lags);
       5% critical value -3.34 (Table 18.4). Example 18.6, p. 591: OLS of r6 on r3 gives 1.026 (.0077).
+      Example 15.1, p. 467 and Example 15.8, p. 485 (MROZ; section 8, iv_report, added in v2.6.12; read in the PDF
+      on 2026-11-17): first stage .269 (.029), R² .173, 2SLS .059 (.035); overidentification R² .0009.
   Baltagi, B.H. (2013), Econometric Analysis of Panel Data, 5th ed., Wiley (Grunfeld data, 10 firms):
       p. 81, Hausman m1 = 2.33; p. 108, Table 4.2, Breusch-Pagan LM_mu = 798.162.
   Greene, W.H. (2012), Econometric Analysis, 7th ed., Pearson: eq. (11-42) and Example 11.6, p. 376-377
@@ -543,6 +545,30 @@ check("cointegration: Inconclusive with another note still tells to weigh the Jo
 check("cointegration: Inconclusive with the det_order=0 full rank does not tell to weigh that Johansen result",
       d0["engle_granger"]["lag_sensitive"] and "not usable here" in d0_txt and "weigh the Johansen" not in d0_txt,
       d0_txt)
+
+# -------------------------------------------------------------------------------------------- 8. iv_report (v2.6.12)
+# Wooldridge (2000, 1st ed.) Example 15.1, p. 467 (MROZ, working women): first stage educ = 10.24 + .269 fatheduc,
+# (.28) (.029), n = 428, R² = .173; 2SLS educ .059 (.035). The book's "t = 9.28" is .269/.029, computed from the
+# rounded numbers (the data give 9.4255), so the F is checked against the classical F by another route instead.
+# Example 15.8, p. 485: overidentification R² = .0009 (the book's nR² = .3852 is 428 × .0009, the rounded R²).
+mroz = woo.data("mroz").dropna(subset=["wage"]).assign(expersq=lambda t: t.exper ** 2)
+r151, _ = quiet(dg.iv_report, "lwage ~ 1 + [educ ~ fatheduc]", mroz, cov_type="unadjusted")
+fsr = sm.OLS(mroz.educ, sm.add_constant(mroz[["fatheduc"]])).fit()
+check("W15.1 (1st ed., p. 467): n = 428, first-stage .269 (.029), R² .173 and partial R² .173 (half the last digit), "
+      "2SLS .059 (.035)", r151["n"] == 428 and close(fsr.params.fatheduc, 0.269, 0.0005)
+      and close(fsr.bse.fatheduc, 0.029, 0.0005) and close(fsr.rsquared, 0.173, 0.0005)
+      and close(r151["first_stage"]["partial R²"].iloc[0], 0.173, 0.0005)
+      and close(r151["table"].loc["educ", "2SLS"], 0.059, 0.0005)
+      and close(r151["table"].loc["educ", "2SLS se"], 0.035, 0.0005), r151["first_stage"])
+check("iv_report (v2.6.12): unadjusted first-stage F on W15.1 = t² of the simple regression (one instrument, "
+      "classical F; relative 1e-10; linearmodels' own Wald is 428/426 times it)",
+      rel(r151["first_stage"]["partial F"].iloc[0], fsr.tvalues.fatheduc ** 2) < 1e-10,
+      (r151["first_stage"]["partial F"].iloc[0], fsr.tvalues.fatheduc ** 2))
+r158, _ = quiet(dg.iv_report, "lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]", mroz, cov_type="unadjusted")
+check("W15.8 (1st ed., p. 485): Sargan R² = nR²/n = .0009 (half the last digit); nR² .378 and p .539 from the data, "
+      "not the book's .3852 (428 × the rounded R²)", close(r158["tests"].iloc[1]["statistic"] / 428, 0.0009, 0.00005)
+      and close(r158["tests"].iloc[1]["statistic"], 0.378, 0.0005) and close(r158["tests"].iloc[1]["p"], 0.539, 0.0005),
+      r158["tests"])
 
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")

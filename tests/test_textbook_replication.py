@@ -95,10 +95,14 @@ check("W15.5 2SLS educ = .0614 (se .0314)",
 
 endo = d.endogeneity_test(m["lwage"], m[["exper", "expersq"]], m[["educ"]],
                           m[["motheduc", "fatheduc"]], cov_type="nonrobust", show=False)
-check("W15.7 Durbin-Wu-Hausman t = 1.67 (F = t² ≈ 2.79)", close(endo["statistic"], 1.67 ** 2, 0.02),
+# v2.6.12: Wooldridge (2000, 1st ed.) Example 15.7, p. 483 prints t = 1.67; the check is on t, at half the last printed
+# digit (0.005, the v2.6.7 rule); it was 0.02 on F = t²
+check("W15.7 Durbin-Wu-Hausman t = 1.67 (1st ed., p. 483; √F within 0.005)", close(np.sqrt(endo["statistic"]), 1.67, 0.005),
       f"got F = {endo['statistic']:.3f}")
 
 over = d.overid_test(iv2.resids, m[["exper", "expersq"]], m[["motheduc", "fatheduc"]], n_endog=1, show=False)
+# Wooldridge (2000, 1st ed.) Example 15.8, p. 485 prints R² = .0009 and nR² = 428(.0009) = .3852, p = .535, from the
+# rounded R²; .378 and .539 are the exact values from the data (R² = .000883), the numbers checked here (v2.6.12 note)
 check("W15.8 overidentification nR² = .378, p = .539",
       close(over["nR2"], 0.378, 0.0006) and close(over["p"], 0.539, 0.0006),
       f"got {over['nR2']:.3f}, p = {over['p']:.3f}")

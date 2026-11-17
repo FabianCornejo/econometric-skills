@@ -280,7 +280,9 @@ check("2SLS reproduces Wooldridge Example 15.1 (educ .059 (.035))",
 check("exactly identified: no overidentification test", iv1["overidentified_by"] == 0 and len(iv1["tests"]) == 1)
 iv2 = iv_report("lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]", mz, cov_type="unadjusted", show=False)
 ov = iv2["tests"].iloc[1]
-check("overidentification nR² reproduces Wooldridge Example 15.7 (≈ .38, p ≈ .54)",
+# v2.6.12: in the 1st ed. (2000) this is Example 15.8, p. 485, which prints R² = .0009 and nR² = .3852 (428 × the
+# rounded R²); .378 and .539 are the exact values from the data
+check("overidentification nR² reproduces Wooldridge Example 15.8 of the 1st ed. (exact .378, p .539; ≈ .38, p ≈ .54)",
       close(ov["statistic"], 0.378, 0.01) and close(ov["p"], 0.539, 0.01), f"{ov['statistic']:.3f}, p = {ov['p']:.3f}")
 ar = iv2["anderson_rubin"]
 

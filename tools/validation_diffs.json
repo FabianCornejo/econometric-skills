@@ -1,5 +1,5 @@
 {
- "date": "2026-11-16",
+ "date": "2026-11-17",
  "python": "3.13.18",
  "packages": {
   "numpy": "2.5.5",
@@ -54,15 +54,15 @@
   },
   "diagnostics.endogeneity_test": {
    "comparisons": 1,
-   "worst_diff": 0.0036917983703554924,
-   "tolerance": 0.02,
+   "worst_diff": 0.0011049633013349158,
+   "tolerance": 0.005,
    "kind": "abs",
-   "what": "test_textbook_replication.py: W15.7 Durbin-Wu-Hausman t = 1.67 (F = t² ≈ 2.79)",
+   "what": "test_textbook_replication.py: W15.7 Durbin-Wu-Hausman t = 1.67 (1st ed., p. 483; √F within 0.005)",
    "all_within_tolerance": true
   },
   "diagnostics.hausman": {
    "comparisons": 1,
-   "worst_diff": 0.00036689367354014735,
+   "worst_diff": 0.000366893673538371,
    "tolerance": 0.005,
    "kind": "abs",
    "what": "test_diagnostics.py: B2.33 Hausman FE vs RE on Grunfeld reproduces Baltagi (2013, 5th ed., p. 81) m1 = 2.33",
