@@ -120,9 +120,12 @@ def ols_diagnostics(res, bg_lags: int | None = None, time_series: bool = False,
     except Exception as e:  # noqa: BLE001
         rows.append(_row("Ramsey RESET", "correct functional form", np.nan, np.nan, f"not computed ({e})"))
 
-    lm, p_bp, _, _ = het_breuschpagan(resid, exog)
-    rows.append(_row("Breusch-Pagan", "homoskedasticity", lm, p_bp,
-                     "Heteroskedasticity: use HC3 (or WLS/FGLS)" if p_bp < ALPHA else "No evidence"))
+    try:   # v2.6.12: statsmodels refuses Breusch-Pagan without a constant column; that stopped the whole battery
+        lm, p_bp, _, _ = het_breuschpagan(resid, exog)
+        rows.append(_row("Breusch-Pagan", "homoskedasticity", lm, p_bp,
+                         "Heteroskedasticity: use HC3 (or WLS/FGLS)" if p_bp < ALPHA else "No evidence"))
+    except Exception as e:  # noqa: BLE001
+        rows.append(_row("Breusch-Pagan", "homoskedasticity", np.nan, np.nan, f"not computed ({e})"))
     try:
         with warnings.catch_warnings():  # squares of dummies duplicate columns: expected, not a problem
             warnings.simplefilter("ignore")
@@ -384,7 +387,9 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
         order = ("I(0) around a deterministic trend (or with a break) — with a constant only the tests "
                  "conflict/reject; check that the trend is significant and plausible")
     elif v("1st difference", "constant") == "Stationary":
-        order = "I(1)"
+        # v2.6.12 (v2.6.11 validation): the summary said a bare "I(1)" while a level line said "Conflict"
+        order = ("I(1) by the differences, but the level tests conflict (trend or break?): check the level lines"
+                 if "Conflict" in (vc + vt) else "I(1)")
     else:
         order = "undetermined — inspect the plot; test for a break (Zivot-Andrews) or long memory (ARFIMA)"
     tab.attrs["suggested_order"] = order
@@ -974,11 +979,18 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
     common = [c for c in fe_res.params.index if c in re_res.params.index and c.lower() not in ("const", "intercept")]
     b = fe_res.params[common] - re_res.params[common]
     v = fe_res.cov.loc[common, common] - re_res.cov.loc[common, common]
-    eig = np.linalg.eigvalsh(v.values)
-    stat = float(b.values @ np.linalg.pinv(v.values) @ b.values)
-    df_ = len(common)
-    p = float(1 - stats.chi2.cdf(stat, df_))
-    valid = bool(np.all(eig > -1e-10))
+    # v2.6.12: V_FE − V_RE is a difference, so its rounding is relative to V_FE. Eigenvalues within ±1e-8·max eig(V_FE)
+    # are zero: the statistic is b'V⁻b with the generalized inverse over the other eigenvalues (negative ones
+    # included, as pinv did), df = their number (rank of V, as Stata's hausman), and V is "not positive semidefinite"
+    # only below −1e-8·max eig(V_FE). Before: df = number of coefficients, and an absolute −1e-10.
+    lam, vec = np.linalg.eigh(v.values)
+    tol = 1e-8 * max(float(np.max(np.abs(np.linalg.eigvalsh(fe_res.cov.loc[common, common].values)))), 1e-300)
+    keep = np.abs(lam) > tol
+    eig = lam
+    stat = float(np.sum((vec[:, keep].T @ b.values) ** 2 / lam[keep])) if keep.any() else float("nan")
+    df_ = int(keep.sum())
+    p = float(stats.chi2.sf(stat, df_)) if df_ and stat >= 0 else (1.0 if df_ else float("nan"))
+    valid = bool(np.all(eig > -tol))
     # v2.6.11: the classical statistic needs both fits with the unadjusted covariance. linearmodels keeps the
     # estimator only in the private _cov_type ("Unadjusted", "Robust", "Clustered", "Driscoll-Kraay"; same in
     # 6.1 and 7.1); when it is missing, nothing is claimed (None).
