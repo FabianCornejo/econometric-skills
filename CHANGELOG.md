@@ -2,6 +2,28 @@
 
 All releases of the `econometrics` skill, newest first. Each release is tagged on GitHub with the packaged `econometrics.skill` attached ([releases](https://github.com/FabianCornejo/econometric-skills/releases)).
 
+## v2.6.11 — Backward coverage: six diagnostics functions replicated; cointegration no longer hides a lag-dependent verdict; a line coverage report in CI
+
+Origin: items #3 and #9 of the structural optimization review (2026-11-13): 38 public functions had no test, 6 of them named in the SKILL.md workflow, and CI did not measure line coverage. Reading the code before writing the tests found four defects (below).
+
+- **Replications (`tests/test_diagnostics.py`, new, 45 checks)**. Six functions go from level D to A in `VALIDATION.md` (88/142/21/38 → 95/142/20/32 with `state_space.cointegration_pretest`, C → A). Each is checked against a published number with the edition and page fixed, read in the texts, and against a route written in the test:
+  - `hausman`: Baltagi, *Econometric Analysis of Panel Data*, 5th ed. (2013), p. 81, Grunfeld m1 = 2.33; FE and Swamy-Arora RE written by hand.
+  - `panel_bp_lm`: Baltagi p. 108, LM = 798.162; Greene, *Econometric Analysis*, 7th ed. (2012), Example 11.6, 3881.34 from the printed sums; the matrix form e'(I⊗J)e.
+  - `white_simplified`: Wooldridge, *Introductory Econometrics*, 1st ed. (2000), Example 8.5 (LM ≈ 3.45, p = .178).
+  - `influence`: Wooldridge Example 9.8: the sales coefficient without the largest firm (.000186), rebuilt from the function's DFBETA and leverage; every column against n refits.
+  - `cointegration`: the book's basic Engle-Granger test (§18.4) and Johansen's reduced-rank regression written by hand; a known-truth check with 200 samples each (bands fixed before running).
+  - `vif_table`: the diagonal of the inverse correlation matrix.
+  - Grunfeld from `statsmodels.datasets` (public domain); the Wooldridge data from the `wooldridge` package.
+- **Fix: `diagnostics.cointegration` gave a firm verdict that depends on the lag choice.** On Wooldridge's r6 and r3 (INTQRT), the residual ADF with AIC picks 6 lags and does not reject (t = −3.13, p = 0.082, "No evidence of cointegration"); with BIC, as in the book's basic test, no lags and t = −8.39 (5% critical value −3.34). Engle-Granger now runs with both and prints both lags; when they disagree at 5% the verdict is "Inconclusive". New keys `lags_aic`, `statistic_bic`, `p_bic`, `lags_bic`, `lag_sensitive`; `statistic`/`p` are still the AIC run.
+- **Fix: a full rank from statsmodels' unrestricted constant (`det_order=0`) was read as "the series are probably I(0)".** That case declares full rank too often for driftless random walks (`time-series.md` §7); on INTQRT it gives rank 2, while `multivariate.johansen_trace(..., 'ci')` gives rank 1. The note now says not to conclude I(0) and to run `johansen_trace` (new key `johansen_note`). Replacing the Johansen part with the 'ci' case is left for v2.6.12.
+- **Fix: `state_space.cointegration_pretest`** had the same two problems. Each Engle-Granger direction now runs with AIC and BIC and counts only when both reject (new keys `EG_p_y_on_x_bic`, `EG_p_x_on_y_bic`, `EG_lag_sensitive`, `johansen_full_rank`).
+- **Fix: `diagnostics.vif_table` depended on the statsmodels version.** For a model without a constant, statsmodels 0.14 returned the uncentered VIF (1.86, 17.06, 16.79 on HPRICE1) and 0.15 the centered one (1.04, 1.42, 1.40). The function now computes the centered VIF itself (auxiliary regression with a constant), the same on every version.
+- **Fix: `diagnostics.hausman` gave a verdict from robust covariances.** With `cov_type="robust"` on both fits the statistic was −0.006 and the conclusion "random effects acceptable". The classical test needs the unadjusted covariance in both fits; when a fit used another one (read from linearmodels' `_cov_type`), the conclusion is "Not interpretable" and points to `mundlak_test`. New key `classical_cov` (None when the results do not say).
+- **CI: line coverage by validation level, no threshold.** The latest job on Python 3.13 runs the suites under `coverage`; `tools/coverage_report.py` (new) reports, per `VALIDATION.md` level, how many functions and lines the suite runs, lists the level-D functions run only through other functions, and flags any level A-C function with no line run. The report goes to the job summary and an artifact. Child processes are not traced.
+- **Evaluator of `causal-checklist-post-treatment`** (v2.6.10 routing, R2): a correct answer failed on vocabulary. Both groups of the regex are wider: "depois do tratamento", "after (the) treatment", and "fatores não observados" (the recorded answer also failed on this one).
+- **`evals/data/*.csv` is no longer converted on checkout** (`.gitattributes`: `-text`), and the generator writes LF on every system: on Windows, pandas wrote CRLF and the SHA-256 check said "DIFFERS".
+- **References**: `time-series.md` §7 explains the two lag choices and the det_order=0 caveat; `software-equivalents.md` maps `estat vif` to `diagnostics.vif_table`.
+
 ## v2.6.10 — Computed numbers come from the script; the doctor never says "up to date" unchecked; a leaner description; one rule for unit roots
 
 Origin: the v2.6.9 validation (notebook 2, 2026-11-14) and the review of the structural optimization proposal (2026-11-13).

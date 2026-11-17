@@ -1,2 +1,3 @@
 tests/data/*.csv text eol=lf
 *.skill binary
+evals/data/*.csv -text

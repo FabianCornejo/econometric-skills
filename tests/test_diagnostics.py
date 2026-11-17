@@ -20,7 +20,7 @@ come from the definitions):
 
 Data: Grunfeld from statsmodels.datasets (public domain; the 11-firm file, American Steel dropped to get Baltagi's 10
 firms); HPRICE1, RDCHEM and INTQRT from the wooldridge package. Tolerance for published numbers: half the last
-printed digit (v2.6.7 rule). Tolerance for the other routes: 1e-8 relative or tighter.
+printed digit (v2.6.7 rule). Tolerance for the other routes: 1e-10 relative (closed-form rule).
 
 Run from the repository root:  python3 tests/test_diagnostics.py
 """
@@ -117,8 +117,8 @@ def fe_re_by_hand(d, y, xs):
 
 
 H_hand = fe_re_by_hand(gr, "invest", ["value", "capital"])
-check("hausman: equals the statistic from FE and Swamy-Arora RE written by hand (relative 1e-8)",
-      rel(h["statistic"], H_hand) < 1e-8, (h["statistic"], H_hand))
+check("hausman: equals the statistic from FE and Swamy-Arora RE written by hand (relative 1e-10)",
+      rel(h["statistic"], H_hand) < 1e-10, (h["statistic"], H_hand))
 check("hausman: valid, classical covariances, 'Do not reject' and the printed line",
       h["valid"] and h["classical_cov"] is True and h["conclusion"].startswith("Do not reject H0")
       and "Hausman: χ²(2) = 2.330, p = 0.3119" in h_txt, (h, h_txt))
@@ -276,8 +276,8 @@ loo = e_r / (1 - h_qr)
 ref = pd.DataFrame({"h": h_qr, "infl": np.abs(h_qr * loo), "dfb": np.abs(dfb_ref).max(axis=1), "cook": cook_ref})
 got = inf.sort_index()
 check("influence: leverage (QR), |h·ẽ|, max |DFBETA| and Cook's distance equal n refits without each observation "
-      "(relative 1e-8)", max(rel(got["leverage_h"], ref.h), rel(got["influence_|h·ẽ|"], ref.infl),
-                             rel(got["max_|DFBETA|"], ref.dfb), rel(got["cook"], ref.cook)) < 1e-8,
+      "(relative 1e-10)", max(rel(got["leverage_h"], ref.h), rel(got["influence_|h·ẽ|"], ref.infl),
+                             rel(got["max_|DFBETA|"], ref.dfb), rel(got["cook"], ref.cook)) < 1e-10,
       (rel(got["leverage_h"], ref.h), rel(got["max_|DFBETA|"], ref.dfb), rel(got["cook"], ref.cook)))
 check("influence: rows sorted by |h·ẽ| (descending)", inf["influence_|h·ẽ|"].is_monotonic_decreasing)
 check("influence: printed thresholds k/n = 0.094, 2k/n = 0.188, 2/√n = 0.354, the top 3 rows and the advice",
@@ -328,8 +328,8 @@ def johansen_by_hand(Y, k_ar_diff):
 
 
 tr_hand = johansen_by_hand(iq[["r6", "r3"]].to_numpy(float), 1)
-check("cointegration: Johansen trace statistics equal the reduced-rank regression written by hand (relative 1e-8)",
-      rel(ci["johansen"]["Trace"], tr_hand) < 1e-8, (ci["johansen"]["Trace"].to_list(), tr_hand))
+check("cointegration: Johansen trace statistics equal the reduced-rank regression written by hand (relative 1e-10)",
+      rel(ci["johansen"]["Trace"], tr_hand) < 1e-10, (ci["johansen"]["Trace"].to_list(), tr_hand))
 check("cointegration: full rank with det_order=0 → the note says not to conclude I(0) and names johansen_trace 'ci'",
       ci["rank_trace"] == 2 and ci["johansen_note"] == dg.FULL_RANK_DET0
       and "do not conclude I(0)" in ci_txt and "deterministic='ci'" in ci_txt
