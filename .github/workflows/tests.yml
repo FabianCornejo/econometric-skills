@@ -61,7 +61,7 @@ jobs:
           done
           exit $status
       - name: Line coverage report by VALIDATION.md level (no threshold)
-        if: always() && matrix.deps == 'latest' && matrix.python == '3.13'
+        if: ${{ !cancelled() && matrix.deps == 'latest' && matrix.python == '3.13' }}
         env:
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
         run: |
@@ -71,7 +71,7 @@ jobs:
           python tools/coverage_report.py coverage.json --all > coverage-report.md
           cat coverage-report.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v6
-        if: always() && matrix.deps == 'latest' && matrix.python == '3.13'
+        if: ${{ !cancelled() && matrix.deps == 'latest' && matrix.python == '3.13' }}
         with:
           name: coverage-python-3.13
           path: |

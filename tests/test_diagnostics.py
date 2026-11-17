@@ -3,8 +3,8 @@
 Each function is checked against a published number (the edition and page are fixed below) and against the same
 quantity computed here by another route, written from the textbook definition and not from the implementation.
 
-References (read in the texts on 2026-11-16; the extraction of the PDFs drops minus signs, so the signs below
-come from the definitions):
+References (Wooldridge and Greene read in the texts on 2026-11-16; the extraction of the PDFs drops minus signs, so
+the signs below come from the definitions. Baltagi not read: the pages come from the comments of R's plm tests; the numbers are reproduced exactly):
   Wooldridge, J.M. (2000), Introductory Econometrics: A Modern Approach, 1st ed., South-Western.
       Example 8.5, p. 260 (special White test, log housing price equation 8.18): R² = .0392, LM ≈ 3.45, p = .178.
       Example 9.8, p. 301-302 (RDCHEM): with the 32 firms, sales .000053 (.000044), R² = .0761; without the
@@ -151,18 +151,36 @@ check("hausman: results without _cov_type → classical_cov None, verdict kept; 
 hv = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.01, 0.03])), fb, show=False)
 check("hausman: V_FE − V_RE not positive semidefinite → valid False and the Mundlak warning",
       hv["valid"] is False and "not positive semidefinite" in hv["conclusion"], hv)
+hneg = dg.hausman(fake([1.0, 0.5, 0.2], np.diag([1.0, 0.01, 0.005])), fb, show=False)
+check("hausman: a negative statistic (−0.2²/0.01 − 0.1²/0.005 = −6) is 'Not interpretable', never 'random effects "
+      "acceptable' (review r1)", close(hneg["statistic"], -6.0, 1e-10) and hneg["conclusion"].startswith("Not interpretable")
+      and "acceptable" not in hneg["conclusion"], hneg)
 
 # -------------------------------------------------------------------------------------------- 2. panel_bp_lm
 pooled = PooledOLS(gr.invest, GX).fit()
 bp, bp_txt = quiet(dg.panel_bp_lm, pooled.resids)
 check("B798 Breusch-Pagan LM on Grunfeld pooled residuals reproduces Baltagi (2013, 5th ed., p. 108) 798.162",
       close(bp["LM"], 798.162, 0.0005), bp)
-e = pooled.resids.to_numpy()
-N_g, T_g = 10, 20
-D = np.kron(np.eye(N_g), np.ones((T_g, T_g)))                # I_N ⊗ J_T (Baltagi's matrix form)
-lm_mat = N_g * T_g / (2 * (T_g - 1)) * (e @ D @ e / (e @ e) - 1) ** 2
-check("panel_bp_lm: equals the matrix form e'(I_N⊗J_T)e/e'e (relative 1e-10)", rel(bp["LM"], lm_mat) < 1e-10,
-      (bp["LM"], lm_mat))
+# v2.6.11 review r1: the matrix-form check copied the implementation's outer factor; the factor is checked instead by
+# its null distribution (χ²(1)), balanced and unbalanced. Bands fixed before running: 2000 samples, 5% ± 3 Monte
+# Carlo SEs (0.49 pp) = [3.5%, 6.5%]. The mean-T factor used until this review rejected about 21% on the unbalanced design.
+_rng_bp = np.random.default_rng(20261117)
+
+
+def _bp_size(unbalanced, reps=2000):
+    rej = 0
+    for _ in range(reps):
+        Ti = _rng_bp.integers(2, 9, 40) if unbalanced else np.full(40, 5)
+        ids = np.repeat(np.arange(40), Ti)
+        tt = np.concatenate([np.arange(k) for k in Ti])
+        u = _rng_bp.normal(size=len(ids))
+        rej += dg.panel_bp_lm(pd.Series(u - u.mean(), index=pd.MultiIndex.from_arrays([ids, tt])), show=False)["p"] < 0.05
+    return rej / reps
+
+
+size_bal, size_unb = _bp_size(False), _bp_size(True)
+check("panel_bp_lm: size under H0 in [3.5%, 6.5%], balanced (40 x 5) and unbalanced (T_i from 2 to 8), 2000 samples",
+      0.035 <= size_bal <= 0.065 and 0.035 <= size_unb <= 0.065, (size_bal, size_unb))
 check("panel_bp_lm: printed verdict when p < 5%", "individual effects present" in bp_txt, bp_txt)
 # Greene's Example 11.6 has no open data; residuals with the published sufficient statistics give the same LM.
 n6, T6, sq_means, ssr6 = 595, 7, 53.824384, 607.1265
@@ -175,8 +193,9 @@ e6 = pd.Series(np.repeat(m, T6) + dev,
 check("G11.6 residuals built with Greene's sums (595 x 7; 53.824384; 607.1265)",
       close((e6.groupby(level=0).mean() ** 2).sum(), sq_means, 1e-9) and close((e6 ** 2).sum(), ssr6, 1e-9))
 g6 = dg.panel_bp_lm(e6, show=False)
-# eq. (11-42) with Greene's printed sums gives 3881.345; the printed 3881.34 is 0.005 away (1.3e-6 relative), more
-# than the rounding of the printed sums explains. Tolerance 0.01, looser than half the last digit.
+# eq. (11-42) with Greene's printed sums gives 3881.345; the printed 3881.34 is 0.005 away (1.3e-6 relative). The sums
+# are printed rounded: with the SSR at the top of its rounding interval (607.12655) the equation gives 3881.3442, which
+# rounds to the printed value (review r1). Tolerance 0.01 = the input rounding plus half the last printed digit.
 check("G11.6 Breusch-Pagan LM reproduces Greene (2012, 7th ed., Example 11.6, p. 377) 3881.34",
       close(g6["LM"], 3881.34, 0.01), g6)
 small = pd.Series([0.3, -0.3, 0.1, -0.1, -0.2, 0.2],
@@ -214,8 +233,21 @@ vif_corr = np.diag(np.linalg.inv(np.corrcoef(Xc.T)))
 check("vif_table: equals the diagonal of the inverse correlation matrix (relative 1e-10); no Intercept row",
       list(v.Variable) == ["lotsize", "sqrft", "bdrms"] and rel(v.VIF, vif_corr) < 1e-10, (v, vif_corr))
 v0 = dg.vif_table(smf.ols("price ~ lotsize + sqrft + bdrms - 1", hp).fit())
-check("vif_table: a model without a constant gives the same centered VIF (statsmodels 0.14 gave 1.86/17.06/16.79)",
-      list(v0.Variable) == list(v.Variable) and rel(v0.VIF, vif_corr) < 1e-10, v0)
+# Without a constant: uncentered VIF (Stata's estat vif, uncentered), by another route: (X'X)⁻¹_jj · x_j'x_j.
+XtX = Xc.T @ Xc
+vif_unc = np.diag(np.linalg.inv(XtX)) * np.diag(XtX)
+check("vif_table: a model without a constant gives the uncentered VIF, (X'X)⁻¹_jj·x_j'x_j (relative 1e-10), Kind says so",
+      list(v0.Variable) == list(v.Variable) and rel(v0.VIF, vif_unc) < 1e-10 and set(v0.Kind) == {"uncentered"}
+      and set(v.Kind) == {"centered"}, v0)
+_rg = np.random.default_rng(7)
+_g = _rg.integers(0, 3, 300)
+_d = pd.DataFrame({"g": _g, "x": _rg.normal(size=300) + 0.3 * _g})
+_d["y"] = _d.x + _d.g + _rg.normal(size=300)
+vd = dg.vif_table(smf.ols("y ~ 0 + C(g) + x", _d).fit())
+Xd = smf.ols("y ~ 0 + C(g) + x", _d).fit().model.exog
+vd_ref = np.diag(np.linalg.inv(Xd.T @ Xd)) * np.diag(Xd.T @ Xd)
+check("vif_table: a full set of dummies without a constant is not perfect collinearity (finite, uncentered)",
+      np.isfinite(vd.VIF).all() and rel(vd.VIF, vd_ref) < 1e-10, vd)
 hp2 = hp.assign(k=5.0, sqrft2=2 * hp.sqrft)
 vc = dg.vif_table(sm.OLS(hp2.price, hp2[["k", "lotsize", "sqrft", "sqrft2"]]).fit())
 check("vif_table: a constant column under another name is skipped; perfect collinearity gives inf",
@@ -224,8 +256,8 @@ check("vif_table: a constant column under another name is skipped; perfect colli
 v1 = dg.vif_table(smf.ols("price ~ sqrft", hp).fit())
 check("vif_table: a single regressor has VIF 1", len(v1) == 1 and close(v1.VIF.iloc[0], 1.0, 1e-12), v1)
 v_none = dg.vif_table(smf.ols("price ~ 1", hp).fit())
-check("vif_table: a model with only a constant gives an empty table with the two columns",
-      v_none.empty and list(v_none.columns) == ["Variable", "VIF"], v_none)
+check("vif_table: a model with only a constant gives an empty table with the three columns",
+      v_none.empty and list(v_none.columns) == ["Variable", "VIF", "Kind"], v_none)
 
 # -------------------------------------------------------------------------------------------- 5. influence
 rd = woo.data("rdchem")
@@ -378,26 +410,78 @@ check("cointegration: when the re-run ADF does not match coint, the lag is repor
 
 # -------------------------------------------------------------------------------------------- 7. cointegration_pretest
 pt, pt_txt = quiet(ss.cointegration_pretest, iq.r6, iq.r3)
-check("cointegration_pretest on INTQRT: EG by AIC and BIC both ways; lag-sensitive; cointegrated through the "
-      "direction where both reject; the full-rank caveat",
+check("cointegration_pretest on INTQRT: EG by AIC and BIC both ways; lag-sensitive; Johansen det_order=0 gives full "
+      "rank, so no verdict (review r1: it printed 'cointegrated' next to the full-rank caveat)",
       close(pt["EG_p_y_on_x"], c_aic[1], 1e-12) and close(pt["EG_p_y_on_x_bic"], c_bic[1], 1e-12)
       and pt["EG_p_x_on_y"] < 0.05 and pt["EG_p_x_on_y_bic"] < 0.05 and pt["EG_lag_sensitive"]
-      and pt["cointegrated_5%"] and pt["johansen_full_rank"] and "do not conclude I(0)" in pt_txt
+      and not pt["cointegrated_5%"] and pt["johansen_full_rank"] and "do not conclude I(0)" in pt_txt
+      and "no verdict" in pt_txt and "→ cointegrated" not in pt_txt
       and "only a direction where both reject counts" in pt_txt, pt)
 rw = ecm_pair(np.random.default_rng(12), 300, 0.0)
 pr = ss.cointegration_pretest(rw.y, rw.x, show=False)
 check("cointegration_pretest: independent random walks are not cointegrated",
       not pr["cointegrated_5%"] and min(pr["EG_p_y_on_x"], pr["EG_p_x_on_y"]) > 0.05, pr)
 
-orig_eg = dg._engle_granger
-try:
-    dg._engle_granger = lambda y, xs, trend, crit: {"statistic": -1.0, "p": 0.01 if crit == "aic" else 0.20,
-                                                    "lags": 0}
-    pf = ss.cointegration_pretest(iq.r6, iq.r3, show=False)
-finally:
-    dg._engle_granger = orig_eg
-check("cointegration_pretest: AIC rejects and BIC does not in both directions → not cointegrated, lag-sensitive",
-      not pf["cointegrated_5%"] and pf["EG_lag_sensitive"], pf)
+# v2.6.11 review r1: controlled Engle-Granger and Johansen (replaced in the modules for the call) for the branches the
+# INTQRT case cannot separate. Engle-Granger p-values by (dependent, criterion); Johansen with chosen statistics.
+import statsmodels.tsa.vector_ar.vecm as _vecm
+
+
+def _fake_joh(lr1, lr2=None, cv=(15.494, 3.841), cvm=(14.264, 3.841)):
+    lr2 = lr1 if lr2 is None else lr2
+    return SimpleNamespace(lr1=np.array(lr1, float), lr2=np.array(lr2, float),
+                           cvt=np.column_stack([np.zeros(2), np.array(cv), np.zeros(2)]),
+                           cvm=np.column_stack([np.zeros(2), np.array(cvm), np.zeros(2)]))
+
+
+def _run(fn, pmap, joh, *a, **kw):
+    o_eg, o_j = dg._engle_granger, _vecm.coint_johansen
+    try:
+        dg._engle_granger = lambda y, xs, trend, crit: {"statistic": -1.0, "p": pmap[(y.name, crit)], "lags": 0}
+        _vecm.coint_johansen = lambda *aa, **kk: joh
+        return quiet(fn, *a, **kw)
+    finally:
+        dg._engle_granger, _vecm.coint_johansen = o_eg, o_j
+
+
+J_r1 = _fake_joh([30.0, 1.0])          # rank 1: rejects r = 0, not r ≤ 1
+J_full = _fake_joh([30.0, 9.0])        # full rank
+cases = {
+    "y~x both reject": ({("r6", "aic"): .01, ("r6", "bic"): .01, ("r3", "aic"): .5, ("r3", "bic"): .5}, J_r1, True, False),
+    "x~y both reject, y~x sensitive": ({("r6", "aic"): .01, ("r6", "bic"): .2, ("r3", "aic"): .01, ("r3", "bic"): .01},
+                                       J_r1, True, True),
+    "only x~y, and sensitive": ({("r6", "aic"): .5, ("r6", "bic"): .5, ("r3", "aic"): .01, ("r3", "bic"): .2},
+                                J_r1, False, True),
+}
+res_c = {k: _run(ss.cointegration_pretest, pm, jh, iq.r6, iq.r3)[0] for k, (pm, jh, _, _) in cases.items()}
+check("cointegration_pretest: each direction counts only when AIC and BIC reject; sensitivity in either direction",
+      all(res_c[k]["cointegrated_5%"] is exp and res_c[k]["EG_lag_sensitive"] is sens
+          and res_c[k]["johansen_full_rank"] is False for k, (_, _, exp, sens) in cases.items()),
+      {k: (v["cointegrated_5%"], v["EG_lag_sensitive"]) for k, v in res_c.items()})
+pm_ok = cases["y~x both reject"][0]
+r_j, _ = _run(ss.cointegration_pretest, pm_ok, _fake_joh([10.0, 1.0]), iq.r6, iq.r3)
+r_f, f_txt = _run(ss.cointegration_pretest, pm_ok, J_full, iq.r6, iq.r3)
+check("cointegration_pretest: Johansen not rejecting r = 0 → not cointegrated; full rank → no verdict, flagged",
+      not r_j["cointegrated_5%"] and not r_j["johansen_full_rank"]
+      and not r_f["cointegrated_5%"] and r_f["johansen_full_rank"] and "no verdict" in f_txt, (r_j, r_f))
+
+pm_agree = {("r6", "aic"): .01, ("r6", "bic"): .01}
+pm_sens = {("r6", "aic"): .2, ("r6", "bic"): .01}
+d0, d0_txt = _run(dg.cointegration, pm_sens, J_full, iq[["r6", "r3"]], det_order=0)
+dm, dm_txt = _run(dg.cointegration, pm_agree, J_full, iq[["r6", "r3"]], det_order=-1)
+d1, _ = _run(dg.cointegration, pm_agree, J_full, iq[["r6", "r3"]], det_order=1)
+dmx, _ = _run(dg.cointegration, pm_agree, _fake_joh([30.0, 1.0], lr2=[30.0, 9.0]), iq[["r6", "r3"]], det_order=0)
+dok, _ = _run(dg.cointegration, pm_agree, J_r1, iq[["r6", "r3"]], det_order=0)
+check("cointegration: full rank with det_order=0 → FULL_RANK_DET0 (also when only the max-eigenvalue rank is full); "
+      "with det_order −1 or 1 → the I(0) note; rank 1 → no note",
+      d0["johansen_note"] == dg.FULL_RANK_DET0 and dmx["johansen_note"] == dg.FULL_RANK_DET0
+      and dmx["rank_trace"] == 1 and dmx["rank_max_eigen"] == 2
+      and dm["johansen_note"] and "probably I(0)" in dm["johansen_note"]
+      and d1["johansen_note"] and "probably I(0)" in d1["johansen_note"] and dok["johansen_note"] is None,
+      (d0["johansen_note"], dmx["johansen_note"], dm["johansen_note"], d1["johansen_note"], dok["johansen_note"]))
+check("cointegration: Inconclusive with the det_order=0 full rank does not tell to weigh that Johansen result",
+      d0["engle_granger"]["lag_sensitive"] and "not usable here" in d0_txt and "weigh the Johansen" not in d0_txt,
+      d0_txt)
 
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")

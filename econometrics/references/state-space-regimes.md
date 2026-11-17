@@ -33,7 +33,7 @@ Rules:
 ## 2. Pairs trading built on the filter
 
 1. **Economic rationale first**: same industry, same risk factors, a reason for the spread to revert.
-2. **Cointegration pretest**: `cointegration_pretest(y, x)` runs Engle-Granger in both directions (it is not symmetric) and Johansen. Without cointegration, "mean reversion" in the spread is an assumption. A time-varying hedge ratio can make any spread look stationary in sample; that is precisely why the pretest and out-of-sample evaluation matter.
+2. **Cointegration pretest**: `cointegration_pretest(y, x)` runs Engle-Granger in both directions (it is not symmetric) and Johansen; a direction counts only when the AIC and BIC lag choices both reject, and a full Johansen rank gives no verdict. Without cointegration, "mean reversion" in the spread is an assumption. A time-varying hedge ratio can make any spread look stationary in sample; that is precisely why the pretest and out-of-sample evaluation matter.
 3. **Mean-reversion speed**: `half_life(spread)` from Δs_t = c + φ s_{t−1}; half-life = −ln2 / ln(1+φ). Half-lives longer than the holding horizon make the strategy impractical. `hurst_exponent` < 0.5 supports mean reversion.
 4. **Signals**: `pairs_position(z, entry=2, exit=0.5, stop=4)`; the stop closes positions when the relationship may be breaking.
 5. **Returns**: `pairs_returns(y_price, x_price, hedge=kf["b_pred"], position)`: one unit of y against b units of x decided at t, P&L over t+1, divided by gross exposure, with costs on both legs.

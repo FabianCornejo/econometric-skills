@@ -187,21 +187,36 @@ def ols_diagnostics(res, bg_lags: int | None = None, time_series: bool = False,
 
 
 def vif_table(res) -> pd.DataFrame:
-    """Centered VIF of each non-constant regressor: 1/(1 − R²_j), with R²_j from the regression of x_j on
-    the other non-constant regressors plus a constant. Same value whether or not the model has a constant
-    (v2.6.11: statsmodels 0.14 returned the uncentered VIF for models without a constant, 0.15 the centered
-    one; the skill no longer depends on that)."""
+    """VIF of each non-constant regressor, 1/(1 − R²_j), with a column `Kind` saying which one.
+
+    - Model with a constant column (any name): centered VIF, R²_j from the regression of x_j on the other
+      non-constant regressors plus a constant (Stata's `estat vif`).
+    - Model without a constant column: uncentered VIF, R²_j uncentered, from the regression of x_j on the other
+      regressors without a constant (Stata's `estat vif, uncentered`; Stata refuses the centered one after `nocons`).
+      With a full set of dummies and no constant the centered VIF is infinite by construction, not collinearity.
+    v2.6.11: computed here, the same on every statsmodels version (0.14 returned the uncentered VIF for models
+    without a constant, 0.15 the centered one).
+    """
     exog = np.asarray(res.model.exog, dtype=float)
     names = list(res.model.exog_names)
+    const_cols = [i for i in range(exog.shape[1]) if np.ptp(exog[:, i]) == 0 and exog[0, i] != 0]
+    centered = len(const_cols) > 0
     keep = [i for i, name in enumerate(names)
             if name.lower() not in ("const", "intercept") and np.ptp(exog[:, i]) != 0]
     rows = []
     for i in keep:
-        others = [j for j in keep if j != i]
-        Z = np.column_stack([np.ones(len(exog))] + [exog[:, j] for j in others])
-        r2 = sm.OLS(exog[:, i], Z).fit().rsquared
-        rows.append({"Variable": names[i], "VIF": np.inf if r2 >= 1 else 1.0 / (1.0 - r2)})
-    return pd.DataFrame(rows, columns=["Variable", "VIF"])
+        others = [exog[:, j] for j in keep if j != i]
+        x = exog[:, i]
+        if centered:
+            Z = np.column_stack([np.ones(len(exog))] + others)
+            tss = float(((x - x.mean()) ** 2).sum())
+        else:
+            Z = np.column_stack(others) if others else np.zeros((len(exog), 0))
+            tss = float((x ** 2).sum())
+        ssr = float(((x - Z @ np.linalg.lstsq(Z, x, rcond=None)[0]) ** 2).sum()) if Z.shape[1] else tss
+        vif = np.inf if ssr <= 1e-12 * tss else tss / ssr
+        rows.append({"Variable": names[i], "VIF": vif, "Kind": "centered" if centered else "uncentered"})
+    return pd.DataFrame(rows, columns=["Variable", "VIF", "Kind"])
 
 
 def influence(res, top: int = 10, show: bool = True) -> pd.DataFrame:
@@ -424,8 +439,8 @@ def cointegration(df: pd.DataFrame, k_ar_diff: int = 1, det_order: int = 0, show
     Engle-Granger is run with the residual-ADF lags chosen by AIC and by BIC (v2.6.11). The keys
     statistic/p are the AIC run (as before); statistic_bic/p_bic/lags_aic/lags_bic are added. When the two
     disagree at 5%, lag_sensitive is True and the conclusion is "Inconclusive" instead of either verdict
-    (Wooldridge 2000, 1st ed., p. 587-588: r6 on r3 is clearly cointegrated with no ADF lags, while AIC picks
-    6 lags and does not reject).
+    (Wooldridge 2000, 1st ed., p. 587-588, runs the basic test on r6 and r3 with no ADF lags and finds them clearly
+    cointegrated; on the same data, the skill's AIC run picks 6 lags and does not reject).
     """
     from statsmodels.tsa.vector_ar.vecm import coint_johansen
     data = df.dropna()
@@ -473,7 +488,10 @@ def cointegration(df: pd.DataFrame, k_ar_diff: int = 1, det_order: int = 0, show
                   f"p={eg[crit]['p']:.4f}")
         print(f"  → {eg_concl}")
         if lag_sensitive:
-            print("  Check the autocorrelation of the residual-ADF regression and weigh the Johansen result below.")
+            print("  Check the autocorrelation of the residual-ADF regression"
+                  + (" and run multivariate.johansen_trace(..., deterministic='ci'): the Johansen result below is "
+                     "not usable here (see the note)." if johansen_note == FULL_RANK_DET0
+                     else " and weigh the Johansen result below."))
         print(f"Johansen (det_order={det_order}, k_ar_diff={k_ar_diff}):")
         print(tab.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
         print(f"Cointegration rank: trace = {r_tr}, max eigenvalue = {r_mx}"
@@ -812,6 +830,9 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
     concl = "Reject H0 → fixed effects" if p < ALPHA else "Do not reject H0 → random effects acceptable"
     if not valid:
         concl += " (WARNING: V_FE − V_RE is not positive semidefinite; prefer the Mundlak test)"
+    if stat < 0:   # v2.6.11 review r1: a negative quadratic form is not a χ² draw; p = 1 says nothing
+        concl = ("Not interpretable: the statistic is negative (V_FE − V_RE is not positive semidefinite); "
+                 "use mundlak_test")
     if classical_cov is False:
         concl = (f"Not interpretable: fitted with {kinds[0]}/{kinds[1]} covariances; the classical Hausman "
                  "needs cov_type='unadjusted' in both (refit them, or use mundlak_test for a robust comparison)")
@@ -825,16 +846,18 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
 def panel_bp_lm(resid_pooled: pd.Series, show: bool = True) -> dict:
     """Breusch-Pagan LM (Stata's xttest0): H0 = variance of the individual effect is zero (pooled OK).
 
-    resid_pooled: pooled OLS residuals with a (entity, time) MultiIndex. Exact for balanced
-    panels; an approximation for unbalanced ones.
+    resid_pooled: pooled OLS residuals with a (entity, time) MultiIndex. Balanced or unbalanced: the statistic
+    is Baltagi and Li's (1990) n²/(2(ΣT_i² − n))·[e'De/e'e − 1]², D block-diagonal with T_i×T_i blocks of ones,
+    n = ΣT_i, which is NT/(2(T−1))·[…]² when every T_i = T (v2.6.11: the mean T was used before, which over-rejects
+    on unbalanced panels).
     """
     e = resid_pooled
     groups = e.groupby(level=0)
-    N = groups.ngroups
-    T = groups.size().mean()
+    Ti = groups.size().to_numpy(float)
+    n = Ti.sum()
     num = (groups.sum() ** 2).sum()
     den = (e ** 2).sum()
-    lm = (N * T) / (2 * (T - 1)) * (num / den - 1) ** 2
+    lm = n ** 2 / (2 * ((Ti ** 2).sum() - n)) * (num / den - 1) ** 2
     p = 1 - stats.chi2.cdf(lm, 1)
     if show:
         print(f"\nBreusch-Pagan LM (panel): {lm:.3f}, p = {p:.4f} → "

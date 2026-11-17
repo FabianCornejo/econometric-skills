@@ -166,7 +166,8 @@ def cointegration_pretest(y: pd.Series, x: pd.Series, show: bool = True) -> dict
     v2.6.11: each Engle-Granger direction runs with the residual-ADF lags chosen by AIC (the EG_p_* keys, as
     before) and by BIC (EG_p_*_bic). A direction counts as evidence only when both criteria reject at 5%; when
     they disagree (EG_lag_sensitive) the pretest says so. Johansen uses det_order=0, which declares full rank
-    too often for driftless random walks (time-series.md §7): johansen_full_rank flags that case.
+    too often for driftless random walks (time-series.md §7): johansen_full_rank flags that case, and then
+    cointegrated_5% is False and the pretest gives no verdict (two I(0) series also make Engle-Granger reject).
     """
     from statsmodels.tsa.vector_ar.vecm import coint_johansen
     from diagnostics import FULL_RANK_DET0, _engle_granger
@@ -182,13 +183,14 @@ def cointegration_pretest(y: pd.Series, x: pd.Series, show: bool = True) -> dict
     full_rank = bool(j.lr1[-1] > j.cvt[-1, 1])
     out = {"EG_p_y_on_x": p_yx, "EG_p_x_on_y": p_xy, "EG_p_y_on_x_bic": p_yx_b, "EG_p_x_on_y_bic": p_xy_b,
            "EG_lag_sensitive": sensitive, "Johansen_trace_r0": trace, "Johansen_cv95": cv95,
-           "johansen_full_rank": full_rank, "cointegrated_5%": bool(robust and trace > cv95)}
+           "johansen_full_rank": full_rank, "cointegrated_5%": bool(robust and trace > cv95 and not full_rank)}
     if show:
         print(f"\nCointegration pretest: EG p (y~x) = {p_yx:.3f} AIC / {p_yx_b:.3f} BIC, "
               f"EG p (x~y) = {p_xy:.3f} AIC / {p_xy_b:.3f} BIC, "
               f"Johansen trace r=0: {trace:.2f} vs 5% cv {cv95:.2f} → "
               + ("cointegrated" if out["cointegrated_5%"] else
-                 "NOT clearly cointegrated: a mean-reversion strategy rests on an unproven relationship"))
+                 "no verdict: Johansen gives full rank, so cointegration is not established (see below)" if full_rank
+                 else "NOT clearly cointegrated: a mean-reversion strategy rests on an unproven relationship"))
         if sensitive:
             print("Engle-Granger changes conclusion with the lag choice of the residual ADF (AIC vs BIC): "
                   "only a direction where both reject counts.")

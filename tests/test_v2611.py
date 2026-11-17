@@ -10,7 +10,8 @@ Checks:
      run through others, level A-C functions with no line run, the exit codes, and no threshold;
   2. the CI step: coverage only in the latest job on Python 3.13, the report in the job summary and an artifact, no
      --fail-under anywhere;
-  3. the evaluator regex passes the answer recorded in R2 and still fails each half of the requirement;
+  3. the evaluator regex passes the R2 answer (reconstructed from the routing record's excerpts) and still fails each
+     half of the requirement; synonyms of review r1 pass, 'tratamento dos dados' does not count;
   4. evals/data/*.csv is not converted on checkout, the generator writes LF, and the committed file has no CR and the
      SHA-256 the generator expects;
   5. time-series.md and software-equivalents.md describe the new behavior; the CHANGELOG entry.
@@ -105,7 +106,7 @@ check("CI: the suites run under coverage only in the latest job on Python 3.13",
       and "coverage" not in yml[yml.index("\n  windows:"):])
 check("CI: the report step runs coverage_report.py into the job summary, also when a suite failed",
       "name: Line coverage report by VALIDATION.md level (no threshold)" in job
-      and "if: always() && matrix.deps == 'latest' && matrix.python == '3.13'" in job
+      and "if: ${{ !cancelled() && matrix.deps == 'latest' && matrix.python == '3.13' }}" in job
       and "python tools/coverage_report.py coverage.json --all > coverage-report.md" in job
       and 'cat coverage-report.md >> "$GITHUB_STEP_SUMMARY"' in job)
 check("CI: coverage.json, coverage.xml and the report are uploaded as an artifact",
@@ -120,15 +121,24 @@ check("the coverage files are ignored by git", all(x in gi.splitlines() for x in
 grader = (SKILL / "evals" / "routing" / "causal-checklist-post-treatment" / "graders" / "answer.md")
 pat = re.search(r"^pattern: '(.*)'$", grader.read_text(encoding="utf-8"), re.M).group(1)
 g = re.compile(pat, re.I)
+# Reconstructed from the excerpts of the R2 answer in the development repository's routing record (the full answer is not
+# kept); review r1 renamed it from "recorded".
 r2 = ("Não use o número de funcionários um ano depois da adesão como controle: é uma variável medida depois do "
       "tratamento. Como as empresas escolheram participar, há fatores não observados que afetam as duas coisas.")
-check("evaluator: the correct answer of the v2.6.10 routing round R2 now passes", bool(g.search(r2)))
+check("evaluator: the R2 answer (reconstructed from the record's excerpts) now passes", bool(g.search(r2)))
 check("evaluator: still fails with only the post-treatment half or only the unobserved half",
       not g.search("A variável é medida depois do tratamento; não use como controle.")
       and not g.search("Há fatores não observados que afetam as duas coisas.")
       and not g.search("Funcionários depois da adesão é pós-tratamento: não use como controle.")
       and g.search("The headcount is a post-treatment variable, and selection on unobserved factors needs Oster.")
       and g.search("Mesmo after the treatment... há fatores não observados."))
+check("evaluator (review r1): synonyms pass — após o tratamento, pós tratamento, posterior ao tratamento, variáveis "
+      "não observadas, autosseleção, viés de seleção; 'depois do tratamento dos dados' is not post-treatment",
+      all(g.search(x) for x in ("É medida após o tratamento; há variáveis não observadas.",
+                                 "Variável pós tratamento; cuidado com a autosseleção.",
+                                 "Medida posterior ao tratamento, e há viés de seleção.",
+                                 "Characteristics measured posttreatment; self-selection matters."))
+      and not g.search("Depois do tratamento dos dados, há variáveis não observadas."))
 
 # ------------------------------------------------------------------------- 4. eval data byte for byte
 ga = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
@@ -148,8 +158,9 @@ check("time-series.md §7: both lag choices, 'Inconclusive', the INTQRT numbers 
       "lags chosen by AIC and by BIC" in sec7 and '"Inconclusive"' in sec7 and "t = −8.39" in sec7
       and "AIC picks 6 lags" in sec7 and "a full rank there is not evidence of I(0)" in sec7)
 se = (SKILL / "references" / "software-equivalents.md").read_text(encoding="utf-8")
-check("software-equivalents.md: estat vif maps to diagnostics.vif_table (centered)",
-      "| `estat vif` | — | `diagnostics.vif_table(res)` (centered VIF" in se)
+check("software-equivalents.md: estat vif (centered) and estat vif, uncentered map to diagnostics.vif_table (review r1)",
+      "| `estat vif` / `estat vif, uncentered` | — | `diagnostics.vif_table(res)` (centered VIF when the model has a "
+      "constant, uncentered when it has none" in se)
 changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 top = changelog[changelog.index("## v2.6.11"):changelog.index("## v2.6.10")]
 check("CHANGELOG v2.6.11: the four fixes, the replications with editions, the coverage report, the evaluator",
