@@ -4,7 +4,7 @@ Each function is checked against a published number (the edition and page are fi
 quantity computed here by another route, written from the textbook definition and not from the implementation.
 
 References (Wooldridge and Greene read in the texts on 2026-11-16; the extraction of the PDFs drops minus signs, so
-the signs below come from the definitions. Baltagi not read: the pages come from the comments of R's plm tests; the numbers are reproduced exactly):
+the signs below come from the definitions. Baltagi not read: the pages come from the comments of R's plm tests; the numbers are reproduced to the printed digits):
   Wooldridge, J.M. (2000), Introductory Econometrics: A Modern Approach, 1st ed., South-Western.
       Example 8.5, p. 260 (special White test, log housing price equation 8.18): R² = .0392, LM ≈ 3.45, p = .178.
       Example 9.8, p. 301-302 (RDCHEM): with the 32 firms, sales .000053 (.000044), R² = .0761; without the

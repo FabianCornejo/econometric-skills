@@ -139,6 +139,16 @@ check("evaluator (review r1): synonyms pass — após o tratamento, pós tratame
                                  "Medida posterior ao tratamento, e há viés de seleção.",
                                  "Characteristics measured posttreatment; self-selection matters."))
       and not g.search("Depois do tratamento dos dados, há variáveis não observadas."))
+check("evaluator (review r2): the exclusion holds for every form of 'tratamento d…', word anchors (Após ≠ pós, "
+      "intermediador ≠ mediador), 'post-treatment period' and 'treatment of'; plural and English synonyms pass",
+      not any(g.search(x) for x in ("Após tratamento dos dados, há fatores não observados.",
+                                    "Faça o pós-tratamento dos dados e trate as variáveis não observadas.",
+                                    "Depois do tratamento de dados, há variáveis não observadas.",
+                                    "After the treatment of missing values, check for unobserved heterogeneity.",
+                                    "Use the post-treatment period in a DiD; there is no selection bias.",
+                                    "O intermediador financeiro é não observável."))
+      and all(g.search(x) for x in ("É um mediating variable; unmeasured confounders matter.",
+                                    "Pós-tratamento; variáveis omitidas importam.")))
 
 # ------------------------------------------------------------------------- 4. eval data byte for byte
 ga = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()

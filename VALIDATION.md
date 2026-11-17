@@ -67,7 +67,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 - Only the designs in the tests. A function can be right on them and wrong elsewhere.
 - Dependency versions outside the CI jobs (minimum versions on Python 3.12, latest on 3.13 and 3.14, Windows).
 - Rules of thumb in warnings and verdicts (thresholds such as F > 10 or 1.2x excess zeros) are checked for what they print on each side of the threshold, not for being the right threshold.
-- Several Wooldridge examples are checked against numbers without the edition stated in the test (noted per row); `tests/test_v242.py` says 2e. Numbering can differ between editions. The rows added in v2.6.11 (`tests/test_diagnostics.py`) fix the edition and page: Wooldridge 1st ed. (2000) and Greene 7th ed. (2012), read in the texts; Baltagi 5th ed. (2013) not read: the pages come from the comments of R's plm tests; the numbers are reproduced exactly.
+- Several Wooldridge examples are checked against numbers without the edition stated in the test (noted per row); `tests/test_v242.py` says 2e. Numbering can differ between editions. The rows added in v2.6.11 (`tests/test_diagnostics.py`) fix the edition and page: Wooldridge 1st ed. (2000) and Greene 7th ed. (2012), read in the texts; Baltagi 5th ed. (2013) not read: the pages come from the comments of R's plm tests; the numbers are reproduced to the printed digits.
 - Level D functions have no test; level C functions have no check of their value.
 - Public classes are not rows: `dag.DAG` is exercised through the `dag` functions, which take it or build it.
 
@@ -423,7 +423,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `state_space.hurst_exponent` | B | OU and random walk | < 0.4 and in (0.4, 0.6) | — | test_financial_modules.py: Hurst < 0.5 for OU |  |
 | `state_space.pairs_position` | C | — | — | — | test_financial_modules.py: pairs returns computed, no NaN |  |
 | `state_space.pairs_returns` | C | — | — | — | test_financial_modules.py: pairs returns computed, no NaN |  |
-| `state_space.cointegration_pretest` | B | known truth: independent random walks are not cointegrated; each branch (direction, AIC/BIC, Johansen rejection, full rank) with Engle-Granger and Johansen replaced by controlled values | the verdict and flags exactly | — | test_diagnostics.py: cointegration_pretest: independent random walks | also called in test_financial_modules.py. v2.6.11: a direction counts only when AIC and BIC both reject; full rank of Johansen det_order=0 → no verdict. The INTQRT check against statsmodels' coint (the call the function makes) only confirms the assembly, so it is not level A (review r1) |
+| `state_space.cointegration_pretest` | B | known truth: independent random walks are not cointegrated; each branch (direction, AIC/BIC, Johansen rejection, full rank) with Engle-Granger and Johansen replaced by controlled values | the verdict and flags exactly | — | test_diagnostics.py: cointegration_pretest: independent random walks; test_diagnostics.py: cointegration_pretest: each direction counts only; test_diagnostics.py: cointegration_pretest: Johansen not rejecting | also called in test_financial_modules.py. v2.6.11: a direction counts only when AIC and BIC both reject; full rank of Johansen det_order=0 → no verdict. The INTQRT check against statsmodels' coint (the call the function makes) only confirms the assembly, so it is not level A (review r1) |
 
 ## `survival`
 
