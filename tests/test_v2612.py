@@ -512,5 +512,100 @@ ru2, _, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d, cov_type="unadjusted")
 check("cov_type='Unadjusted' = 'unadjusted' (linearmodels 6.1 raised KeyError)",
       np.allclose(ru1["tests"]["statistic"], ru2["tests"]["statistic"], rtol=1e-12) and ru1["cov_type"] == "unadjusted")
 
+# ============================================================ 13. review round 2 (r2-A and r2-B)
+# r2-A B1: an exogenous x stored with an offset came out "endogenous" (F 238 against 0.11): x now enters the test
+# regression net of W and on unit columns
+rng = np.random.default_rng(12)
+n = 400
+z1, z2, w, u, v = rng.normal(size=(5, n))
+x1 = 0.5 * z1 + 0.3 * z2 + v                          # exogenous
+ro = []
+for off in (0.0, 1e7, 1e9):
+    d = pd.DataFrame(dict(y=x1 + u, x1=x1 + off, z1=z1, z2=z2, w=w))
+    ro.append(quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x1"]], d[["z1", "z2"]], cov_type="HC3")[0])
+check("exogenous x stored as 1e7 + x and 1e9 + x: the same test as without the offset (relative 1e-6), p > 0.05",
+      all(rel(r_["statistic"], ro[0]["statistic"]) < 1e-6 for r_ in ro[1:]) and ro[0]["p"] > 0.05,
+      [r_["statistic"] for r_ in ro])
+# r2-A S1: leverage from group dummies in W (FE with T = 2) does not trigger the high-leverage warning
+rng = np.random.default_rng(5)
+G, T_ = 100, 2
+gid = np.repeat(np.arange(G), T_)
+Wd = pd.get_dummies(gid, prefix="g", drop_first=True, dtype=float)
+a_ = rng.normal(size=G)[gid]
+z, u, v = rng.normal(size=(3, G * T_))
+x = a_ + 0.5 * z + v + u
+d = pd.DataFrame(dict(y=a_ + x + u, x=x, z=z))
+r, _, _ = quiet(dg.endogeneity_test, d.y, Wd, d[["x"]], d[["z"]], cov_type="HC1")
+check("FE with T = 2 (leverage 0.5 from W on every row), HC1: no high-leverage warning (measured size 3–6.5%)",
+      not any("leverage" in m for m in r["warnings"]), r["warnings"])
+# r2-A S2: a continuous outlier in W (1 − h of order 1e-5 to 1e-9) is not 'fitted exactly': kept, and the HC3 F equals
+# statsmodels on the original columns
+rng = np.random.default_rng(1)
+n = 200
+z, u, v, w = rng.normal(size=(4, n))
+for big in (1e4, 1e6):
+    w2 = w.copy(); w2[0] = big
+    x = 0.5 * z + v + u
+    d = pd.DataFrame(dict(y=x + u, x=x, z=z, w=w2))
+    r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z"]], cov_type="HC3")
+    ref = sm.OLS(d.x, sm.add_constant(d[["w", "z"]])).fit(cov_type="HC3").wald_test(
+        np.array([[0, 0, 1.0]]), scalar=True, use_f=True).statistic
+    check(f"outlier {big:g} in an exogenous column: no 'fitted exactly' note, HC3 F = statsmodels (relative 1e-6)",
+          not any("fitted exactly" in m for m in r["warnings"]) and rel(r["first_stage_F"]["x"], float(ref)) < 1e-6,
+          (r["first_stage_F"], float(ref), r["warnings"]))
+# r2-A N: the HC2/HC3 cut (1e-12) and the √eps condition cut, each with a case on each side
+rng = np.random.default_rng(4)
+n = 1000
+z, w, u, v = rng.normal(size=(4, n))
+for z6, refused in ((1e-5, False), (1e-7, True)):
+    zb = np.zeros(n); zb[5] = 1.0; zb[6] = z6           # leverage of row 5 ≈ 1 − z6²
+    x = 0.3 * z + v + u + 2 * zb
+    d = pd.DataFrame(dict(y=x + u, x=x, z=z, zb=zb, w=w))
+    r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x"]], d[["z", "zb"]], cov_type="HC3")
+    check(f"HC3 with leverage 1 − {z6 ** 2:.0e}: {'refused (within 1e-12)' if refused else 'computed (≈ 25.8)'}",
+          (np.isnan(r["first_stage_F"]["x"]) and r["high_leverage_rows"] == [5]) if refused else
+          (abs(r["first_stage_F"]["x"] - 25.8) < 0.1 and r["high_leverage_rows"] == []), r)
+rng = np.random.default_rng(11)
+n = 400
+z1, z2, z3, w, u, v = rng.normal(size=(6, n))
+x1 = 0.5 * z1 + 0.3 * z2 + v + u
+e = rng.normal(size=n)
+d = pd.DataFrame(dict(y=2 * x1 + z1 + u, x1=x1, x2=x1 + z1 + 1e-4 * e, z1=z1, z2=z2, z3=z3, w=w))
+r, _, _ = quiet(dg.endogeneity_test, d.y, d[["w"]], d[["x1", "x2"]], d[["z1", "z2", "z3"]], cov_type="HC3")
+check("x2 = x1 + z1 + 1e-4·e (residuals collinear to 1e-4, above √eps): computed, not jointly degenerate",
+      np.isfinite(r["statistic"]) and not any("jointly degenerate" in m for m in r["warnings"]), r)
+# r2-B B1: clustered without clusters is refused
+rng = np.random.default_rng(261216)
+n = 200
+z, u, v = rng.normal(size=(3, n))
+x = 0.5 * z + v + u
+d = pd.DataFrame(dict(y=1 + x + u, x=x, z=z))
+try:
+    dg.iv_report("y ~ 1 + [x ~ z]", d, cov_type="clustered", show=False)
+    ok, m = False, "no error"
+except ValueError as ex:
+    m = str(ex); ok = "no clusters argument" in m
+check("iv_report cov_type='clustered': ValueError (without clusters it was the robust SE under another name)", ok, m)
+# r2-B S1: the constant-in-span check on scaled columns
+g = np.repeat(np.arange(4), n // 4)
+d2 = d.assign(g=g, w=1e7 * rng.normal(size=n))
+r, _, _ = quiet(dg.iv_report, "y ~ 0 + C(g) + w + [x ~ z]", d2)
+check("0 + C(g) + w with w at 1e7: no false 'no constant' warning", not any("no constant" in m for m in r["warnings"]),
+      r["warnings"])
+# r2-B S3: with repeated labels, result k is row k of the data, also after a NaN row
+rng = np.random.default_rng(26126)
+n = 150
+z, w, u, v = rng.normal(size=(4, 2 * n))
+x = 0.5 * z + v + u
+dd = pd.DataFrame(dict(y=1 + x + 0.5 * w + u, x=x, z=z, w=w))
+dup = pd.concat([dd.iloc[:n].reset_index(drop=True), dd.iloc[n:].reset_index(drop=True)])
+dup.iloc[5, dup.columns.get_loc("z")] = np.nan
+r, _, _ = quiet(dg.iv_report, "y ~ 1 + w + [x ~ z]", dup)
+idx = r["iv"].resids.index
+yfit = dup.y.to_numpy()[np.asarray(idx)]
+check("repeated labels and a NaN at position 5: results indexed by position in the data (5 missing, 6 present), and "
+      "y at those positions is the 2SLS y", 5 not in idx and 6 in idx and len(idx) == 299
+      and np.allclose(yfit, r["iv"].model.dependent.ndarray.ravel()), list(idx[:8]))
+
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

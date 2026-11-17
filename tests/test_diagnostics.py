@@ -159,15 +159,16 @@ check("hausman (review r2): a small negative statistic is also 'Not interpretabl
       close(hneg2["statistic"], -0.5, 1e-10) and hneg2["conclusion"].startswith("Not interpretable"), hneg2)
 hpsd = dg.hausman(fake([1.0, 0.5, 0.2 + 1e-6], np.diag([1.0, 0.04, 0.01 - 1e-12])), fb, show=False)
 # v2.6.12 (v2.6.11 leftover): this check fixed a statistic of −1 made of rounding (an eigenvalue of −1e-12 inverted)
-# next to valid True. That eigenvalue is within 1e-8·max eig(V_FE) = 4e-10 of zero, so it is zero: df 1, statistic
-# 0.2²/0.02 = 2, valid True, and a verdict
-check("hausman (v2.6.12): an eigenvalue of −1e-12 (within 1e-8·max eig of V_FE) is zero: df 1, statistic 0.2²/0.02 "
-      "= 2, valid True, no 'Not interpretable'",
+# next to valid True. That eigenvalue is within the zero cut, so it is zero: df 1, statistic
+# 0.2²/0.02 = 2, valid True, and a verdict (after review r2 the cut is on D⁻¹VD⁻¹, D = √diag V_FE: −1e-12/0.01 = −1e-10,
+# within 1e-8 of the largest eigenvalue of D⁻¹V_FE D⁻¹, which is 1)
+check("hausman (v2.6.12): an eigenvalue of −1e-12 (−1e-10 after scaling, within the 1e-8 cut) is zero: df 1, statistic "
+      "0.2²/0.02 = 2, valid True, no 'Not interpretable'",
       hpsd["valid"] and hpsd["df"] == 1 and close(hpsd["statistic"], 2.0, 1e-9)
       and not hpsd["conclusion"].startswith("Not interpretable"), hpsd)
 hpsd2 = dg.hausman(fake([1.0, 0.5, 0.2 + 1e-6], np.diag([1.0, 0.04, 0.01 - 1e-9])), fb, show=False)
-check("hausman (v2.6.12): the other side, an eigenvalue of −1e-9 (beyond 4e-10) keeps df 2, valid False and "
-      "'Not interpretable'", hpsd2["df"] == 2 and not hpsd2["valid"] and hpsd2["statistic"] < 0
+check("hausman (v2.6.12): the other side, an eigenvalue of −1e-9 (−1e-7 after scaling, beyond the 1e-8 cut) keeps df 2, "
+      "valid False and 'Not interpretable'", hpsd2["df"] == 2 and not hpsd2["valid"] and hpsd2["statistic"] < 0
       and hpsd2["conclusion"].startswith("Not interpretable"), hpsd2)
 check("hausman: a negative statistic (−0.2²/0.01 − 0.1²/0.005 = −6) is 'Not interpretable', never 'random effects "
       "acceptable' (review r1)", close(hneg["statistic"], -6.0, 1e-10) and hneg["conclusion"].startswith("Not interpretable")
