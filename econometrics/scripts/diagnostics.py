@@ -629,7 +629,8 @@ def _count_dirs(Mr, amps, amp_ref, s_all, n_obs, k_tot):
 # that is 2·w exactly counted as a new instrument; from 1e3 on, offsets of 1e14 removed real instruments); 16 is the
 # geometric middle
 _SRC_FLOOR_C = 16.0
-_SRC_RCOND = 1e-8           # coefficients of a direction on the source columns: near-collinear sources are truncated
+_SRC_TRUNC_C = 4.0     # cut of source directions made of their own rounding (review r1-A A1); no error measured for 2-8
+_SRC_RCOND = 1e-8           # relative cut on the source directions, besides the rounding cut below
 
 
 def _src_floor(Mc, Vt, src):
@@ -638,12 +639,19 @@ def _src_floor(Mc, Vt, src):
     in proportion to the direction's coefficient on S_k, so the floor is C·eps·Σ_k |c_ik|·a_k·‖S_k‖, with c the
     coefficients of Mc·v_i on the source columns. A direction that W does not explain (two instruments that differ by
     1e-6·e) gets almost no floor from an offset in W; a column that is 2·w exactly, with w stored as 1e10 + w, gets the
-    full rounding of w and merges, as before."""
+    full rounding of w and merges, as before.
+    The coefficients use only the directions of S above their own rounding (C·eps·Σ_k |V_kj|·a_k·‖S_k‖), review r1-A A1
+    of v2.7.1: two sources that differ only by the rounding of an offset (w stored as 1e10 + w and an instrument 2·w, or
+    the same variable twice in W) span a direction made of rounding, and inverting it gave coefficients of order
+    1/(a·eps), a floor as large as the signal, a false "perfect" and merged instruments."""
     S, a = src
     if not S.shape[1]:
         return np.zeros(Vt.shape[0])
-    coef = np.linalg.lstsq(S, Mc @ Vt.T, rcond=_SRC_RCOND)[0]
     size = np.maximum(a, 1.0) * np.linalg.norm(S, axis=0)
+    US, sS, VS = np.linalg.svd(S, full_matrices=False)
+    rnd = _SRC_TRUNC_C * np.finfo(float).eps * (np.abs(VS.T) * size[:, None]).sum(axis=0)
+    keep = (sS > rnd) & (sS > _SRC_RCOND * sS.max())
+    coef = VS.T[:, keep] @ ((US[:, keep].T @ (Mc @ Vt.T)) / sS[keep][:, None])
     return _SRC_FLOOR_C * np.finfo(float).eps * (np.abs(coef) * size[:, None]).sum(axis=0)
 
 
@@ -983,9 +991,13 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
         # v2.7.1 (claude/medicoes-v2.7.1.md, M3c; decision of the user): HC0 rejected 5.9-11.4% under exogeneity at every
         # average leverage k/n from 0.08 to 0.19, with no natural cut (HC1 4.5-9.1%, HC3 2.3-6.3%), so it is flagged
         # whenever it is chosen, not only from k/n = 0.19
-        warn.append("HC0 rejects too often in this test even without high leverage: simulated size 5.9-11.4% at a 5% "
-                    "level with average leverage k/n from 0.08 to 0.19 (HC1 4.5-9.1%, HC3 2.3-6.3%); use "
-                    "cov_type='HC3' (the default), or say that the p-value is optimistic.")
+        # review r1 of v2.7.1: the measured excess is stated with its range of k/n (about nominal at k/n <= 0.02), and
+        # the text avoids the words of the k/n >= 0.19 warning
+        kn_here = (r_w + n_z) / n_obs
+        warn.append(f"HC0 can reject too often in this test: k/n (first-stage directions over rows) is {kn_here:.3f} "
+                    "here; in simulations under exogeneity HC0 rejected 5.9-11.4% at a 5% level for k/n from 0.08 to "
+                    "0.19, and about 5% at k/n of 0.02 or less (HC1 4.5-9.1%, HC3 2.3-6.3% for k/n 0.08-0.19); use "
+                    "cov_type='HC3' (the default), or say that the p-value may be optimistic.")
     out = {"first_stage_F": f_first, "statistic": stat_, "p": p_, "n_instruments": n_z,
            "warnings": warn, "high_leverage_rows": high_lev, "perfect_first_stage": perfect}
     if show:
@@ -1461,10 +1473,11 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
                         "a value there that nothing else in the model reaches): its residual there is zero and the HC1 "
                         "covariance is degenerate, so the robust endogeneity test is not computed (NaN). Check those "
                         "rows, then test again.")
-        elif cf_info["h_max"] >= _ROBUST_HIGH_LEVERAGE:
+        elif cf_info["h_max"] >= _ROBUST_HIGH_LEVERAGE and h_max < _ROBUST_HIGH_LEVERAGE:
+            # review r1 of v2.7.1: when the leverage comes from an instrument, the first-stage warning already names it
             warn.append(f"a row with leverage {cf_info['h_max']:.2f} in the control-function regression: HC1 degrades as "
                         "the leverage of a row approaches 1 (as in endogeneity_test, warned from 0.5); check that row "
-                        "(an outlier in an endogenous regressor) and read the endogeneity test with care.")
+                        "(an outlier in an endogenous regressor or an instrument) and read the endogeneity test with care.")
         tests.append({"test": "endogeneity (control function, HC1)", "H0": "regressors are exogenous: OLS is consistent",
                       "statistic": st_e, "p": p_e})
     else:

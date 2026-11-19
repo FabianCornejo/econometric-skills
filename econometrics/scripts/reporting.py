@@ -244,7 +244,13 @@ def _nfc(obj):
     if isinstance(obj, list):
         return [_nfc(x) for x in obj]
     if isinstance(obj, dict):
-        return {_nfc(k): _nfc(v) for k, v in obj.items()}
+        out = {}
+        for k, v in obj.items():
+            kk = _nfc(k)
+            if kk in out:
+                raise ValueError(f"two study card fields are the same name once normalised (NFC): {k!r}")
+            out[kk] = _nfc(v)
+        return out
     return obj
 
 
@@ -267,7 +273,8 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     threats, robustness_plan, alpha, family_of_tests, mde; for a forecast, horizon, loss, benchmarks and
     window. Values are text, finite numbers or lists (JSON; numpy numbers are converted). Other names are
     kept and reported as a notice. Texts are compared and written in Unicode NFC (v2.7.1), so the same words
-    typed with combining accents count as the same plan.
+    typed with combining accents count as the same plan (a card already on file keeps its text as written, and the
+    result's `fields` are the ones on file).
 
     Re-running the same script is safe: with the same fields the file is left untouched (same time, same
     hash). Different fields are refused, because a card that changes after the results are seen is no

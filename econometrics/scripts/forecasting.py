@@ -412,13 +412,16 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
       short record ACI behaves like split conformal on all errors so far.
     The dependence screen of "split" and "rolling" runs Ljung-Box on the errors and on their size, at 2.5% each
     (5% in all; it fired on 6-7% of i.i.d. normal series with 40 to 100 errors, about 5% with 200).
-    Long horizons (v2.7.1, claude/medicoes-v2.7.1.md, M1; 1000 replications per cell, i.i.d. and GARCH returns, the
-    forecast an expanding historical mean): with h = 21 and 120 to 1000 targets, the default gamma left 18-28% of the
-    intervals infinite, in runs of up to ~300 rows, because ACI raised the level to 1 or close to it (the misses of
-    overlapping errors come in runs and each is seen h steps late); total coverage 91-95% (the infinite ones count as covered), 84-94% among the
-    finite ones. gamma = 0.005/h or 0.001 removed them, but the coverage fell to that of "rolling" (90-94%), and
-    calib_size of 100 or 250 did not help. With h = 1 or 5 the default left at most 1.6% infinite (coverage 93.7-95.2%).
-    The finding says which rows are infinite for which reason; `coverage_finite` gives the coverage of the finite ones.
+    Long horizons (v2.7.1, claude/medicoes-v2.7.1.md, M1; 1000 replications per cell, i.i.d. and GARCH returns,
+    the forecast an expanding historical mean): with h = 21 and 120 to 1000 targets, the default gamma left 18-28%
+    of the intervals infinite, with a longest run of up to ~300 rows (90th percentile), because ACI raised the level
+    to 1 or close to it (the misses of overlapping errors come in runs and each is seen h steps late); total
+    coverage 91-95% (the infinite ones count as covered), 84-94% among the finite ones. gamma = 0.005/h or 0.001
+    removed them, but the coverage fell to that of "rolling" (90-94%), and calib_size of 100 or 250 did not help.
+    With h = 1 or 5 the default left at most 1.6% infinite (coverage 93.7-95.2%). The finding counts the infinite
+    rows (all from a level raised above 1 - alpha) and their longest run; `coverage_finite` gives the coverage of
+    the finite ones (empty intervals, a sure miss, count among them). The long-horizon advice is printed with h > 1
+    and at least 5% of infinite intervals.
     Intervals are symmetric around the forecast (absolute errors). A biased forecaster gets wide intervals:
     check the bias (forecast_metrics) first. With a level that rounds to 1 (ACI after many misses) the
     interval is infinite; with a level at or below 0 it is empty (a sure miss): both are counted in a finding.
@@ -449,7 +452,7 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
         raise ValueError("actual and forecast must have the same index (target dates, one row per target)")
     if a_s.index.hasnans:
         # v2.7.1 (review NIT of v2.7.0): before, a missing date fell into the "time order" message below
-        raise ValueError(f"the index has {int(a_s.index.isna().sum())} missing value(s) (NaT): every row needs its "
+        raise ValueError(f"the index has {int(a_s.index.isna().sum())} missing value(s) (NaN/NaT): every row needs its "
                          "target date; fix or drop those rows first")
     if not (a_s.index.is_monotonic_increasing and a_s.index.is_unique):
         raise ValueError("the index must be in time order with one row per target (oldest first, no repeats): "
@@ -499,7 +502,8 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
             # v2.7.1 (review NIT of v2.7.0): a record too short for the default block (half of the rows with an actual)
             # gets the same finding as "aci" and "rolling" with too few errors, not an exception; an explicit calib_size
             # below the minimum was refused above
-            short_split, m_need = True, 2 * m_min
+            # the smallest record that works: half of it at least m_min, and a target observed h rows after the block
+            short_split, m_need = True, max(2 * m_min, 2 * h - 1)
         else:
             cal = np.sort(r[:cs])
             q = q_of(cal, 1 - alpha)
@@ -587,40 +591,43 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
     is_inf = evaluated & np.isinf(half)
     n_inf = int(is_inf.sum())
     n_empty = int(empty.sum())
-    # v2.7.1 (claude/medicoes-v2.7.1.md, M1): two causes, told apart. With h = 21 and the default gamma, 18-28% of the
+    # v2.7.1 (claude/medicoes-v2.7.1.md, M1): why the intervals are infinite. With h = 21 and the default gamma, 18-28% of the
     # intervals were infinite because ACI raised the level (runs of up to ~300 rows), not because of the warm-up: in the
     # validation of v2.7.0, 204 of 465 (176 at level 1, 28 at levels of 0.9925-0.999 with 87-369 past errors; none from the warm-up)
     # every infinite interval comes from a level above 1 - alpha (to 1, or close enough that ceil((m + 1)·level) > m): at
     # the nominal level an interval is computed only from m_min errors on, where the rank is at most m (rolling and split
     # never give one)
-    n_one = n_inf
     lev_lo = float(np.min(level_used[is_inf])) if n_inf else np.nan
     runs = np.diff(np.flatnonzero(np.diff(np.r_[0, is_inf.astype(int), 0])))[::2]
     longest = int(runs.max()) if runs.size else 0
-    fin_obs = evaluated & obs & ~np.isinf(half) & ~empty
+    fin_obs = evaluated & obs & ~np.isinf(half)            # empty intervals are finite (a sure miss) and count here
     T_fin = int(fin_obs.sum())
     cov_fin = float(np.mean(covered[fin_obs])) if T_fin else np.nan
     if n_inf or n_empty:
         fut = int((evaluated & ~obs & (np.isinf(half) | empty)).sum())
         why = []
-        if n_one:
-            why.append(f"{n_one} because ACI raised the level to {lev_lo:.4g} or more after misses that came in a run "
+        if n_inf:
+            why.append(f"{n_inf} because ACI raised the level to {lev_lo:.4g} or more after misses that came in a run "
                        "(with m past errors a level above m/(m + 1) has no finite quantile)"
                        + (f"; each error is seen {h} steps late, so ACI corrects late" if h > 1 else ""))
         if n_empty:
             why.append(f"{n_empty} empty because the level went past 0 (a sure miss)")
         cov_txt = (f"; the infinite ones count as covered: coverage of the {T_fin} finite intervals with an actual is "
                    f"{cov_fin:.1%}, against {cov:.1%} in all" if n_inf and T_fin and T else "")
-        warns.append(_finding("notice", f"{n_inf} of {int(evaluated.sum())} interval(s) are infinite and {n_empty} empty"
+        share_inf = n_inf / max(int(evaluated.sum()), 1)
+        warns.append(_finding("notice", f"{n_inf} of the {int(evaluated.sum())} interval(s) computed ({T} with an actual) "
+                              f"are infinite and {n_empty} empty"
                               + (f", {fut} of them for targets not yet observed" if fut else "")
-                              + f" (longest run of infinite intervals: {longest} rows): " + "; ".join(why) + cov_txt,
+                              + (f" (longest run of infinite intervals: {longest} rows)" if n_inf else "")
+                              + ": " + "; ".join(why) + cov_txt,
                               "report those rows as 'no informative interval', not as an interval, and give the coverage "
                               "of the finite intervals next to the total"
-                              + (". With a horizon this long and a short record this is expected (simulated with h = 21: "
-                                 "18-28% infinite; a smaller gamma removes them, but the coverage falls to that of "
-                                 "method='rolling', 90-94%): no setting gives finite intervals with the nominal coverage "
-                                 "here, because overlapping errors leave about T/h independent ones" if n_one and h > 1
-                                 else "; a longer record makes them rarer")))
+                              + (". With overlapping errors (h > 1) this is expected: in simulations with h = 21 and 120 to "
+                                 "1000 targets, 18-28% of the intervals were infinite on average; a smaller gamma removed "
+                                 "them, but the coverage fell to that of method='rolling' (90-94% there), and no setting "
+                                 "gave finite intervals at the nominal level, because overlapping errors leave about T/h "
+                                 "independent ones. Compare with method='rolling' on these data" if n_inf and h > 1
+                                 and share_inf >= 0.05 else "; a longer record makes them rarer")))
     if T and hi_c < 1 - alpha:
         act = ("the intervals are too narrow for these errors: widen them (method='aci') and say so" if method != "aci"
                else "the record is too short for the long-run guarantee to bind, or the errors changed: say the intervals "
@@ -631,7 +638,7 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
         warns.append(_finding("warning", "no row could be evaluated: too few past errors before the last observed target"
                               + (f" (method 'split' calibrates on the first half of the {n_obs} rows with an actual, "
                                  f"fewer than the {m_min} errors a {_pct(1 - alpha)} interval needs)" if short_split else ""),
-                              f"supply at least {m_need + h} forecasts with their actual values"))
+                              f"supply at least {m_need if short_split else m_need + h} forecasts with their actual values"))
     used = {"method": method, "alpha": alpha, "h": h, "calib_size": calib_size, "gamma": gamma if method == "aci" else None,
             "n_rows": n, "n_future": int((~obs).sum()), "warm_up_rows": int((~evaluated).sum()),
             "min_calib_errors": m_min, "coverage_ci_level": 0.95, "ljung_box_level": _LB_LEVEL if method != "aci" else None,

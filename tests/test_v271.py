@@ -111,9 +111,19 @@ check("h = 21: the finding names the cause, the delay, the longest run and both 
       f"{out['n_infinite']} because ACI raised the level" in msg and "seen 21 steps late" in msg
       and f"longest run of infinite intervals: {int(runs.max())} rows" in msg
       and f"{out['coverage_finite']:.1%}" in msg and f"{out['coverage']:.1%} in all" in msg, msg)
-check("h = 21: the action says what a smaller gamma costs (coverage of 'rolling') and that no setting fixes it",
-      "a smaller gamma removes them" in act and "method='rolling'" in act and "no setting gives finite intervals" in act
+check("h = 21: the action says what a smaller gamma cost in simulations (coverage of 'rolling') and to compare here",
+      "a smaller gamma removed them" in act and "method='rolling'" in act and "no setting gave finite intervals" in act
+      and "in simulations with h = 21" in act and "Compare with method='rolling' on these data" in act
       and "a longer record makes them rarer" not in act, act)
+check("h = 21: the finding counts the intervals computed and those with an actual",
+      f"of the {int(ev.sum())} interval(s) computed ({out['n_evaluated']} with an actual)" in msg, msg)
+# h = 5 with 28 infinite intervals among 1024 (under 5%; seed copied from the search output): the short action
+a5, f5 = series(20261120, h=5, T=1000)
+o5 = fc.conformal_intervals(a5, f5, h=5, show=False)
+act5 = next((w["action"] for w in o5["warnings"] if "infinite" in w["message"]), "")
+check("h = 5 with under 5% infinite intervals: the short action, not the long-horizon advice (review r1-A A3, r1-B B4)",
+      0 < o5["n_infinite"] < 0.05 * o5["table"]["level"].notna().sum() and "a longer record makes them rarer" in act5
+      and "no setting" not in act5, (o5["n_infinite"], act5))
 check("h = 21: the old wording ('too few errors for this level', 'a smaller gamma makes them rarer') is gone",
       "too few errors for this level" not in msg and "smaller gamma makes them rarer" not in act)
 check("h = 21: show prints the coverage of the finite intervals", f"coverage of the {int(fin.sum())} finite intervals: "
@@ -147,6 +157,16 @@ o1r = fc.conformal_intervals(pd.Series(e1, idx), pd.Series(np.zeros(len(e1)), id
 check("'rolling' on the same errors: no infinite interval (the nominal level never has one)", o1r["n_infinite"] == 0
       and not np.isnan(o1r["coverage_finite"]) and abs(o1r["coverage_finite"] - o1r["coverage"]) < 1e-12)
 
+# empty intervals are finite (a sure miss) and count in coverage_finite (review r1-A A4, r1-B B6)
+ye = np.ones(30)                    # the series of test_forecasting.py that gives empty intervals at alpha 0.2, gamma 0.5
+ye[0] = 100.0
+oe = fc.conformal_intervals(pd.Series(ye), pd.Series(np.zeros(len(ye))), alpha=0.2, gamma=0.5, show=False)
+te = oe["table"]
+fe = te["level"].notna().to_numpy() & te["actual"].notna().to_numpy() & ~np.isinf(te["upper"].to_numpy())
+check("coverage_finite counts the empty intervals (sure misses) among the finite ones",
+      te["empty"].sum() > 0 and abs(oe["coverage_finite"] - float(np.nanmean(te["covered"].to_numpy()[fe]))) < 1e-12
+      and oe["coverage_finite"] < 1, (int(te["empty"].sum()), oe["coverage_finite"]))
+
 # ============================================================ 3. 'split' with a short record, and NaT in the index
 rng = np.random.default_rng(271)
 for n_obs in (0, 1, 37):
@@ -155,7 +175,7 @@ for n_obs in (0, 1, 37):
         oo = fc.conformal_intervals(aa, ff, method="split", show=False)
         w_ = [w for w in oo["warnings"] if w["level"] == "warning"]
         ok = oo["n_evaluated"] == 0 and any("method 'split' calibrates on the first half" in w["message"] for w in w_) \
-            and any("at least 38 + 1" in w["action"] or "at least 39" in w["action"] for w in w_)
+            and any("supply at least 38 forecasts" in w["action"] for w in w_)
     except ValueError as e:
         ok, w_ = False, str(e)
     check(f"split with {n_obs} observed row(s): a result with the 'no row could be evaluated' finding, not an exception",
@@ -173,13 +193,13 @@ y60 = pd.Series(rng.normal(size=60), dates); f60 = pd.Series(np.zeros(60), dates
 nat_idx = dates.insert(30, pd.NaT).delete(31)
 check("conformal_intervals: NaT in the index has its own message",
       raises(lambda: fc.conformal_intervals(y60.set_axis(nat_idx), f60.set_axis(nat_idx), show=False),
-             r"1 missing value\(s\) \(NaT\)"))
+             r"1 missing value\(s\) \(NaN/NaT\)"))
 check("conformal_intervals: an index out of order still gets the time-order message (not the NaT one)",
       raises(lambda: fc.conformal_intervals(y60.iloc[::-1], f60.iloc[::-1], show=False), "time order")
       and not raises(lambda: fc.conformal_intervals(y60.iloc[::-1], f60.iloc[::-1], show=False), "NaT"))
 pw = pd.DataFrame({"y": rng.normal(size=60), "x": rng.normal(size=60)}, index=dates)
 check("prais_winsten: NaT in the index has its own message",
-      raises(lambda: spec.prais_winsten("y ~ x", pw.set_axis(nat_idx), show=False), r"\(NaT\)"))
+      raises(lambda: spec.prais_winsten("y ~ x", pw.set_axis(nat_idx), show=False), r"\(NaN/NaT\)"))
 check("prais_winsten: an index out of order still gets the time-order message",
       raises(lambda: spec.prais_winsten("y ~ x", pw.iloc[::-1], show=False), "not in time order")
       and not raises(lambda: spec.prais_winsten("y ~ x", pw.iloc[::-1], show=False), "NaT"))
@@ -211,9 +231,12 @@ with tempfile.TemporaryDirectory() as td:
           c3["action"] == "unchanged" and not c3["warnings"] and Path(p2).read_bytes() == raw2)
     with redirect_stdout(io.StringIO()):
         man = reporting.run_manifest(results={"a": 1}, study_card=p2, path=os.path.join(td, "m.json"))
-    check("run_manifest still reads that card as intact", man["study_card"]["intact"] is True
-          if isinstance(man.get("study_card"), dict) and "intact" in man["study_card"] else
-          not any("changed outside" in str(w) for w in man.get("warnings", [])), man.get("study_card"))
+    check("run_manifest still reads that card as intact", man["study_card"]["intact"] is True, man.get("study_card"))
+
+with tempfile.TemporaryDirectory() as td:
+    check("study_card: two field names that are the same once normalised are refused, not merged",
+          raises(lambda: reporting.study_card(os.path.join(td, "c.json"), question="q", estimand="e", design="d",
+                                              show=False, **{nfc[-4:]: 1, nfd[-5:]: 2}), "same name once normalised"))
 
 # ============================================================ 5. IV: offset in W or Z (M3a)
 n = 200
@@ -289,20 +312,64 @@ nn = 120
 W5 = pd.DataFrame(rng.normal(size=(nn, 3)), columns=["a", "b", "c"]); Z2 = pd.DataFrame(rng.normal(size=(nn, 2)),
                                                                                        columns=["z1", "z2"])
 x5 = Z2.sum(1) * 0.5 + rng.normal(size=nn); y5 = x5 + rng.normal(size=nn)
-hc0_txt = "HC0 rejects too often in this test"
+hc0_txt = "HC0 can reject too often in this test"
 for cov, want in (("HC0", True), ("HC1", False), ("HC3", False)):
     r = dg.endogeneity_test(y5.rename("y"), W5, pd.DataFrame({"x": x5}), Z2, cov_type=cov, show=False)
     check(f"endogeneity_test {cov} with k/n = {6 / nn:.2f}: HC0 warning {'present' if want else 'absent'}",
           any(hc0_txt in m_ for m_ in r["warnings"]) == want, r["warnings"])
 r = dg.endogeneity_test(y5.rename("y"), W5, pd.DataFrame({"x": x5}), Z2, cov_type="HC0", show=False)
-check("the HC0 warning gives the measured sizes and suggests HC3",
-      any("5.9-11.4%" in m_ and "cov_type='HC3'" in m_ for m_ in r["warnings"]))
+check("the HC0 warning gives k/n of the sample, the measured sizes with their range of k/n, and suggests HC3",
+      any(f"is {6 / nn:.3f} here" in m_ and "5.9-11.4%" in m_ and "about 5% at k/n of 0.02 or less" in m_
+          and "cov_type='HC3'" in m_ for m_ in r["warnings"]), r["warnings"])
+check("the HC0 warning does not use the words of the k/n >= 0.19 warning (review r1-B B2)",
+      not any(hc0_txt in m_ and "average leverage k/n" in m_ for m_ in r["warnings"]))
 Wbig = pd.DataFrame(rng.normal(size=(60, 9)), columns=[f"w{j}" for j in range(9)])
 Zb_ = pd.DataFrame(rng.normal(size=(60, 2)), columns=["z1", "z2"])
 xb = Zb_.sum(1) + rng.normal(size=60); yb = xb + rng.normal(size=60)
 r = dg.endogeneity_test(yb.rename("y"), Wbig, pd.DataFrame({"x": xb}), Zb_, cov_type="HC0", show=False)
 check("HC0 with k/n >= 0.19: one warning (the k/n one), not two",
       sum("HC0" in m_ for m_ in r["warnings"]) == 1 and any("k/n" in m_ for m_ in r["warnings"]), r["warnings"])
+
+# review r1-A A1 of v2.7.1: two sources that differ only by the rounding of an offset (an instrument 2·w with W stored as
+# off + w; the same variable twice in W) must not make an endogenous regressor with its own noise "perfect" nor merge
+# independent instruments
+bad_p = bad_m = 0
+for seed in range(10):
+    rng = np.random.default_rng(seed)
+    w_, w1_, za, zc_, uu, nz = (rng.normal(size=300) for _ in range(6))
+    X_ = pd.DataFrame({"x": za + zc_ + w_ + 0.5 * uu + nz}); Y_ = pd.Series(X_["x"].to_numpy() + uu, name="y")
+    for off in (1e9, 1e11, 1e13, 1e15):
+        r1_ = dg.endogeneity_test(Y_, pd.DataFrame({"w": off + w_, "w1": w1_}), X_,
+                                  pd.DataFrame({"z1": za, "zw": 2 * w_, "z3": zc_}), show=False)
+        r2_ = dg.endogeneity_test(Y_, pd.DataFrame({"w": off + w_, "wt": 3 * w_, "w1": w1_}), X_,
+                                  pd.DataFrame({"z1": za, "z3": zc_}), show=False)
+        bad_p += bool(r1_["perfect_first_stage"]) + bool(r2_["perfect_first_stage"])
+        bad_m += (r1_["n_instruments"] != 2) + (r2_["n_instruments"] != 2)
+check("offsets 1e9-1e15 with a redundant 2·w instrument or w twice in W (10 seeds): no false 'perfect', 2 instruments",
+      bad_p == 0 and bad_m == 0, (bad_p, bad_m))
+rng = np.random.default_rng(1000)
+w_, z1_, z3_, uu = (rng.normal(size=300) for _ in range(4))
+r = dg.endogeneity_test(pd.Series(uu, name="y"), pd.DataFrame({"w": 1e15 + w_}), pd.DataFrame({"x": 2 * w_ + z1_ + 3 * z3_}),
+                        pd.DataFrame({"z1": z1_, "z3": 1e15 + z3_}), show=False)
+check("x = 2·w + z1 + 3·z3 exactly, W and z3 stored with offset 1e15: still 'perfect' (the cut keeps columns whose "
+      "rounding is below their size)", r["perfect_first_stage"] == ["x"], r["perfect_first_stage"])
+# no offset, two exogenous columns that differ by 1e-7·u (review r1-A A7): u is in span(W) up to the rounding of the
+# difference and merges; u + 1e-4·e has a real direction and counts
+rng = np.random.default_rng(7)
+w1_, u_, e_, z3_, yv_, xv_ = rng.normal(size=(6, 200))
+Wn = pd.DataFrame({"w1": w1_, "w2": w1_ + 1e-7 * u_})
+cnt = [dg.endogeneity_test(pd.Series(yv_, name="y"), Wn, pd.DataFrame({"x": xv_ + u_ + z3_}),
+                           pd.DataFrame({"zu": u_ + eta * e_, "z3": z3_}), show=False)["n_instruments"] for eta in (0, 1e-4)]
+check("W = [w1, w1 + 1e-7·u] without offset: an instrument u merges (1), u + 1e-4·e counts (2)", cnt == [1, 2], cnt)
+# leverage from an instrument (z[3] = 25): the first-stage warning names it; no second warning from the control function
+rng = np.random.default_rng(31)
+zl = rng.normal(size=200); wl = rng.normal(size=200); ul = rng.normal(size=200)
+zl[3] = 25
+xl = 0.8 * zl + 0.3 * wl + rng.normal(size=200)
+rl = dg.iv_report("y ~ 1 + w + [x ~ z]", pd.DataFrame(dict(y=xl + wl + ul, x=xl, z=zl, w=wl)), show=False)
+check("iv_report, an instrument with one extreme row: one leverage warning (first stage), none from the control function "
+      "(review r1-A A6, r1-B B3)", sum("from the instruments" in m_ for m_ in rl["warnings"]) == 1
+      and not any("control-function regression" in m_ for m_ in rl["warnings"]), rl["warnings"])
 
 # ============================================================ 8. the keys of the IV functions in panel-iv.md
 import wooldridge as woo  # noqa: E402
@@ -330,6 +397,32 @@ listed_cols = {c for c in named if c in ("OLS", "OLS se", "2SLS", "2SLS se", "2S
                                          "partial F", "partial F p", "partial R²", "strength", "H0", "statistic", "p")}
 check("panel-iv.md: the column names it lists exist in the result (the text cannot name a column that is not there)",
       listed_cols <= actual, listed_cols - actual)
+# review r1-B B7: every name in backticks in the iv_report part is a key, a column, a row label of the example, a quoted
+# test name or cov_type that exists, or one of the few code fragments listed here
+ru = dg.iv_report("lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]", mroz, cov_type="unadjusted", show=False)
+code = {"r = diagnostics.iv_report(...)", 'r["tests"]["p"].iloc[0]', "ivreg2, robust", "cov_type"}
+row_labels = {f'"{i}"' for i in rr["table"].index}
+test_names = {f'"{i}"' for i in list(rr["tests"].index) + list(ru["tests"].index)}
+cov_ok = {'cov_type="robust"', 'cov_type="unadjusted"', '"kernel"', '"homoskedastic"'}
+unknown = []
+for tok in set(re.findall(r"`([^`]+)`", blk[:blk.index("`diagnostics.endogeneity_test")])):
+    m_ = re.fullmatch(r'r\["(\w+)"\]', tok)
+    if tok in code or tok in actual or tok in row_labels or tok in cov_ok or (m_ and m_.group(1) in rr):
+        continue
+    if tok.startswith('"') and (tok in test_names or (tok.endswith('(…)"') and any(n.startswith(tok[:-3]) for n in test_names))):
+        continue
+    unknown.append(tok)
+check("panel-iv.md: no name in backticks that the results do not have (columns, test names, row labels, cov_type)",
+      not unknown, unknown)
+check("panel-iv.md: the endogeneity test names for both covariance modes are the ones the results carry",
+      f'`"{rr["tests"].index[0]}"`' in blk and f'`"{ru["tests"].index[0]}"`' in blk and 'cov_type="unadjusted"' in blk)
+for c_ in ("robust", "kernel", "unadjusted", "homoskedastic"):
+    try:
+        dg.iv_report("lwage ~ 1 + [educ ~ motheduc + fatheduc]", mroz, cov_type=c_, show=False)
+        ok_ = True
+    except Exception:  # noqa: BLE001
+        ok_ = False
+    check(f"panel-iv.md names cov_type {c_!r}, and iv_report accepts it", ok_ and c_ in blk)
 et_ = dg.endogeneity_test(mroz.lwage, mroz[["exper", "expersq"]], mroz[["educ"]], mroz[["motheduc", "fatheduc"]],
                           show=False)
 ov_ = dg.overid_test(rr["iv"].resids, sm.add_constant(mroz[["exper", "expersq"]]), mroz[["motheduc", "fatheduc"]], 1,

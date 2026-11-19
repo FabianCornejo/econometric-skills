@@ -264,8 +264,13 @@ f_holes = s * 0
 f_holes.iloc[3] = np.nan
 check("refuses missing forecasts", raises(CI, s, f_holes, show=False))
 check("refuses misaligned indexes", raises(CI, s, pd.Series(np.zeros(50), index=range(1, 51)), show=False))
-check("split refuses a default calibration block below 19 errors", raises(CI, s.iloc[:30], s.iloc[:30] * 0,
-                                                                          method="split", show=False))
+# v2.7.1: a record too short for the default block (half of the rows with an actual) returns the "no row could be
+# evaluated" finding, as aci and rolling do, instead of raising (review NIT of v2.7.0; the check used to expect the
+# exception); an explicit calib_size below 19 is still refused
+r_short = CI(s.iloc[:30], s.iloc[:30] * 0, method="split", show=False)
+check("split with a default calibration block below 19 errors: no row evaluated, with a warning (v2.7.1)",
+      r_short["n_evaluated"] == 0 and any("no row could be evaluated" in x["message"] for x in r_short["warnings"])
+      and raises(CI, s.iloc[:30], s.iloc[:30] * 0, method="split", calib_size=15, show=False))
 
 # split with h > 1: the first row with an interval is the first whose origin has seen the whole calibration block
 e = pd.Series(np.random.default_rng(27110).standard_normal(80))
@@ -345,7 +350,9 @@ check("split: errors with persistent size and random sign are caught by the scre
       any("autocorrelated" in x["message"] for x in w_vol), w_vol)
 # infinite or empty intervals are counted in a finding
 r_ = CI(pd.Series(y_), pd.Series(np.zeros(30)), alpha=0.2, gamma=0.5, show=False)
-check("aci: a notice counts the empty intervals", any("empty (a sure miss)" in x["message"] for x in r_["warnings"]))
+# v2.7.1: the text of the notice changed ("N empty because the level went past 0 (a sure miss)")
+check("aci: a notice counts the empty intervals",
+      any("empty because the level went past 0 (a sure miss)" in x["message"] for x in r_["warnings"]))
 r_ = CI(iid, iid * 0, method="rolling", calib_size=60, show=False)
 check("rolling with finite intervals only: no such notice", not any("infinite" in x["message"] for x in r_["warnings"]))
 # no evaluated row: no slack notice with inf or nan, and the action gives the record needed
