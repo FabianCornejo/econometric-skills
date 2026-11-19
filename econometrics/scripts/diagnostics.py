@@ -99,7 +99,13 @@ def _white_full(resid, X):
     n = X.shape[0]
     big = np.max(np.abs(X), axis=0)
     keep = [j for j in range(X.shape[1]) if big[j] > 0 and np.ptp(X[:, j]) > _CONST_RTOL * big[j]]
-    Xs = X[:, keep] / big[keep]
+    Xs = X[:, keep]
+    # review r2 R1: centre the columns that are not 0/1 dummies (White's span does not change under x → a + b·x), else a
+    # square of 1e6 + x lies 1e-12 below the column and the rounding below dropped it (LM 5.5 instead of 151.8 at 1e7)
+    binary = [bool(np.all(np.isin(Xs[:, j], (0.0, Xs[:, j].max())))) for j in range(Xs.shape[1])]
+    Xs = np.column_stack([Xs[:, j] if binary[j] else Xs[:, j] - Xs[:, j].mean() for j in range(Xs.shape[1])]) \
+        if Xs.shape[1] else Xs
+    Xs = Xs / np.maximum(np.max(np.abs(Xs), axis=0), 1e-300)
     cols = [np.ones(n)] + [Xs[:, j] for j in range(Xs.shape[1])]
     cols += [Xs[:, i] * Xs[:, j] for i in range(Xs.shape[1]) for j in range(i, Xs.shape[1])]
     M = np.column_stack(cols)
@@ -1012,19 +1018,22 @@ def _ar_test(yy, W, Z, robust):
     return float(w.statistic), float(w.pvalue)
 
 
-def _ar_grid(yv, xv, W, Z, b0s, robust):
+def _ar_grid(yv, xv, W, Z, b0s, robust, centre_b=0.0):
     """p-values of the Anderson-Rubin test of β = b0 for every b0 in b0s, in one pass (v2.6.13, review r1-A A8: one
     statsmodels fit per grid point made iv_report 2-3 times slower with HC3). The residuals of y − b0·x on [W, Z] are
     e_y − b0·e_x, so the HC3 (or classical) covariance of the Z block is a quadratic in b0; the result equals
-    _ar_test point by point (checked in the tests)."""
+    _ar_test point by point (checked in the tests). The expansion is around centre_b (the 2SLS estimate in iv_report;
+    review r2 R3: around 0 the quadratic cancelled when β·sd(x) was 1e7 times sd(u)); a grid point whose covariance is
+    not positive definite gets p = NaN."""
     X = np.column_stack([W, Z])
     n, kw, q = X.shape[0], W.shape[1], Z.shape[1]
     A = np.linalg.pinv(X)                           # (X'X)⁻¹X' on the column space, as statsmodels' pinv fit
     rank = int(np.linalg.matrix_rank(X))
     Az = A[kw:]
-    ey, ex = yv - X @ (A @ yv), xv - X @ (A @ xv)
-    by, bx = Az @ yv, Az @ xv
-    b0s = np.asarray(b0s, dtype=float)
+    yc = yv - centre_b * xv
+    ey, ex = yc - X @ (A @ yc), xv - X @ (A @ xv)
+    by, bx = Az @ yc, Az @ xv
+    b0s = np.asarray(b0s, dtype=float) - centre_b
     bz = by[None, :] - b0s[:, None] * bx[None, :]                       # (G, q)
     if robust:
         h = np.sum(X * A.T, axis=1)
@@ -1034,7 +1043,10 @@ def _ar_grid(yv, xv, W, Z, b0s, robust):
     else:
         ssr = ey @ ey - 2 * b0s * (ey @ ex) + b0s ** 2 * (ex @ ex)
         V = (ssr / (n - rank))[:, None, None] * (Az @ Az.T)[None]
-    F = np.einsum("gi,gi->g", bz, np.linalg.solve(V, bz[..., None])[..., 0]) / q
+    ok = np.linalg.eigvalsh(V)[:, 0] > 0
+    F = np.full(len(b0s), np.nan)
+    if ok.any():
+        F[ok] = np.einsum("gi,gi->g", bz[ok], np.linalg.solve(V[ok], bz[ok][..., None])[..., 0]) / q
     return stats.f.sf(F, q, n - rank)
 
 
@@ -1051,6 +1063,28 @@ def _formula_rows(formula: str, data: pd.DataFrame) -> pd.DataFrame:
     return data.dropna(subset=used) if used else data
 
 
+def _cf_degenerate(XE, Wb, Zb, amp_ref=1.0, centre=True):
+    """endogeneity_test's rules for degenerate endogenous regressors, on [Wb, Zb] (v2.6.13): returns the kind (None,
+    "perfect" or "joint"), the list of perfect columns (positions), an orthonormal basis of [Wb, Zb] and the first-stage
+    residuals."""
+    eps = np.finfo(float).eps
+    n, k = XE.shape
+    B = np.column_stack([Wb, Zb])
+    UB, sB, _ = np.linalg.svd(B / np.maximum(np.max(np.abs(B), axis=0), 1e-300), full_matrices=False)
+    QB = UB[:, : int(np.sum(sB > _rank_tol(sB.max(), n)))]
+    V = XE - QB @ (QB.T @ XE)
+    perfect = [j for j in range(k) if _new_dirs(XE[:, [j]], QB, 1.0, amp_ref, n, centre=centre)[1] == 0]
+    if perfect:
+        return "perfect", perfect, QB, V
+    if k > 1 and _new_dirs(XE, QB, 1.0, amp_ref, n, centre=centre)[1] < k:
+        return "joint", [], QB, V
+    if k > 1:
+        sv = np.linalg.svd(V / np.maximum(np.linalg.norm(V, axis=0), 1e-300), compute_uv=False)
+        if sv.min() < np.sqrt(eps) * sv.max():
+            return "joint", [], QB, V
+    return None, [], QB, V
+
+
 def _cf_test(yv, XE, Wb, Zb, cov, amp_ref=1.0, centre=True):
     """Control-function (regression) test of exogeneity of the columns XE in the 2SLS model with exogenous columns
     Wb and instruments Zb (v2.6.13, iv_report): v̂ = residuals of XE on [Wb, Zb]; regress y on [Wb, XE net of Wb, v̂]
@@ -1058,20 +1092,10 @@ def _cf_test(yv, XE, Wb, Zb, cov, amp_ref=1.0, centre=True):
     endogeneity_test (review r1-A A3): an endogenous column with no direction outside span(W, Z) ("perfect"), the
     block with fewer directions than columns, or residuals whose columns at unit norm have σ_min/σ_max below √eps
     ("jointly degenerate"). Returns F, p and None, "perfect" or "joint" (then F and p are NaN)."""
-    eps = np.finfo(float).eps
-    B = np.column_stack([Wb, Zb])
-    UB, sB, _ = np.linalg.svd(B / np.maximum(np.max(np.abs(B), axis=0), 1e-300), full_matrices=False)
-    QB = UB[:, : int(np.sum(sB > _rank_tol(sB.max(), len(yv))))]
-    n, k = len(yv), XE.shape[1]
-    if any(_new_dirs(XE[:, [j]], QB, 1.0, amp_ref, n, centre=centre)[1] == 0 for j in range(k)):
-        return float("nan"), float("nan"), "perfect"
-    if k > 1 and _new_dirs(XE, QB, 1.0, amp_ref, n, centre=centre)[1] < k:
-        return float("nan"), float("nan"), "joint"
-    V = XE - QB @ (QB.T @ XE)
-    if k > 1:
-        sv = np.linalg.svd(V / np.maximum(np.linalg.norm(V, axis=0), 1e-300), compute_uv=False)
-        if sv.min() < np.sqrt(eps) * sv.max():
-            return float("nan"), float("nan"), "joint"
+    kind, perfect, QB, V = _cf_degenerate(XE, Wb, Zb, amp_ref, centre)
+    if kind:
+        return float("nan"), float("nan"), kind
+    k = XE.shape[1]
     Xn = XE - Wb @ np.linalg.lstsq(Wb, XE, rcond=None)[0] if Wb.shape[1] else XE
     Xt = np.column_stack([Wb, Xn, V])
     Xt = Xt / np.maximum(np.linalg.norm(Xt, axis=0), 1e-300)
@@ -1180,7 +1204,9 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     if near:
         warn.append(", ".join(exog_names[j] for j in near) + (" varies" if len(near) == 1 else " vary")
                     + f" by less than {_NEAR_CONSTANT:g} of its size: such a column carries almost no information in "
-                    "floating point and can pass for a constant; centre it (subtract its mean) and fit again")
+                    "floating point and can pass for a constant; if it is meant to be the constant, write it exactly "
+                    "(1 in the formula) instead of computing it; if it is data, centre it (subtract its mean) and fit "
+                    "again")
     if not has_const:
         warn.append("the IV model has no constant (write 'y ~ 1 + ...'); OLS is fitted without one too, to compare like "
                     "with like")
@@ -1233,10 +1259,19 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         Wk, _, _, Zk, _, _, _, _ = _iv_basis(W0[keep_r], Zr[keep_r], int(keep_r.sum()), add_const=has_const)
         if Zk.shape[1] < Zb.shape[1]:
             Wk, Zk = W0[keep_r], Zr[keep_r]
+    elif robust and not keep_r.all():
+        # review r2 R4: too few rows left once they are out; the robust regressions of the skill are not computed
+        warn.append("rows fitted exactly by the exogenous regressors leave too few rows for the robust Anderson-Rubin, "
+                    "control-function and HC3 regressions: they are not computed (NaN)")
+        Wk, Zk = Wb[keep_r], Zb[keep_r]
     else:
         keep_r = np.ones(n_used, bool)
         Wk, Zk = Wb, Zb
+    skip_rob = robust and keep_r.sum() <= Wb.shape[1] + Zb.shape[1] + 1
     yk, XEk = yv[keep_r], XE[keep_r]
+    # review r2 R2: the degenerate cases decided once, for both covariance modes (a perfect first stage showed F 2.8e32
+    # "strong" with "unadjusted", and Wu-Hausman NaN with no word)
+    deg_kind, deg_perfect, _, _ = _cf_degenerate(XE, Wb, Zb, amp_wz, has_const) if n_zdir == q_instr else (None, [], 0, 0)
     # leverage 1 from the instruments: the robust covariances are degenerate on that row (resid 0 there); 1e-8 as for
     # HC0/HC1 in endogeneity_test (the first-stage F here is HC0, the control-function test HC1)
     lev_pos = np.flatnonzero((h_fs > 1 - 1e-8) & (hz > 1e-4)) if robust else np.zeros(0, int)
@@ -1257,11 +1292,15 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         f_classic = _fs_wald("nonrobust")
-        f_hc3 = _fs_wald("HC3") if robust and not lev_rows and h_max >= _ROBUST_HIGH_LEVERAGE else None
+        f_hc3 = (_fs_wald("HC3") if robust and not lev_rows and not skip_rob and h_max >= _ROBUST_HIGH_LEVERAGE
+                 else None)
     fs = pd.DataFrame({"partial F": fstat, "partial F p": fpval, "partial R²": diag["partial.rsquared"]},
                       index=diag.index)
     if lev_rows:
         fs["partial F"], fs["partial F p"] = np.nan, np.nan
+    for j in deg_perfect:
+        fs.iloc[j, fs.columns.get_loc("partial F")] = np.inf
+        fs.iloc[j, fs.columns.get_loc("partial F p")] = 0.0
     if f_hc3 is not None:
         fs["partial F (HC3)"] = f_hc3
 
@@ -1275,7 +1314,8 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         # stage; HC3 held at most 9%. The label follows the smaller of the two.
         fs["strength"] = [_label(min(a_, b_)) + " [HC3 F, high-leverage row]" for a_, b_ in zip(fs["partial F"], f_hc3)]
     else:
-        fs["strength"] = [_label(f) for f in fs["partial F"]]
+        fs["strength"] = ["perfect first stage (no endogenous variation left; see the warning)" if f == np.inf
+                          else _label(f) for f in fs["partial F"]]
     if q_instr > 1:
         fs["strength"] += " [104.7 is the one-instrument threshold of Lee et al.]"
     weak_f = fs["partial F"] if f_hc3 is None else np.minimum(fs["partial F"], f_hc3)
@@ -1319,26 +1359,29 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         # 4.5-7.9% in every cell). Its value stays in "endogeneity_linearmodels" (comparable with Stata).
         st_lm, p_lm = _lm(lambda: iv.wooldridge_regression)
         lm_endo = {"test": "Wooldridge robust regression (linearmodels)", "statistic": st_lm, "p": p_lm}
-        if lev_rows:
-            st_e, p_e = float("nan"), float("nan")
+        if lev_rows or skip_rob or deg_kind:
+            st_e, p_e, k_cf = float("nan"), float("nan"), deg_kind
         else:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 st_e, p_e, k_cf = _cf_test(yk, XEk, Wk, Zk, "HC1", amp_ref=amp_wz, centre=has_const)
         tests.append({"test": "endogeneity (control function, HC1)", "H0": "regressors are exogenous: OLS is consistent",
                       "statistic": st_e, "p": p_e})
-        if k_cf == "perfect":
-            warn.append("an endogenous regressor is an exact linear combination of the exogenous regressors and the "
-                        "instruments (perfect first stage, as endogeneity_test decides it): the endogeneity test is not "
-                        "defined (NaN)")
-        elif k_cf == "joint":
-            warn.append("the endogenous regressors are jointly degenerate (a combination of them is, to within √eps, a "
-                        "combination of the exogenous regressors and the instruments, as endogeneity_test decides it): "
-                        "the endogeneity test is not defined (NaN)")
     else:
-        st_wh, p_wh = _lm(lambda: iv.wu_hausman())
+        st_wh, p_wh = (float("nan"), float("nan")) if deg_kind else _lm(lambda: iv.wu_hausman())
         tests.append({"test": "endogeneity (Wu-Hausman)", "H0": "regressors are exogenous: OLS is consistent",
                       "statistic": st_wh, "p": p_wh})
+        k_cf = deg_kind
+    if k_cf == "perfect":
+        warn.append("an endogenous regressor is an exact linear combination of the exogenous regressors and the "
+                    "instruments (perfect first stage, as endogeneity_test decides it): the endogeneity test is not "
+                    "defined (NaN)")
+    elif k_cf == "joint":
+        warn.append("the endogenous regressors are jointly degenerate (a combination of them is, to within √eps, a "
+                    "combination of the exogenous regressors and the instruments, as endogeneity_test decides it): "
+                    "the endogeneity test is not defined (NaN)")
+    elif not robust and np.isnan(tests[0]["p"]):
+        warn.append("the Wu-Hausman test could not be computed (NaN): linearmodels could not compute it on these data")
     q = q_instr - n_endog
     # review r1-A A6: k counts directions (as endogeneity_test), not columns
     k_n = (Wb.shape[1] + Zb.shape[1]) / n_used
@@ -1348,8 +1391,11 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
                       "H0": "the extra instruments are valid given that the others are",
                       "statistic": float("nan") if lev_rows else st_ov,
                       "p": float("nan") if lev_rows else p_ov})
+        if not lev_rows and np.isnan(p_ov):
+            warn.append("the overidentification test could not be computed (NaN): linearmodels could not compute it "
+                        "on these data")
         if robust and not lev_rows and k_n >= _AVG_LEVERAGE:
-            warn.append(f"average leverage k/n = {k_n:.2f} (first-stage columns over rows): the robust "
+            warn.append(f"average leverage k/n = {k_n:.2f} (first-stage directions over rows): the robust "
                         "overidentification test rejects too often in that case (simulated size 8-12% under valid "
                         "instruments with k/n from 0.19 to 0.44, 4-8% below); read a rejection with care")
     tests = pd.DataFrame(tests).set_index("test")
@@ -1360,17 +1406,18 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     ar_cov = "HC3" if robust else "nonrobust"
     if n_endog == 1:
         xv = XE[:, 0]
-        if lev_rows:
+        if lev_rows or skip_rob:
+            why = "a row with leverage 1" if lev_rows else "too few rows"
             ar = {"estimand": endog_cols[0], "ci_low": np.nan, "ci_high": np.nan, "pieces": [],
-                  "shape": "not computed (a row with leverage 1, see the warning)", "p_at_zero": np.nan,
+                  "shape": f"not computed ({why}, see the warning)", "p_at_zero": np.nan,
                   "level": 1 - alpha, "cov": ar_cov}
         else:
             b, s = float(iv.params[endog_cols[0]]), float(iv.std_errors[endog_cols[0]])
             grid = np.linspace(b - 20 * s, b + 20 * s, ar_grid)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                pv = _ar_grid(yk, XEk[:, 0], Wk, Zk, grid, robust)
-                p_zero = float(_ar_grid(yk, XEk[:, 0], Wk, Zk, [0.0], robust)[0])
+                pv = _ar_grid(yk, XEk[:, 0], Wk, Zk, grid, robust, centre_b=b)
+                p_zero = float(_ar_grid(yk, XEk[:, 0], Wk, Zk, [0.0], robust, centre_b=b)[0])
             acc = pv > alpha
             pieces = []
             if acc.any():
@@ -1399,14 +1446,15 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     else:
         # v2.6.12: with k endogenous regressors the AR set is k-dimensional; the joint test of β = 0 is one
         # regression (y on W and Z, F on Z), valid however weak the instruments are
-        if lev_rows:
+        if lev_rows or skip_rob:
             f0, p0 = float("nan"), float("nan")
         else:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 f0, p0 = _ar_test(yk, Wk, Zk, robust)
+        # review r2 R6: df by directions (as the regression uses them), on the rows the regression used
         ar = {"estimand": endog_cols, "joint_F_at_zero": f0, "joint_p_at_zero": p0,
-              "df": (q_instr, n_used - W0.shape[1] - q_instr), "pieces": None,
+              "df": (Zk.shape[1], int(keep_r.sum()) - Wk.shape[1] - Zk.shape[1]), "pieces": None,
               "shape": f"not computed (with {n_endog} endogenous regressors the set is {n_endog}-dimensional)",
               "level": 1 - alpha, "cov": ar_cov}
     out = {"table": table, "first_stage": fs, "tests": tests, "anderson_rubin": ar, "n": n_used,

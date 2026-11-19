@@ -827,7 +827,7 @@ def rdd(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: float | None =
     rd_warns = []
     if first and first["F"] == np.inf:
         rd_warns.append("perfect compliance inside the bandwidth: the treatment is an exact function of the cutoff "
-                        f"indicator (first-stage jump {first['jump_in_treatment']:.3f}), so the first stage is exact "
+                        f"indicator (first-stage jump {first['jump_in_treatment']:.4g}), so the first stage is exact "
                         "(F = inf, not a strength measure) and the fuzzy estimate is the sharp jump in the outcome "
                         "divided by that jump (the same number only when the jump is 1)")
     if bw_method.startswith("Imbens-Kalyanaraman ("):

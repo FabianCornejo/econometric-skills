@@ -407,7 +407,7 @@ class _R:
         self.model = _M(X)
 
 
-check("objects without k_constant: the fallback finds a constant column (up to 1e-12) and only then",
+check("objects without k_constant: the fallback finds a constant column (up to 64·eps) and only then",
       sp._has_intercept(_R(np.column_stack([np.full(n, 2.0), xo])))
       and not sp._has_intercept(_R(np.column_stack([w6, xo]))))
 
@@ -447,6 +447,57 @@ for rob in (True, False):
     check(f"AR in one pass = one fit per grid point ({'HC3' if rob else 'classical'}, 41 points, 1e-9)",
           np.max(np.abs(pv_g - pv_p) / np.maximum(pv_p, 1e-300)) < 1e-9)
 
+# ============================================================ 9c. review r2: White with an offset, exact first stage,
+# AR far from zero, tiny samples
+rng = np.random.default_rng(2613204)
+n = 500
+zr, ur = rng.normal(size=(2, n))
+ur = ur * (0.5 + 0.6 * zr ** 2)
+from statsmodels.stats.diagnostic import het_white  # noqa: E402  (correct here: no collinear products)
+ref_w = het_white(sm.OLS(1 + 0.3 * zr + ur, sm.add_constant(zr)).fit().resid, sm.add_constant(zr))[0]
+ok_w = []
+for c_ in (0.0, 1e6, 1e7):
+    t_, _ = quiet(dg.ols_diagnostics, sm.OLS(1 + 0.3 * zr + ur, sm.add_constant(c_ + zr)).fit())
+    ok_w.append(rel(t_.set_index("Test").loc["White (full)", "Statistic"], ref_w) < 1e-8)
+check("White with x = c + z, c = 0, 1e6, 1e7: the statsmodels value on centred x (relative 1e-8; r2: 5.5 at 1e7)",
+      all(ok_w), ok_w)
+rng = np.random.default_rng(261306)
+n = 200
+z1, z2, w, e, u = (rng.normal(size=n) for _ in range(5))
+d = pd.DataFrame({"y": z1 + 2 * z2 + w + u, "x": z1 + 2 * z2, "z1": z1, "z2": z2, "w": w})
+for cov in ("robust", "unadjusted"):
+    rx, _ = quiet(dg.iv_report, "y ~ 1 + w + [x ~ z1 + z2]", d, cov_type=cov, ar_grid=101)
+    check(f"x = z1 + 2·z2 exactly, {cov}: first-stage F = inf 'perfect first stage', endogeneity NaN with the warning "
+          "(r2: F 2.8e32 'strong', Wu-Hausman NaN with no word)",
+          rx["first_stage"]["partial F"].iloc[0] == np.inf
+          and rx["first_stage"]["strength"].iloc[0].startswith("perfect first stage")
+          and np.isnan(rx["tests"]["p"].iloc[0]) and any("perfect first stage" in m for m in rx["warnings"]),
+          (rx["first_stage"], rx["tests"], rx["warnings"]))
+rng = np.random.default_rng(26133)
+n = 200
+z, v, u = rng.normal(size=(3, n))
+x = z + v
+d = pd.DataFrame(dict(y=3e7 * x + u, x=x, z=z))
+rb, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d)
+Xb = np.column_stack([np.ones(n), z])
+pin = stats.f.sf(wald_hc(d.y.to_numpy() - rb["table"].loc["x", "2SLS"] * x, Xb, [1], "HC3"), 1, n - 2)
+check("β = 3e7 with sd(u) = 1 (r2: LinAlgError or a 'disjoint' set): a bounded AR set around 2SLS, and the HC3 p at "
+      "the 2SLS estimate (by hand) above alpha", rb["anderson_rubin"]["shape"] == "bounded interval"
+      and rb["anderson_rubin"]["ci_low"] < rb["table"].loc["x", "2SLS"] < rb["anderson_rubin"]["ci_high"] and pin > 0.05,
+      rb["anderson_rubin"])
+bad = 0
+for sd_ in range(40):
+    rng = np.random.default_rng([2613, 6, sd_])
+    n = 6
+    z, w, v, u = rng.normal(size=(4, n))
+    d1 = np.zeros(n); d1[2] = 1.0
+    d = pd.DataFrame(dict(y=1 + z + v + u, x=z + v, z=z, w=w, d1=d1))
+    try:
+        quiet(dg.iv_report, "y ~ 1 + w + d1 + [x ~ z]", d, ar_grid=51)
+    except Exception:  # noqa: BLE001
+        bad += 1
+check("n = 6 with an exogenous single-row dummy: no exception in 40 samples (r2: 2 of 40 stopped)", bad == 0, bad)
+
 # ============================================================ 10. rdd fuzzy with perfect compliance
 rng = np.random.default_rng(261312)
 n = 400
@@ -461,8 +512,8 @@ check("perfect compliance: F = inf, the warning, and the fuzzy estimate = the sh
       and rel(rf["estimate"], rs["estimate"]) < 1e-8 and "F = inf" in tf, (rf["F"], rf["warnings"]))
 d["t_inv"] = 1.0 - d.t
 rfi, _ = quiet(causal.rdd, d, "y", "x", 0.0, h=0.8, fuzzy="t_inv")
-check("treatment coded 1 below the cutoff: F = inf, the warning gives the jump −1.000, and fuzzy = −sharp (1e-8)",
-      rfi["F"] == np.inf and any("first-stage jump -1.000" in m for m in rfi["warnings"])
+check("treatment coded 1 below the cutoff: F = inf, the warning gives the jump −1, and fuzzy = −sharp (1e-8)",
+      rfi["F"] == np.inf and any("first-stage jump -1)" in m for m in rfi["warnings"])
       and rel(rfi["estimate"], -rs["estimate"]) < 1e-8, (rfi["estimate"], rs["estimate"], rfi["warnings"]))
 for k_ns in (40, 1):
     t2 = d.t.to_numpy().copy(); t2[np.flatnonzero((d.x.to_numpy() >= 0) & (d.x.to_numpy() <= 0.8))[:k_ns]] = 0.0
