@@ -238,6 +238,18 @@ check("refuses misaligned indexes", raises(CI, s, pd.Series(np.zeros(50), index=
 check("split refuses a default calibration block below 19 errors", raises(CI, s.iloc[:30], s.iloc[:30] * 0,
                                                                           method="split", show=False))
 
+# split with h > 1: the first row with an interval is the first whose origin has seen the whole calibration block
+e = pd.Series(np.random.default_rng(27110).standard_normal(80))
+for h_ in (1, 3):
+    tab_ = CI(e, e * 0, method="split", calib_size=40, h=h_, show=False)["table"]
+    check(f"split, h = {h_}: rows up to 40 + {h_} - 2 have no interval, row 40 + {h_} - 1 has one",
+          tab_["upper"].iloc[:40 + h_ - 1].isna().all() and np.isfinite(tab_["upper"].iloc[40 + h_ - 1]))
+# the slack that ACI prints uses h * gamma for h > 1 (and gamma for h = 1)
+for h_ in (1, 4):
+    r_ = CI(e, e * 0, h=h_, gamma=0.05, show=False)
+    want = (0.95 + h_ * 0.05) / (r_["n_evaluated"] * 0.05)
+    check(f"aci, h = {h_}: printed slack (0.95 + h·gamma)/(T·gamma) = {want:.4f}", abs(r_["guarantee"]["slack"] - want) < 1e-15)
+
 # ============================================================ 9. findings (T3), one case on each side
 lv = lambda r: [w["level"] for w in r["warnings"]]  # noqa: E731
 rng = np.random.default_rng(27108)
@@ -267,6 +279,14 @@ big = pd.Series(np.r_[rng.standard_normal(100), 5 * rng.standard_normal(100)])
 w = CI(big, big * 0, method="split", calib_size=100, show=False)["warnings"]
 check("split after a scale jump: warning that empirical coverage is below the level",
       any("empirical coverage" in x["message"] and x["level"] == "warning" for x in w))
+# coverage below the level but inside its Wilson interval: no warning (47 of 50 = 94%, Wilson upper bound about 98%)
+cal = np.linspace(0.01, 1.0, 100)
+tst = np.r_[np.full(47, 0.5), np.full(3, 2.0)]
+edge = pd.Series(np.r_[cal, tst])
+r_ = CI(edge, edge * 0, method="split", calib_size=100, show=False)
+check(f"split, coverage {r_['coverage']:.0%} below 95% but inside its Wilson interval: no under-coverage warning",
+      abs(r_["coverage"] - 0.94) < 1e-12 and r_["coverage_ci"][1] > 0.95
+      and not any("empirical coverage" in x["message"] for x in r_["warnings"]))
 same = pd.Series(rng.standard_normal(200))
 check("split, same scale: no under-coverage warning",
       not any("empirical coverage" in x["message"] for x in CI(same, same * 0, method="split", calib_size=100,

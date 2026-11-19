@@ -82,6 +82,8 @@ check("study_card: different fields are refused without amend, and the message n
       bool(msg) and "estimand" in msg and "amend=True" in msg and p.read_bytes() == before, msg)
 check("study_card: amend without a reason is refused",
       bool(raises(rp.study_card, path=p, amend=True, show=False, **{**CARD, "estimand": "ATE"})))
+check("study_card: amend with a blank reason is refused",
+      bool(raises(rp.study_card, path=p, amend=True, reason="   ", show=False, **{**CARD, "estimand": "ATE"})))
 r = rp.study_card(path=p, amend=True, reason="ATE asked by the client before any estimate", show=False,
                   **{**CARD, "estimand": "ATE on log hourly wage"})
 on_disk = json.loads(p.read_text(encoding="utf-8"))
