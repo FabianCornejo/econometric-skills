@@ -39,6 +39,28 @@ SKILL_VERSION = "2.6.13"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
+LEVELS = ("warning", "notice")
+
+
+def _finding(level: str, message: str, action: str) -> dict:
+    """One entry of `warnings` in the output of functions added from v2.7.0 on (T3): what was found,
+    how serious it is ("warning": the number may mislead if read as it is; "notice": context the reader
+    needs) and what to do about it. Relay all three to the user."""
+    if level not in LEVELS:
+        raise ValueError(f"level must be one of {LEVELS}")
+    return {"level": level, "message": message, "action": action}
+
+
+def _print_findings(warnings_: list, indent: str = "  ") -> None:
+    """Print findings (dicts from `_finding`, or plain strings from older functions) with level and action."""
+    for w in warnings_ or []:
+        if isinstance(w, dict):
+            print(f"{indent}{w['level'].upper()}: {w['message']}")
+            print(f"{indent}  action: {w['action']}")
+        else:
+            print(f"{indent}WARNING: {w}")
+
+
 def coef_table(res) -> pd.DataFrame:
     """Uniform coef/se/p table from different result objects."""
     if isinstance(res, pd.DataFrame):
