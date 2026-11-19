@@ -16,8 +16,10 @@ rescale_hint(result, X)                  flags coefficients that need unit resca
 
 Reproducibility and verification
 --------------------------------
-run_manifest(data, files, seed, ...)     data and file hashes, package and skill versions, seed, platform:
-                                         what another person needs to reproduce a number (JSON-ready dict)
+study_card(path, **fields)               the study card written to a file with time and sha256 BEFORE estimating;
+                                         changes only with amend=True and a reason (kept in the file)
+run_manifest(data, files, seed, ...)     data and file hashes, package and skill versions, seed, platform, the study
+                                         card's hash: what another person needs to reproduce a number (JSON-ready dict)
 cross_check(estimates, se, ...)          the same quantity computed by independent routes: agreement table
                                          and a warning when they differ by more than tol_se standard errors
 """
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import sys
 from datetime import datetime, timezone
@@ -35,8 +38,30 @@ import numpy as np
 import pandas as pd
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
-SKILL_VERSION = "2.6.13"
+SKILL_VERSION = "2.7.0"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
+
+
+LEVELS = ("warning", "notice")
+
+
+def _finding(level: str, message: str, action: str) -> dict:
+    """One entry of `warnings` in the output of functions added from v2.7.0 on (T3): what was found,
+    how serious it is ("warning": the number may mislead if read as it is; "notice": context the reader
+    needs) and what to do about it. Relay all three to the user."""
+    if level not in LEVELS:
+        raise ValueError(f"level must be one of {LEVELS}")
+    return {"level": level, "message": message, "action": action}
+
+
+def _print_findings(warnings_: list, indent: str = "  ") -> None:
+    """Print findings (dicts from `_finding`, or plain strings from older functions) with level and action."""
+    for w in warnings_ or []:
+        if isinstance(w, dict):
+            print(f"{indent}{w['level'].upper()}: {w['message']}")
+            print(f"{indent}  action: {w['action']}")
+        else:
+            print(f"{indent}WARNING: {w}")
 
 
 def coef_table(res) -> pd.DataFrame:
@@ -167,13 +192,167 @@ def _hash_frame(df: pd.DataFrame) -> str:
     return h.hexdigest()
 
 
+CARD_FIELDS = ("question", "estimand", "design", "assumption", "y", "treatment", "X", "W", "Z", "data", "threats",
+               "robustness_plan", "alpha", "family_of_tests", "horizon", "loss", "benchmarks", "window", "mde")
+CARD_REQUIRED = ("question", "estimand", "design")
+
+
+def _canonical(obj) -> bytes:
+    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _card_hash(card: dict) -> str:
+    return hashlib.sha256(_canonical({k: v for k, v in card.items() if k != "sha256"})).hexdigest()
+
+
+def _plain(x):
+    """numpy scalars to Python numbers, for JSON (np.int64 and np.float64 alike)."""
+    if isinstance(x, np.generic):
+        return x.item()
+    raise TypeError(f"{type(x).__name__} is not text, a number or a list")
+
+
+def _read_card(path: Path) -> dict:
+    """The card in `path`; ValueError with the reason if it is not a readable card (empty, not JSON, a folder)."""
+    try:
+        card = json.loads(Path(path).read_bytes().decode("utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        raise ValueError(f"{path} could not be read as a study card ({type(e).__name__}: {e})") from None
+    if not isinstance(card, dict) or not isinstance(card.get("fields"), dict):
+        raise ValueError(f"{path} is not a study card written by reporting.study_card")
+    return card
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    import tempfile
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent if str(path.parent) else ".")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except OSError as e:
+        raise ValueError(f"the study card could not be written to {path} ({e})") from None
+
+
+def _blank(v) -> bool:
+    """A required field must be text, or a list of texts, with something in it (0, False and [" "] are blank)."""
+    if isinstance(v, str):
+        return not v.strip()
+    if isinstance(v, list):
+        return not v or all(_blank(x) for x in v)
+    return True
+
+
+def study_card(path: str = "study_card.json", amend: bool = False, reason: str | None = None, show: bool = True,
+               **fields) -> dict:
+    """Write the study card (references/workflow.md §0) to a file BEFORE any estimate, with the time and a
+    sha256 of its content, so that "design before data" and "declare the family of tests" can be checked
+    afterwards: run_manifest(study_card=path) records the hash next to the results.
+
+    fields: question, estimand, design (required, not blank); assumption, y, treatment, X, W, Z, data,
+    threats, robustness_plan, alpha, family_of_tests, mde; for a forecast, horizon, loss, benchmarks and
+    window. Values are text, finite numbers or lists (JSON; numpy numbers are converted). Other names are
+    kept and reported as a notice.
+
+    Re-running the same script is safe: with the same fields the file is left untouched (same time, same
+    hash). Different fields are refused, because a card that changes after the results are seen is no
+    longer a plan; pass amend=True and a reason to change it: the previous version, its skill version and
+    the reason are kept in the file's `amendments`, never deleted, and the manifest reports them. A card
+    edited by hand (stored hash different from the content) is reported; amending it records that it had
+    been edited by hand, and run_manifest keeps reporting it.
+
+    What the card can and cannot show: the hash catches an edit made outside this function and the
+    amendment log keeps every recorded change; it does not stop a deliberate rewrite (anyone can recompute
+    a hash or delete the file). It is evidence of order for an honest workflow; for a third party, share
+    the card (or commit it to version control) before estimating.
+
+    Returns path, sha256, created_utc, fields, amendments, `used` and `warnings` (level, message, action)."""
+    p = Path(path)
+    try:
+        fields = json.loads(json.dumps(fields, default=_plain, allow_nan=False))
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"study card fields must be text, finite numbers or lists: {e}") from None
+    missing = [f for f in CARD_REQUIRED if _blank(fields.get(f))]
+    if missing:
+        raise ValueError(f"the study card needs {', '.join(missing)} (question, estimand and design are required and "
+                         "cannot be blank)")
+    warns = []
+    extra = sorted(set(fields) - set(CARD_FIELDS))
+    if extra:
+        warns.append(_finding("notice", f"non-standard study card fields kept as given: {', '.join(extra)}",
+                              f"check the spelling; the standard fields are {', '.join(CARD_FIELDS)}"))
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    action = "written"
+    if p.exists():
+        card = _read_card(p)
+        intact = card.get("sha256") == _card_hash(card)
+        same = _canonical(card["fields"]) == _canonical(fields)
+        if not intact:
+            warns.append(_finding("warning", f"{p.name} was changed outside reporting.study_card (its stored hash does not "
+                                  "match its content)", "say so in the report; restore the card from version control, or "
+                                  "record the change with amend=True and a reason (the amendment notes the hand edit)"))
+        if same and intact:
+            action = "unchanged"
+            if amend:
+                warns.append(_finding("notice", "amend=True but the fields are the ones already on file: nothing to amend, "
+                                      "the reason was not recorded", "pass amend=True only with the changed fields"))
+        elif not amend:
+            if same:
+                action = "unchanged"
+            else:
+                changed = sorted(k for k in set(card["fields"]) | set(fields)
+                                 if _canonical(card["fields"].get(k)) != _canonical(fields.get(k)))
+                hand = (" The card on file was edited by hand (its hash does not match): if the script holds the plan "
+                        "as written, restore it, or record the difference with amend=True and a reason." if not intact else "")
+                raise ValueError(f"{p} already holds a study card (created {card.get('created_utc')}) and these fields "
+                                 f"differ: {', '.join(changed)}. A plan changed after seeing results is not a plan: pass "
+                                 "amend=True and reason='...' to record the change." + hand)
+        else:
+            if not (reason and str(reason).strip()):
+                raise ValueError("amend=True needs a reason (why the plan changes, and whether results had been seen)")
+            card.setdefault("amendments", []).append({
+                "replaced_fields": card["fields"], "replaced_sha256": card.get("sha256"),
+                "replaced_skill_version": card.get("skill_version"), "edited_by_hand_before": not intact,
+                "amended_utc": now, "reason": str(reason)})
+            card["fields"] = fields
+            card["skill_version"] = SKILL_VERSION
+            card["sha256"] = _card_hash(card)
+            _write_atomic(p, json.dumps(card, indent=2, ensure_ascii=False))
+            action = "amended"
+    else:
+        card = {"fields": fields, "created_utc": now, "skill_version": SKILL_VERSION, "amendments": []}
+        card["sha256"] = _card_hash(card)
+        _write_atomic(p, json.dumps(card, indent=2, ensure_ascii=False))
+    out = {"path": str(p), "sha256": card["sha256"], "created_utc": card["created_utc"], "fields": card["fields"],
+           "amendments": card.get("amendments", []), "action": action,
+           "used": {"path": str(p), "action": action, "skill_version": SKILL_VERSION}, "warnings": warns}
+    if show:
+        print(f"\nStudy card {action}: {p} (created {card['created_utc']}, sha256 {card['sha256'][:16]}…, "
+              f"{len(out['amendments'])} amendment(s))")
+        for k, v in card["fields"].items():
+            print(f"  {k}: {v}")
+        _print_findings(warns)
+    return out
+
+
 def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = None, seed=None,
-                 results: dict | None = None, notes: str = "", path: str | None = None, show: bool = True) -> dict:
+                 results: dict | None = None, notes: str = "", path: str | None = None, show: bool = True,
+                 study_card: str | None = None, simulated: bool = False) -> dict:
     """What another person needs to reproduce a number: sha256 of every data set used (DataFrames
     by content, files byte by byte), the versions of Python, the numerical packages and this
     skill, the random seed, the platform and the time, plus the headline results. Two runs that
     print the same hashes and versions should give the same numbers; if a number changes,
-    compare manifests first. path='manifest.json' also writes it to disk."""
+    compare manifests first. path='manifest.json' also writes it to disk.
+
+    Since v2.7.0: study_card='study_card.json' records the card's hash, creation time and amendments
+    (reporting.study_card), and a card edited by hand is a warning; data passed without the source file
+    in files= is a notice, because the DataFrame hash changes with any cleaning step and the file hash is
+    what lets another person check they start from the same data; simulated=True says the data were
+    simulated in the script (no file to hash: the seed reproduces them) and silences that notice. A path in
+    files= that does not exist is recorded as "missing" and is a warning. A card that cannot be read is a
+    warning, not an error, so the manifest is still written. Findings are in `warnings`."""
+    if not isinstance(simulated, (bool, np.bool_)):
+        raise ValueError("simulated must be True or False")
     frames = {"data": data} if isinstance(data, pd.DataFrame) else (data or {})
     man = {
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -187,6 +366,7 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
         "files": {},
         "results": {},
         "notes": notes,
+        "simulated": bool(simulated),
     }
     for p in _PACKAGES:
         try:
@@ -200,6 +380,51 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
         if isinstance(v, dict):
             v = {kk: vv for kk, vv in v.items() if kk in ("estimate", "se", "ci_low", "ci_high", "p", "n")}
         man["results"][k] = json.loads(json.dumps(v, default=lambda o: float(o) if np.isscalar(o) else str(o)))
+    warns = []
+    man["study_card"] = None
+    if study_card is not None:
+        cp = Path(study_card)
+        card = None
+        if not cp.is_file():
+            warns.append(_finding("warning", f"study card {cp} {'is not a file' if cp.exists() else 'not found'}: the design "
+                                  "cannot be shown to predate the results",
+                                  "write it with reporting.study_card before estimating, or say in the report that there was none"))
+        else:
+            try:
+                card = _read_card(cp)
+            except ValueError as e:
+                card = None
+                warns.append(_finding("warning", f"study card {cp} could not be read: {e}",
+                                      "restore the card written by reporting.study_card, or say in the report that it is lost"))
+        if card is not None:
+            recomputed = _card_hash(card)
+            amends = card.get("amendments", [])
+            man["study_card"] = {"path": str(cp), "sha256": card.get("sha256"), "sha256_recomputed": recomputed,
+                                 "intact": card.get("sha256") == recomputed, "created_utc": card.get("created_utc"),
+                                 "amendments": len(amends),
+                                 "amendment_reasons": [f"{a.get('amended_utc')}: {a.get('reason')}" for a in amends],
+                                 "edited_by_hand": [a.get("amended_utc") for a in amends if a.get("edited_by_hand_before")]}
+            if not man["study_card"]["intact"]:
+                warns.append(_finding("warning", f"study card {cp.name} was changed outside reporting.study_card after it was "
+                                      "written (hash mismatch)", "report the plan as amended without a record, or restore it"))
+            if man["study_card"]["edited_by_hand"]:
+                warns.append(_finding("warning", "the study card had been changed by hand before the amendment(s) of "
+                                      + ", ".join(man["study_card"]["edited_by_hand"]) + "; the replaced fields recorded "
+                                      "there are the hand-edited ones, not necessarily the original plan",
+                                      "say so in the report; the original plan is in version control or a shared copy, if any"))
+            if amends:
+                warns.append(_finding("notice", f"the study card was amended {len(amends)} time(s): "
+                                      + "; ".join(man["study_card"]["amendment_reasons"]),
+                                      "report each amendment and whether results had been seen before it"))
+    missing = [k for k, v in man["files"].items() if v == "missing"]
+    if missing:
+        warns.append(_finding("warning", f"file(s) not found, recorded as 'missing': {', '.join(missing)}",
+                              "pass the path of the file the data were read from (relative to the folder the script runs in)"))
+    if frames and not (files or []) and not simulated:
+        warns.append(_finding("notice", "data were hashed as DataFrames but no source file was passed in files=",
+                              "pass the file(s) the data were read from, files=[DATA_FILE], so the raw input can be checked "
+                              "(simulated=True when the data were simulated in the script)"))
+    man["warnings"] = warns
     if path:
         Path(path).write_text(json.dumps(man, indent=2))
     if show:
@@ -208,7 +433,12 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
             print(f"  data {k}: {v['rows']}x{v['cols']}, sha256 {v['sha256'][:16]}…")
         for k, v in man["files"].items():
             print(f"  file {k}: sha256 {v[:16]}…")
+        if man["study_card"]:
+            sc = man["study_card"]
+            print(f"  study card {sc['path']}: sha256 {str(sc['sha256'])[:16]}…, created {sc['created_utc']}, "
+                  f"{sc['amendments']} amendment(s){'' if sc['intact'] else ', CHANGED BY HAND'}")
         print("  packages: " + ", ".join(f"{k} {v}" for k, v in man["packages"].items() if v))
+        _print_findings(warns)
     return man
 
 

@@ -754,13 +754,16 @@ V2610_SUBS = (
     ("(`inference.power_curve`; `simulation.power_mde` when planning; after estimation, (z₁₋α/₂ + z_power) × the "
      "coefficient's SE, printed by the script).", "(`inference.power_curve`, `simulation.power_mde`)."),
 )
+# v2.7.0 (CHANGELOG v2.7.0) added where the manifest gets the data file and the study card; remove exactly that.
+V270_MAN = ", with the data file in `files=` (or `simulated=True`) and the study card in `study_card=`"
 sec4_v250 = sec4.replace(V251_ASK, "", 1).replace(V251_DID, "", 1)
+sec4_v250 = sec4_v250.replace(V270_MAN, "", 1)
 for piece in V266:
     sec4_v250 = sec4_v250.replace(piece, "", 1)
 sec4_v250 = sec4_v250.replace(V2610_NUM, "", 1)
 for now, then in V2610_SUBS:
     sec4_v250 = sec4_v250.replace(now, then, 1)
-check("SKILL.md section 4 (non-negotiable rules), minus the documented v2.5.1, v2.6.6 and v2.6.10 changes, is "
+check("SKILL.md section 4 (non-negotiable rules), minus the documented v2.5.1, v2.6.6, v2.6.10 and v2.7.0 changes, is "
       "byte-identical to v2.5.0 (SHA-256 pinned, works in a shallow CI checkout)", V251_ASK in sec4 and V251_DID in sec4
       and sec4.count(V2610_NUM) == 1 and all(sec4.count(now) == 1 for now, _ in V2610_SUBS)
       and "a cited source." + V2610_NUM + "\n" in sec4
@@ -768,6 +771,7 @@ check("SKILL.md section 4 (non-negotiable rules), minus the documented v2.5.1, v
       # each piece where the CHANGELOG says it is (review 1 of v2.6.6: moving the sentence passed the hash)
       and "(`specification.sensitivity`" + V266_OVB + ";" in sec4
       and "`dml_benchmark`" + V266_DML + ")." + V266_SUM in sec4
+      and sec4.count(V270_MAN) == 1 and "(data hashes, versions, seed)" + V270_MAN + "." in sec4
       and hashlib.sha256(sec4_v250.encode("utf-8")).hexdigest()
       == "a820ccbfddb871b324a556bb963a15e75ed594799a292d50c82ec217c83538f1")
 agent = (SKILL / "agents" / "econometrician.md").read_text(encoding="utf-8")

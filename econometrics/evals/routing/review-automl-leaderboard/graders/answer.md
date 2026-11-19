@@ -1,0 +1,6 @@
+---
+type: regex
+pattern: '^(?![\s\S]*(a conclus[aã]o est[aá] correta|resultado (é |est[aá] )?(promissor|s[oó]lido|robusto)|vamos para produ|recomendo usar o modelo|recomendo seguir com))(?=[\s\S]*(vi[eé]s de sele|selection bias|sele[cç][aã]o (do (melhor|vencedor|modelo)|entre)|escolh\w*[^.]{0,60}(mesm|infla)|superestim|inflad|infla(?![a-zà-ú])|otimista[^.]{0,80}(mesm|escolh|sele|ajust)|(mesm\w*|escolh\w*|sele\w*|ajust\w*)[^.]{0,80}otimista|maldi[cç][aã]o do vencedor|winner.?s curse|data snooping|sobreajuste à valida|(conjunto|amostra|base|dados) de teste (separad|independent|reservad|intocad|final|que n[aã]o)|test set intocado|untouched test|(faltou|falta|precisa de|reserv\w*|use|fa[cç]a)[^.]{0,30}(hold.?out|test set|conjunto de teste|amostra de teste)|hold.?out resolve|sem hold.?out|teste final independente|estimativa[^.]{0,25}otimista|n[aã]o usados na sele|mesmas (\d+ )?(dobras|partes) (que|em que) (reportam|medem|se mede)|valida[cç][aã]o (cruzada )?aninhada|nested|m[uú]ltiplas compara|compara[cç][oõ]es m[uú]ltiplas|dados (nunca vistos|n[aã]o usados)|fora da amostra|vazamento de informa[cç][aã]o para a m[eé]trica|mesmas (\d+ )?(dobras|partes)[^.]{0,60}(medir|reportar|avaliar|escolh|sele)))'
+flags: i
+target: last_message
+---

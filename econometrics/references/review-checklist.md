@@ -28,7 +28,7 @@ Every check you request names the function of this skill that runs it (`estimati
 - [ ] Bad controls (post-treatment variables)? Selection on the outcome? Reverse causality?
 - [ ] Staggered DiD estimated with plain TWFE? Treatment dates verified?
 - [ ] Covariates added to a TWFE regression to rescue parallel trends? Hidden linearity bias (`causal.twfe_covariate_diagnostic`, their controls in `covariates`, valid ones in `cs_covariates`); forbidden comparisons (`causal.bacon_decomposition`); covariate effects equal across groups and periods (`causal.ccc_test`), and say what a rejection implies: TWFE and Callaway-Sant'Anna with covariates are biased, use intersection DiD (DID-INT); estimate with `causal.att_gt(covariates=..., cluster=<assignment level>)` and compare. Relay the diagnostic's verdict as printed, including "inconclusive (low power)".
-- [ ] Headline numbers reproducible? Ask the authors for the data source and a run manifest (data hashes, package versions, seed) and an independent recomputation of the headline number; produce both for your own re-analysis (`reporting.run_manifest`, `reporting.cross_check` with at least two routes).
+- [ ] Headline numbers reproducible? Ask the authors for the data source and a run manifest (data hashes, package versions, seed) and an independent recomputation of the headline number; produce both for your own re-analysis (`reporting.run_manifest`, `reporting.cross_check` with at least two routes). Was the analysis plan fixed before the results (a dated pre-registration or study card, `reporting.study_card`), and are its amendments reported?
 - [ ] IV: first-stage F (effective F), exclusion argued, LATE interpreted for compliers? With F below about 100, an Anderson-Rubin interval? An overidentification test claimed for an exactly identified model, or read as proof of validity? (`diagnostics.iv_report`.)
 - [ ] Heckman: is there a variable in the selection equation excluded from the outcome equation? Are the second-step SEs corrected? Is Heckman called a Tobit estimator? (`discrete_choice.heckman`.)
 
@@ -49,6 +49,10 @@ Every check you request names the function of this skill that runs it (`estimati
 - [ ] Missing data handled and N reported per model; outliers and influential points checked?
 - [ ] Nominal vs real, seasonality, breaks, frequency alignment?
 - [ ] Look-ahead in forecasts, signals or risk models?
+- [ ] Labels that look ahead (a return over the next month computed every day, churn over the next 90 days): do they overlap, and were the splits purged? Shuffled K-fold on a time series, or contiguous folds without purging, lets the score measure memory rather than skill (`backtest.label_overlap`, `backtest.walk_forward_splits(horizon=)`, `backtest.purged_kfold_splits`). A t-statistic on overlapping labels without HAC errors is inflated by about √h.
+- [ ] Classification accuracy compared with the base rate of the same test window (the accuracy of "always the majority class"), with an interval, and the AUC? 64% accuracy when 66% of the months went up is no skill. For a logit or probit, `discrete_choice.binary_effects` prints both; for another classifier, ask for both on the same window and a block-bootstrap interval of the difference (no function here does it).
+- [ ] A leaderboard or AutoML result: how many models, feature sets and settings were compared; was the winner chosen on the same window that reports its score; is there a test window used once and a naive benchmark? The best of many is biased upward by selection.
+- [ ] A forecast without an interval, or an interval whose coverage was never checked out of sample (`forecasting.conformal_intervals`)?
 
 **Robustness and magnitude**
 - [ ] At least two robustness checks, with results that do not depend on one specification?
