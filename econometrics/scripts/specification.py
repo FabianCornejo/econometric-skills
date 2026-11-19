@@ -199,15 +199,20 @@ def ovb_decomposition(data: pd.DataFrame, y: str, focal: str, omitted: str,
 
 def _has_intercept(res) -> bool:
     """Whether a fit has an intercept, by statsmodels' own flag (what decides centered vs uncentered R²),
-    with a scan for a constant column as the fallback."""
+    with a scan for a constant column as the fallback only for models that have no such flag.
+    v2.6.13: when statsmodels says "no constant" its R² is uncentered, whatever the columns look like; the fallback
+    (np.allclose with its default tolerance) took w = 1e6 + N(0, 1) for a constant and let oster run on an uncentered
+    R² (0.77 against 0.51 centered)."""
     m = getattr(res, "model", None)
     if m is None:
         return True                                  # not a statsmodels fit: the caller's other gates handle it
-    if getattr(m, "k_constant", None):
-        return True
+    if hasattr(m, "k_constant"):
+        return bool(m.k_constant)
     X = np.asarray(getattr(m, "exog", np.empty((0, 0))), float)
-    return X.ndim == 2 and X.shape[0] > 0 and any(
-        np.allclose(X[:, k], X[0, k]) for k in range(X.shape[1]))
+    if X.ndim != 2 or not X.shape[0]:
+        return False
+    big = np.max(np.abs(X), axis=0)
+    return bool(np.any((big > 0) & (np.ptp(X, axis=0) <= 64 * np.finfo(float).eps * big)))   # diagnostics._CONST_RTOL
 
 
 def _oster_inputs(res_uncontrolled, res_controlled, focal: str):
@@ -233,7 +238,10 @@ def _oster_inputs(res_uncontrolled, res_controlled, focal: str):
     j = names.index(focal)
     x = X[:, j]
     W = np.delete(X, j, axis=1)
-    if not any(np.allclose(W[:, k], W[0, k]) for k in range(W.shape[1])):
+    big = np.max(np.abs(W), axis=0) if W.shape[1] else np.zeros(0)
+    # v2.6.13: a constant up to rounding (diagnostics._CONST_RTOL), not np.allclose's default (1e6 + N(0, 1) passed)
+    has_const = bool(W.shape[1]) and bool(np.any((big > 0) & (np.ptp(W, axis=0) <= 64 * np.finfo(float).eps * big)))
+    if not has_const:
         W = np.column_stack([np.ones(len(x)), W])
     resid = x - W @ np.linalg.lstsq(W, x, rcond=None)[0]
     return {"sigma_yy": float(np.var(y, ddof=1)), "sigma_xx": float(np.var(x, ddof=1)),
