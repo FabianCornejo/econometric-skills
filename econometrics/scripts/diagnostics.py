@@ -224,7 +224,7 @@ def vif_table(res) -> pd.DataFrame:
     def _is_const(col):   # v2.6.13: a constant up to the rounding of its entries (the rule of _constant_in_span);
         # allclose with rtol 1e-10 before took 1e11 + N(0, 1) for a constant and dropped it from the table
         big = float(np.max(np.abs(col)))
-        return big > 1e-12 and float(np.ptp(col)) <= 4 * np.finfo(float).eps * big
+        return big > 1e-12 and float(np.ptp(col)) <= _CONST_RTOL * big
     const_cols = [i for i in range(exog.shape[1]) if _is_const(exog[:, i])]
     centered = len(const_cols) > 0
     keep = [i for i in range(exog.shape[1])
@@ -624,6 +624,9 @@ def _w_basis(X0, n_obs, add_const: bool = True):
 # v2.6.13 (claude/medicoes-v2.6.13.md, M5): the smallest relative range (ptp / max|x|) among 368 numeric columns of 20
 # Wooldridge datasets was 1.0e-3 (a year column); a column below this varies too little for its level to count as data
 _NEAR_CONSTANT = 1e-8
+# a column whose range is within this of its size is a constant (computed constants carry rounding: 3.7 + 4e-15 in the
+# v2.6.11 review case, about 1e-15 relative); 1e11 + N(0, 1) has a relative range of about 6e-11 and is a variable
+_CONST_RTOL = 1e-12
 
 
 def _constant_in_span(X):
@@ -637,8 +640,7 @@ def _constant_in_span(X):
     n = X.shape[0]
     big = np.max(np.abs(X), axis=0)
     ptp = np.ptp(X, axis=0)
-    eps = np.finfo(float).eps
-    exact = (big > 0) & (ptp <= 4 * eps * big)             # a constant column, up to the rounding of its entries
+    exact = (big > 0) & (ptp <= _CONST_RTOL * big)         # a constant column, up to the rounding of its entries
     near = [j for j in range(X.shape[1]) if big[j] > 0 and not exact[j] and ptp[j] < _NEAR_CONSTANT * big[j]]
     if exact.any():
         return True, near

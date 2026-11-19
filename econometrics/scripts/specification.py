@@ -212,7 +212,7 @@ def _has_intercept(res) -> bool:
     if X.ndim != 2 or not X.shape[0]:
         return False
     big = np.max(np.abs(X), axis=0)
-    return bool(np.any((big > 0) & (np.ptp(X, axis=0) <= 4 * np.finfo(float).eps * big)))
+    return bool(np.any((big > 0) & (np.ptp(X, axis=0) <= 1e-12 * big)))   # diagnostics._CONST_RTOL
 
 
 def _oster_inputs(res_uncontrolled, res_controlled, focal: str):

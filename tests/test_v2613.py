@@ -329,6 +329,10 @@ for off, expect in ((1e7, False), (1e10, True)):
     noc = any("no constant" in m for m in rc["warnings"])
     check(f"iv_report, 0 + w with w = {off:g} + N(0, 1): near-constant warning {'present' if expect else 'absent'}, "
           "'no constant' warning present (main: none at 1e10)", near == expect and noc, rc["warnings"])
+d = pd.DataFrame(dict(y=1 + x + u, x=x, z=z, one=3.7 + 4e-15 * (np.arange(n) % 2)))
+rc, _ = quiet(dg.iv_report, "y ~ 0 + one + [x ~ z]", d)
+check("iv_report: a computed constant with 4e-15 noise (the v2.6.11 vif_table case) is a constant: no warning",
+      not any("varies by less" in m or "no constant" in m for m in rc["warnings"]), rc["warnings"])
 X = np.column_stack([1e11 + e, x])
 vt = dg.vif_table(sm.OLS(1 + x + u, X).fit())
 check("vif_table: 1e11 + N(0, 1) is not a constant: both columns listed, uncentered (main: centered, column dropped)",
