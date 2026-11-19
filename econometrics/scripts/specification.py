@@ -212,7 +212,7 @@ def _has_intercept(res) -> bool:
     if X.ndim != 2 or not X.shape[0]:
         return False
     big = np.max(np.abs(X), axis=0)
-    return bool(np.any((big > 0) & (np.ptp(X, axis=0) <= 1e-12 * big)))   # diagnostics._CONST_RTOL
+    return bool(np.any((big > 0) & (np.ptp(X, axis=0) <= 64 * np.finfo(float).eps * big)))   # diagnostics._CONST_RTOL
 
 
 def _oster_inputs(res_uncontrolled, res_controlled, focal: str):
@@ -240,7 +240,7 @@ def _oster_inputs(res_uncontrolled, res_controlled, focal: str):
     W = np.delete(X, j, axis=1)
     big = np.max(np.abs(W), axis=0) if W.shape[1] else np.zeros(0)
     # v2.6.13: a constant up to rounding (diagnostics._CONST_RTOL), not np.allclose's default (1e6 + N(0, 1) passed)
-    has_const = bool(W.shape[1]) and bool(np.any((big > 0) & (np.ptp(W, axis=0) <= 1e-12 * big)))
+    has_const = bool(W.shape[1]) and bool(np.any((big > 0) & (np.ptp(W, axis=0) <= 64 * np.finfo(float).eps * big)))
     if not has_const:
         W = np.column_stack([np.ones(len(x)), W])
     resid = x - W @ np.linalg.lstsq(W, x, rcond=None)[0]

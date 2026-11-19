@@ -221,19 +221,30 @@ check("unadjusted: Wu-Hausman as before, 'endogeneity_linearmodels' None",
 rk, tk = quiet(dg.iv_report, fe, d, cov_type="kernel")
 check("kernel: the printout says the control-function test uses HC1 (heteroskedasticity only)",
       "The control-function test uses HC1 (heteroskedasticity only), not the kernel covariance." in tk, tk[-500:])
-# perfect first stage: the control-function test is not defined
+# degenerate cases follow endogeneity_test (review r1-A A3). Exactly x = z1 + 2·z2 is refused by linearmodels itself
+# ("do not have full column rank"); x = z1 + 2·z2 + 1e-9·e has a direction of its own, and endogeneity_test gives a
+# finite test there, so iv_report must too
 rng = np.random.default_rng(261306)
 n = 200
-z1, z2, u = rng.normal(size=(3, n))
-# (exactly x = z1 + 2·z2 is refused by linearmodels itself: "do not have full column rank")
-d = pd.DataFrame(dict(y=1 + z1 + u, x=z1 + 2 * z2 + 1e-9 * rng.normal(size=n), z1=z1, z2=z2))
+z1, z2, u, e = rng.normal(size=(4, n))
+d = pd.DataFrame(dict(y=1 + z1 + u, x=z1 + 2 * z2 + 1e-9 * e, z1=z1, z2=z2))
 rp, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z1 + z2]", d)
-check("x = z1 + 2·z2 + 1e-9·e: robust endogeneity test NaN with a warning (main: a p-value, 0.41, from a test regression made of rounding)",
-      np.isnan(rp["tests"]["p"].iloc[0]) and any("perfect first stage" in m for m in rp["warnings"]), rp["tests"])
+ep, _ = quiet(dg.endogeneity_test, d.y, None, d[["x"]], d[["z1", "z2"]], cov_type="HC1")
+# the first-stage residual has norm about 1e-9 of x's: the two routes lose about 5 digits differently (1.2e-5 measured),
+# so 1e-4 here; the equality to 1e-8 on ordinary data is checked above
+check("x = z1 + 2·z2 + 1e-9·e: finite control-function test, the same p as endogeneity_test with HC1 (1e-4)",
+      np.isfinite(rp["tests"]["p"].iloc[0]) and rel(rp["tests"]["p"].iloc[0], ep["p"]) < 1e-4, (rp["tests"], ep["p"]))
+x1 = z1 + rng.normal(size=n)
+d = pd.DataFrame(dict(y=1 + x1 + u, x1=x1, x2=x1 + z1 + 1e-9 * e, z1=z1, z2=z2, z3=rng.normal(size=n)))
+rj, _ = quiet(dg.iv_report, "y ~ 1 + [x1 + x2 ~ z1 + z2 + z3]", d)
+ej, _ = quiet(dg.endogeneity_test, d.y, None, d[["x1", "x2"]], d[["z1", "z2", "z3"]], cov_type="HC1")
+check("x2 = x1 + z1 + 1e-9·e: jointly degenerate → NaN with a warning, as endogeneity_test (r1-A: p = 0.59, no word)",
+      np.isnan(rj["tests"]["p"].iloc[0]) and np.isnan(ej["p"]) and any("jointly degenerate" in m for m in rj["warnings"]),
+      (rj["tests"], ej["p"]))
 
 # ============================================================ 5. overidentification: warning from k/n = 0.15
 rng = np.random.default_rng(261307)
-for n, k_w, expect in ((200, 26, False), (180, 26, True)):         # k = 1 + k_w + 2: 29/200 = 0.145, 29/180 = 0.161
+for n, k_w, expect in ((160, 26, False), (150, 26, True)):         # k = 1 + k_w + 2: 29/160 = 0.181, 29/150 = 0.193
     W = rng.normal(size=(n, k_w)); z1, z2, v, u = rng.normal(size=(4, n))
     x = z1 + z2 + v
     d = pd.DataFrame(np.column_stack([x + u, x, W, z1, z2]),
@@ -248,7 +259,7 @@ check("unadjusted (Sargan): no such warning", not any("overidentification test r
 
 # ============================================================ 6. endogeneity_test: HC0 with average leverage ≥ 0.15
 rng = np.random.default_rng(261308)
-for n, k_w, expect in ((200, 27, False), (180, 27, True)):           # k = 1 + 27 + 1 = 29
+for n, k_w, expect in ((160, 27, False), (150, 27, True)):           # k = 1 + 27 + 1 = 29: 0.181 and 0.193
     W = pd.DataFrame(rng.normal(size=(n, k_w)), columns=[f"w{j}" for j in range(k_w)])
     z, v, u = rng.normal(size=(3, n))
     x = z + v
@@ -316,6 +327,25 @@ tn = tn.set_index("Test")
 check("explicit constant column: BP and White without the note (the rewrite only runs when the constant is spanned)",
       "constant column" not in tc.loc["Breusch-Pagan", "Conclusion"]
       and "constant column" not in tc.loc["White (full)", "Conclusion"], tc)
+# White with many groups (review r1-B S2): statsmodels' het_white changed with the dummy left out (177.7 vs 193.7)
+rng = np.random.default_rng(261320)
+G, n = 100, 2000
+g = rng.integers(0, G, n); xg = rng.normal(size=n)
+Dg = np.eye(G)[g]
+yg = Dg @ rng.normal(size=G) + xg + rng.normal(size=n) * (1 + 0.3 * np.abs(xg))
+fits = {"base first": np.column_stack([np.ones(n), Dg[:, 1:], xg]), "base last": np.column_stack([np.ones(n), Dg[:, :-1], xg]),
+        "no constant column": np.column_stack([Dg, xg])}
+wh = {}
+for k_, X_ in fits.items():
+    t_, _ = quiet(dg.ols_diagnostics, sm.OLS(yg, X_).fit())
+    wh[k_] = t_.set_index("Test").loc["White (full)", "Statistic"]
+eg2 = sm.OLS(yg, fits["base first"]).fit().resid ** 2
+Maux = np.column_stack([Dg, Dg * xg[:, None], xg ** 2])       # span of 1, D, x, x², D·x written by hand: 2G + 1 columns
+ra = eg2 - Maux @ np.linalg.lstsq(Maux, eg2, rcond=None)[0]
+lm_ref = n * (1 - ra @ ra / np.sum((eg2 - eg2.mean()) ** 2))
+check("White, 100 groups: the same statistic whatever dummy is the base, = n·R² on the span written by hand "
+      "(relative 1e-8; statsmodels gave 177.7 with the last dummy as base)",
+      all(rel(v_, lm_ref) < 1e-8 for v_ in wh.values()), (wh, lm_ref))
 check("no constant in the span: BP and White (full) rows say 'not computed' (none vanishes)",
       str(tn.loc["Breusch-Pagan", "Conclusion"]).startswith("not computed")
       and str(tn.loc["White (full)", "Conclusion"]).startswith("not computed"), tn)
@@ -336,6 +366,9 @@ d = pd.DataFrame(dict(y=1 + x + u, x=x, z=z, one=3.7 + 4e-15 * (np.arange(n) % 2
 rc, _ = quiet(dg.iv_report, "y ~ 0 + one + [x ~ z]", d)
 check("iv_report: a computed constant with 4e-15 noise (the v2.6.11 vif_table case) is a constant: no warning",
       not any("varies by less" in m or "no constant" in m for m in rc["warnings"]), rc["warnings"])
+X13 = np.column_stack([1e13 + e, x])
+vt13 = dg.vif_table(sm.OLS(1 + x + u, X13).fit())
+check("1e13 + N(0, 1) is a variable too (r1-A A7: with a 1e-12 cut it came back as a constant)", len(vt13) == 2, vt13)
 X = np.column_stack([1e11 + e, x])
 vt = dg.vif_table(sm.OLS(1 + x + u, X).fit())
 check("vif_table: 1e11 + N(0, 1) is not a constant: both columns listed, uncentered (main: centered, column dropped)",
@@ -377,6 +410,42 @@ class _R:
 check("objects without k_constant: the fallback finds a constant column (up to 1e-12) and only then",
       sp._has_intercept(_R(np.column_stack([np.full(n, 2.0), xo])))
       and not sp._has_intercept(_R(np.column_stack([w6, xo]))))
+
+# ============================================================ 9b. review r1-A: W singletons, no constant, AR grid
+rng = np.random.default_rng(261330)
+n = 120
+z, u, v, w = rng.normal(size=(4, n))
+g1 = np.zeros(n); g1[7] = 1.0
+x = 0.7 * z + v + 0.4 * u
+d = pd.DataFrame(dict(y=1 + x + 0.3 * w + 0.5 * g1 + u, x=x, z=z, w=w, g1=g1))
+rs1, _ = quiet(dg.iv_report, "y ~ 1 + w + g1 + [x ~ z]", d)
+keep = np.arange(n) != 7
+Xk = np.column_stack([np.ones(n), w, z])[keep]
+f_k = wald_hc(d.y.to_numpy()[keep], Xk, [2], "HC3")
+check("an exogenous dummy with one 1 (r1-A A1: ValueError): runs; AR p at 0 = HC3 Wald by hand without that row (1e-8)",
+      np.isfinite(rs1["anderson_rubin"]["p_at_zero"]) and rel(rs1["anderson_rubin"]["p_at_zero"],
+                                                                 stats.f.sf(f_k, 1, keep.sum() - 3)) < 1e-8
+      and any("left out of the Anderson-Rubin" in m for m in rs1["warnings"]), rs1["warnings"])
+# a model without a constant: nothing is centred (r1-A A2: Z centred, W not, so another model was tested)
+xn = 0.8 * z + 0.5 * w + v + 0.6 * u
+d = pd.DataFrame(dict(y=0.5 * xn + 0.4 * w + u, x=xn, z=z, w=w))
+r0n, _ = quiet(dg.iv_report, "y ~ 0 + w + [x ~ z]", d)
+X0 = np.column_stack([w, z])
+v0 = xn - X0 @ np.linalg.lstsq(X0, xn, rcond=None)[0]
+Xt0 = np.column_stack([w, xn, v0])
+f_cf0 = wald_hc(d.y.to_numpy(), Xt0, [2], "HC1")
+f_ar0 = wald_hc(d.y.to_numpy(), X0, [1], "HC3")
+check("no constant: control-function test and AR at β = 0 on the raw columns, by hand (1e-8; r1-A: p 0.263 vs 5.9e-5)",
+      rel(r0n["tests"]["statistic"].iloc[0], f_cf0) < 1e-8
+      and rel(r0n["anderson_rubin"]["p_at_zero"], stats.f.sf(f_ar0, 1, n - 2)) < 1e-8,
+      (r0n["tests"], f_cf0, r0n["anderson_rubin"]["p_at_zero"], stats.f.sf(f_ar0, 1, n - 2)))
+Wg, Zg = np.column_stack([np.ones(n), w]), z[:, None]
+grid_ = np.linspace(-2, 3, 41)
+for rob in (True, False):
+    pv_g = dg._ar_grid(d.y.to_numpy(), xn, Wg, Zg, grid_, rob)
+    pv_p = np.array([dg._ar_pvalue(d.y.to_numpy(), xn, Wg, Zg, b_, rob) for b_ in grid_])
+    check(f"AR in one pass = one fit per grid point ({'HC3' if rob else 'classical'}, 41 points, 1e-9)",
+          np.max(np.abs(pv_g - pv_p) / np.maximum(pv_p, 1e-300)) < 1e-9)
 
 # ============================================================ 10. rdd fuzzy with perfect compliance
 rng = np.random.default_rng(261312)
