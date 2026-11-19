@@ -313,6 +313,9 @@ check("White (full) present and equal too (relative 1e-10; main: the row vanishe
 res_n = sm.OLS(y, np.column_stack([D[:, 1:], xr])).fit()              # no constant in the span
 tn, _ = quiet(dg.ols_diagnostics, res_n)
 tn = tn.set_index("Test")
+check("explicit constant column: BP and White without the note (the rewrite only runs when the constant is spanned)",
+      "constant column" not in tc.loc["Breusch-Pagan", "Conclusion"]
+      and "constant column" not in tc.loc["White (full)", "Conclusion"], tc)
 check("no constant in the span: BP and White (full) rows say 'not computed' (none vanishes)",
       str(tn.loc["Breusch-Pagan", "Conclusion"]).startswith("not computed")
       and str(tn.loc["White (full)", "Conclusion"]).startswith("not computed"), tn)
@@ -325,7 +328,7 @@ x = z + v
 for off, expect in ((1e7, False), (1e10, True)):
     d = pd.DataFrame(dict(y=1 + x + u, x=x, z=z, w=off + e))
     rc, _ = quiet(dg.iv_report, "y ~ 0 + w + [x ~ z]", d)
-    near = any("w varies by less than 1e-08" in m for m in rc["warnings"])
+    near = any("varies by less than" in m for m in rc["warnings"])
     noc = any("no constant" in m for m in rc["warnings"])
     check(f"iv_report, 0 + w with w = {off:g} + N(0, 1): near-constant warning {'present' if expect else 'absent'}, "
           "'no constant' warning present (main: none at 1e10)", near == expect and noc, rc["warnings"])
@@ -356,6 +359,24 @@ g = rng.integers(0, 3, n)
 rd_ = sm.OLS(yo, np.column_stack([np.eye(3)[g], xo])).fit()
 check("_has_intercept follows statsmodels: a full set of dummies counts (k_constant 1)",
       sp._has_intercept(rd_) and rd_.model.k_constant == 1)
+r_hc = sm.OLS(yo, np.column_stack([np.ones(n), xo]), hasconst=False).fit()
+check("a constant column fitted with hasconst=False: statsmodels reports an uncentered R², so no intercept "
+      "(main: True)", r_hc.model.k_constant == 0 and not sp._has_intercept(r_hc), r_hc.model.k_constant)
+
+
+class _M:                                             # a model object with exog but no k_constant
+    def __init__(self, X):
+        self.exog = X
+
+
+class _R:
+    def __init__(self, X):
+        self.model = _M(X)
+
+
+check("objects without k_constant: the fallback finds a constant column (up to 1e-12) and only then",
+      sp._has_intercept(_R(np.column_stack([np.full(n, 2.0), xo])))
+      and not sp._has_intercept(_R(np.column_stack([w6, xo]))))
 
 # ============================================================ 10. rdd fuzzy with perfect compliance
 rng = np.random.default_rng(261312)
@@ -369,11 +390,17 @@ rs, _ = quiet(causal.rdd, d, "y", "x", 0.0, h=0.8)
 check("perfect compliance: F = inf, the warning, and the fuzzy estimate = the sharp one (relative 1e-8; main F 1e31)",
       rf["F"] == np.inf and any("perfect compliance" in m for m in rf["warnings"])
       and rel(rf["estimate"], rs["estimate"]) < 1e-8 and "F = inf" in tf, (rf["F"], rf["warnings"]))
-t2 = d.t.to_numpy().copy(); t2[np.flatnonzero(d.x.to_numpy() >= 0)[:40]] = 0.0
-d["t2"] = t2
-rf2, _ = quiet(causal.rdd, d, "y", "x", 0.0, h=0.8, fuzzy="t2")
-check("the other side: 40 no-shows above the cutoff → finite F, no warning",
-      np.isfinite(rf2["F"]) and not any("perfect compliance" in m for m in rf2["warnings"]), rf2["F"])
+d["t_inv"] = 1.0 - d.t
+rfi, _ = quiet(causal.rdd, d, "y", "x", 0.0, h=0.8, fuzzy="t_inv")
+check("treatment coded 1 below the cutoff: F = inf, the warning gives the jump −1.000, and fuzzy = −sharp (1e-8)",
+      rfi["F"] == np.inf and any("first-stage jump -1.000" in m for m in rfi["warnings"])
+      and rel(rfi["estimate"], -rs["estimate"]) < 1e-8, (rfi["estimate"], rs["estimate"], rfi["warnings"]))
+for k_ns in (40, 1):
+    t2 = d.t.to_numpy().copy(); t2[np.flatnonzero((d.x.to_numpy() >= 0) & (d.x.to_numpy() <= 0.8))[:k_ns]] = 0.0
+    d["t2"] = t2
+    rf2, _ = quiet(causal.rdd, d, "y", "x", 0.0, h=0.8, fuzzy="t2")
+    check(f"the other side: {k_ns} no-show(s) above the cutoff → finite F, no warning",
+          np.isfinite(rf2["F"]) and not any("perfect compliance" in m for m in rf2["warnings"]), rf2["F"])
 
 # ============================================================ 11. documentation
 rules = (ROOT / "econometrics" / "references" / "interpretation-rules.md").read_text(encoding="utf-8")

@@ -785,7 +785,8 @@ def rdd(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: float | None =
     """Local-polynomial RD. Sharp by default; `fuzzy` = name of the actual treatment
     (then the estimate is the local Wald/2SLS ratio). Bandwidth: IK if None.
     v2.6.13: with perfect compliance inside the bandwidth (the treatment equals the cutoff indicator) the first stage
-    is exact: "F" is inf and a warning says the fuzzy estimate equals the sharp one (before: an F of 1e31)."""
+    is exact: "F" is inf and a warning says the fuzzy estimate is the sharp jump divided by the first-stage jump
+    (before: an F of 1e31)."""
     import statsmodels.api as sm
     d = df.dropna(subset=[y, x] + (covs or []) + ([fuzzy] if fuzzy else [])).copy()
     d["_xc"] = d[x] - cutoff
@@ -825,9 +826,10 @@ def rdd(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: float | None =
             first["F"] = float("inf")
     rd_warns = []
     if first and first["F"] == np.inf:
-        rd_warns.append("perfect compliance inside the bandwidth: the treatment equals the cutoff indicator, so the "
-                        "first stage is exact (F = inf, not a strength measure) and the fuzzy estimate equals the sharp "
-                        "one; report it as a sharp RD")
+        rd_warns.append("perfect compliance inside the bandwidth: the treatment is an exact function of the cutoff "
+                        f"indicator (first-stage jump {first['jump_in_treatment']:.3f}), so the first stage is exact "
+                        "(F = inf, not a strength measure) and the fuzzy estimate is the sharp jump in the outcome "
+                        "divided by that jump (the same number only when the jump is 1)")
     if bw_method.startswith("Imbens-Kalyanaraman ("):
         rd_warns.append(f"bandwidth by {bw_method}, not the rdrobust MSE-optimal one: report it as IK")
     out = _out("RD effect" + (" (fuzzy, LATE)" if fuzzy else " (sharp)"), est, se, len(d), bandwidth=h,

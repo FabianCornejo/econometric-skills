@@ -705,7 +705,7 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
       that the robust F and test reject too often (simulated: size above 10% from leverage 0.5, and P(F > 10) above
       5% with few df and no first stage at all); HC3, the default, did not;
     - HC0 with an average leverage k/n of 0.15 or more (k = exogenous directions plus instruments; v2.6.13): the same
-      warning, whatever the df (simulated size 9-15%; HC1 stayed at 4.5-7.9% and HC3 at or below 6.6%, but HC3 is
+      warning, whatever the df (simulated size 8.7-15.7%; HC1 stayed at 4.5-7.9% and HC3 at or below 6.6%, but HC3 is
       conservative with many controls and few rows: 0.8-1.6% with 20 controls and n = 52-60).
     Keys: first_stage_F (dict by endogenous regressor), statistic, p, n_instruments, warnings, high_leverage_rows
     (index labels of the rows with leverage 1; empty if none), perfect_first_stage (list of regressors).
@@ -879,14 +879,14 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
         lev_seen = max(h_max, h_t_max)
         if lev_seen >= _ROBUST_HIGH_LEVERAGE:
             reasons.append(f"a row with leverage {lev_seen:.2f}")
-        # v2.6.13 (M2): HC0 rejected 15% with 20 controls and 30-38 df, and 9% with k/n = 0.19, whatever the df
+        # v2.6.13 (M2): HC0 rejected 15-16% with 20 controls and 30-38 df, and 9% with k/n = 0.19, whatever the df
         avg_lev = (r_w + n_z) / n_obs
         if str(cov_type).upper() == "HC0" and avg_lev >= _AVG_LEVERAGE:
             reasons.append(f"an average leverage k/n of {avg_lev:.2f}")
     if reasons:
         warn.append(f"{cov_type} with " + " and ".join(reasons) + ": the robust F and the test reject too often in that "
                     "case (simulated: size above 10% from leverage 0.5 with no first stage at all, P(F > 10) above 5% "
-                    "with few degrees of freedom, and an HC0 test size of 9-15% from k/n = 0.15); use "
+                    "with few degrees of freedom, and an HC0 test size of 8.7-15.7% from k/n = 0.15); use "
                     "cov_type='HC3' (the default)" + (f"; nonrobust first-stage F: {nr}" if nr else "") + ".")
     out = {"first_stage_F": f_first, "statistic": stat_, "p": p_, "n_instruments": n_z,
            "warnings": warn, "high_leverage_rows": high_lev, "perfect_first_stage": perfect}
@@ -1035,7 +1035,8 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     - leverage from the instruments (beyond what the exogenous regressors give a row), with a robust cov_type: a row
       with leverage 1 (an instrument that lives on one row, such as a dummy with a single 1; within 1e-8) makes the
       robust covariance degenerate, so the robust first-stage F, the Anderson-Rubin set and the robust endogeneity and
-      overidentification tests are NaN, the strength label says "not computed", and the warning names the rows and
+      overidentification tests are NaN (cut 1e-8 for all of them; endogeneity_test uses 1e-12 with HC2/HC3), the
+      strength label says "not computed", and the warning names the rows and
       gives the classical first-stage F (before: F 437 "strong" with one such dummy); a row with leverage 0.5 or more
       adds the HC3 first-stage F ("partial F (HC3)"), the label uses the smaller F, and a warning gives the measured
       size of the HC0 F (9-15% at 0.5, 35-43% at 0.9);
@@ -1047,7 +1048,9 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     - the robust overidentification test (linearmodels' Wooldridge score) warns when the average leverage k/n is 0.15
       or more (size 8-15% there);
     - a column that varies by less than 1e-8 of its size (1e11 + N(0, 1)) is not taken for a constant: it is named in a
-      warning (centre it), and the model is treated as having no constant unless another column gives one.
+      warning (centre it), and the model is treated as having no constant unless another column gives one (the 1e-8
+      cut comes from a survey of real columns, not from a simulation: the smallest relative range among 368 numeric
+      columns of 20 Wooldridge datasets was 1.0e-3).
     Keys of the result:
       table             OLS and 2SLS coefficients, SEs, 2SLS p and confidence interval;
       first_stage       partial F, its p, partial R² and strength label, one row per endogenous regressor;

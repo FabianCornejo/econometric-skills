@@ -238,7 +238,10 @@ def _oster_inputs(res_uncontrolled, res_controlled, focal: str):
     j = names.index(focal)
     x = X[:, j]
     W = np.delete(X, j, axis=1)
-    if not any(np.allclose(W[:, k], W[0, k]) for k in range(W.shape[1])):
+    big = np.max(np.abs(W), axis=0) if W.shape[1] else np.zeros(0)
+    # v2.6.13: a constant up to rounding (diagnostics._CONST_RTOL), not np.allclose's default (1e6 + N(0, 1) passed)
+    has_const = bool(W.shape[1]) and bool(np.any((big > 0) & (np.ptp(W, axis=0) <= 1e-12 * big)))
+    if not has_const:
         W = np.column_stack([np.ones(len(x)), W])
     resid = x - W @ np.linalg.lstsq(W, x, rcond=None)[0]
     return {"sigma_yy": float(np.var(y, ddof=1)), "sigma_xx": float(np.var(x, ddof=1)),
