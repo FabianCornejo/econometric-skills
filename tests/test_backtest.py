@@ -166,7 +166,9 @@ check("purged_kfold_splits, walk_forward_splits, label_overlap: a fractional hor
       raises(bt.purged_kfold_splits, 50, 5, horizon=2.9, show=False) and raises(bt.walk_forward_splits, 50, 20, 5, horizon=2.9)
       and raises(bt.label_overlap, 2.9, 50, show=False))
 check("walk_forward_splits: invalid arguments raise when called, before iterating",
-      raises(bt.walk_forward_splits, 12, 4, 2, horizon=5))
+      raises(bt.walk_forward_splits, 12, 4, 2, horizon=5) and raises(bt.walk_forward_splits, 12, 4, 0)
+      and raises(bt.walk_forward_splits, 12, 4, 2, step=-1) and raises(bt.walk_forward_splits, 12, 4.5, 2)
+      and raises(bt.walk_forward_splits, 12, 4, 2.5))
 # the 'rows removed' share is the worst fold over its own rows (review r1-A N5): n = 10, 3 blocks (4, 3, 3), horizon 2,
 # embargo 2 (found by search): the old share (fewest training rows over the most other rows) was 50%, no warning;
 # the middle fold removes 4 of its 7 other rows, 57%

@@ -410,6 +410,8 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
       (proof in the v2.7.0 review notes, not published). Measured over 500 targets, 93-95% for h from 2
       to 12; over 60 targets with h = 12 and AR(0.9) errors, about 90%, no better than "rolling": with a
       short record ACI behaves like split conformal on all errors so far.
+    The dependence screen of "split" and "rolling" runs Ljung-Box on the errors and on their size, at 2.5% each
+    (5% in all; it fired on 6-7% of i.i.d. normal series with 40 to 100 errors, about 5% with 200).
     Intervals are symmetric around the forecast (absolute errors). A biased forecaster gets wide intervals:
     check the bias (forecast_metrics) first. With a level that rounds to 1 (ACI after many misses) the
     interval is infinite; with a level at or below 0 it is empty (a sure miss): both are counted in a finding.
@@ -422,11 +424,16 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
         raise ValueError("method must be 'aci', 'rolling' or 'split'")
     if not 0 < alpha < 1:
         raise ValueError("alpha must be in (0, 1)")
-    if h != int(h) or int(h) < 1:
-        raise ValueError("h must be a whole number of periods, at least 1")
-    h = int(h)
-    if calib_size is not None and calib_size != int(calib_size):
-        raise ValueError("calib_size must be a whole number of errors")
+    def _whole(x, name):
+        if isinstance(x, bool) or not isinstance(x, (int, float, np.integer, np.floating)) or not np.isfinite(x) \
+                or x != int(x):
+            raise ValueError(f"{name} must be a whole number, got {x!r}")
+        return int(x)
+    h = _whole(h, "h")
+    if h < 1:
+        raise ValueError("h must be at least 1")
+    if calib_size is not None:
+        calib_size = _whole(calib_size, "calib_size")
     if not gamma > 0:
         raise ValueError("gamma must be positive")
     a_s = pd.Series(actual, dtype=float) if not isinstance(actual, pd.Series) else actual.astype(float)

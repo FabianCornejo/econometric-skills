@@ -124,7 +124,7 @@ check("study_card: a card changed by hand is reported (warning) and not rewritte
       [w["level"] for w in r["warnings"]] == ["warning"] and r["action"] == "unchanged" and q.read_bytes() == hand_bytes)
 
 # ============================================================ 4b. review r1-B: blanks, values, amendments, unreadable cards
-for bad in (None, [], {}, "  "):
+for bad in (None, [], {}, "  ", [" "], 0, False):
     check(f"study_card: a blank required field ({bad!r}) is refused",
           bool(raises(rp.study_card, path=tmp / "blank.json", show=False, question=bad, estimand="e", design="d")))
 check("study_card: NaN is refused (not valid JSON)", bool(raises(rp.study_card, path=tmp / "nan.json", show=False,
@@ -166,6 +166,21 @@ for nm in ("empty.json", "notcard.json", "adir"):
     m = rp.run_manifest(study_card=tmp / nm, show=False)
     check(f"run_manifest: an unreadable card ({nm}) is a warning, the manifest is still returned",
           m["study_card"] is None and [w["level"] for w in m["warnings"]] == ["warning"] and "skill_version" in m)
+check("run_manifest: a folder passed as the card is reported as not a file",
+      "is not a file" in rp.run_manifest(study_card=tmp / "adir", show=False)["warnings"][0]["message"])
+check("run_manifest: simulated must be True or False", bool(raises(rp.run_manifest, simulated="no", show=False)))
+q3 = tmp / "hand3.json"
+rp.study_card(path=q3, show=False, **CARD)
+c3 = json.loads(q3.read_text(encoding="utf-8"))
+c3["fields"]["design"] = "edited"
+q3.write_text(json.dumps(c3), encoding="utf-8")
+msg = raises(rp.study_card, path=q3, show=False, **CARD)
+check("study_card: re-running the unchanged script on a hand-edited card says the card was edited by hand",
+      bool(msg) and "edited by hand" in msg, msg)
+stale = tmp / "stale.json"
+(tmp / "stale.json.tmp").mkdir()
+check("study_card: a stale 'card.json.tmp' folder does not block writing", rp.study_card(path=stale, show=False, **CARD)
+      ["action"] == "written")
 bom = tmp / "bom.json"
 rp.study_card(path=bom, show=False, **CARD)
 bom.write_bytes(b"\xef\xbb\xbf" + bom.read_bytes())

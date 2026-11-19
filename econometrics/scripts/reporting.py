@@ -224,13 +224,23 @@ def _read_card(path: Path) -> dict:
 
 
 def _write_atomic(path: Path, text: str) -> None:
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    import tempfile
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent if str(path.parent) else ".")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except OSError as e:
+        raise ValueError(f"the study card could not be written to {path} ({e})") from None
 
 
 def _blank(v) -> bool:
-    return v is None or (isinstance(v, str) and not v.strip()) or (isinstance(v, (list, tuple, dict)) and not v)
+    """A required field must be text, or a list of texts, with something in it (0, False and [" "] are blank)."""
+    if isinstance(v, str):
+        return not v.strip()
+    if isinstance(v, list):
+        return not v or all(_blank(x) for x in v)
+    return True
 
 
 def study_card(path: str = "study_card.json", amend: bool = False, reason: str | None = None, show: bool = True,
@@ -292,9 +302,11 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
             else:
                 changed = sorted(k for k in set(card["fields"]) | set(fields)
                                  if _canonical(card["fields"].get(k)) != _canonical(fields.get(k)))
+                hand = (" The card on file was edited by hand (its hash does not match): if the script holds the plan "
+                        "as written, restore it, or record the difference with amend=True and a reason." if not intact else "")
                 raise ValueError(f"{p} already holds a study card (created {card.get('created_utc')}) and these fields "
                                  f"differ: {', '.join(changed)}. A plan changed after seeing results is not a plan: pass "
-                                 "amend=True and reason='...' to record the change")
+                                 "amend=True and reason='...' to record the change." + hand)
         else:
             if not (reason and str(reason).strip()):
                 raise ValueError("amend=True needs a reason (why the plan changes, and whether results had been seen)")
@@ -310,10 +322,7 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     else:
         card = {"fields": fields, "created_utc": now, "skill_version": SKILL_VERSION, "amendments": []}
         card["sha256"] = _card_hash(card)
-        try:
-            _write_atomic(p, json.dumps(card, indent=2, ensure_ascii=False))
-        except OSError as e:
-            raise ValueError(f"the study card could not be written to {p} ({e})") from None
+        _write_atomic(p, json.dumps(card, indent=2, ensure_ascii=False))
     out = {"path": str(p), "sha256": card["sha256"], "created_utc": card["created_utc"], "fields": card["fields"],
            "amendments": card.get("amendments", []), "action": action,
            "used": {"path": str(p), "action": action, "skill_version": SKILL_VERSION}, "warnings": warns}
@@ -342,6 +351,8 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
     simulated in the script (no file to hash: the seed reproduces them) and silences that notice. A path in
     files= that does not exist is recorded as "missing" and is a warning. A card that cannot be read is a
     warning, not an error, so the manifest is still written. Findings are in `warnings`."""
+    if not isinstance(simulated, (bool, np.bool_)):
+        raise ValueError("simulated must be True or False")
     frames = {"data": data} if isinstance(data, pd.DataFrame) else (data or {})
     man = {
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -375,7 +386,8 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
         cp = Path(study_card)
         card = None
         if not cp.is_file():
-            warns.append(_finding("warning", f"study card {cp} not found: the design cannot be shown to predate the results",
+            warns.append(_finding("warning", f"study card {cp} {'is not a file' if cp.exists() else 'not found'}: the design "
+                                  "cannot be shown to predate the results",
                                   "write it with reporting.study_card before estimating, or say in the report that there was none"))
         else:
             try:

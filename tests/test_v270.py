@@ -1,9 +1,10 @@
 """v2.7.0: version, CHANGELOG, documents and the two new "find the error" cases.
 
 The functions of this release are tested by module (tests/test_backtest.py, test_forecasting.py, test_reporting.py);
-this file checks only the documents and the evals. The graders are measured on a corpus written here, 12 correct and
-12 incorrect replies per case (lesson of v2.6.11: a grader is measured on both sides before it is trusted), and they
-must not match the request itself.
+this file checks only the documents and the evals. The graders are measured on the corpus in
+tests/data/v270_grader_corpus.json (lesson of v2.6.11: a grader is measured on both sides before it is trusted):
+28 correct and 28 incorrect replies per case used to adjust the patterns, 10 + 10 written after they were fixed, and
+long correct replies from the second review; they must not match the request itself.
 
 Run from the repository root:  python3 tests/test_v270.py
 """
@@ -107,7 +108,7 @@ for name in ("review-lstm-base-rate", "review-automl-leaderboard"):
           "reviewer" in meta["tags"] and meta["max_turns"] == 8 and sf["type"] == "tool_used" and sf["tool"] == "Skill"
           and g["target"] == "last_message")
     check(f"{name}: the answer grader does not match the request", not rx.search(request))
-    for part in ("tuning", "holdout"):
+    for part in ("tuning", "holdout", "r2"):
         corpus = CORPUS[name][part]
         good = [s for s in corpus["good"] if not rx.search(s)]
         bad = [s for s in corpus["bad"] if rx.search(s)]

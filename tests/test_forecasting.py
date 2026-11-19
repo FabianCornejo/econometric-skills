@@ -39,8 +39,8 @@ def check(name, cond, info=""):
 def raises(f, *a, **k):
     try:
         f(*a, **k)
-    except ValueError:
-        return True
+    except ValueError as e:
+        return str(e) or True
     return False
 
 
@@ -252,6 +252,9 @@ check("refuses a repeated target date", raises(CI, pd.Series(np.arange(50.0), in
 inf_ = s.copy()
 inf_.iloc[5] = np.inf
 check("refuses infinite actuals and forecasts", raises(CI, inf_, s * 0, show=False) and raises(CI, s, inf_, show=False))
+check("refuses h = True and h or calib_size = nan with the whole-number message",
+      all("whole number" in str(raises(CI, s, s * 0, show=False, **kw)) for kw in (dict(h=True), dict(h=float("nan")),
+                                                                                   dict(calib_size=float("nan")))))
 check("refuses a fractional horizon or calibration size", raises(CI, s, s * 0, h=2.9, show=False)
       and raises(CI, s, s * 0, calib_size=25.5, show=False))
 holes = s.copy()
@@ -334,6 +337,12 @@ alt = pd.Series((-1.0) ** np.arange(300) * (1 + 0.1 * rng.standard_normal(300)))
 w_alt = CI(alt, alt * 0, method="split", calib_size=150, show=False)["warnings"]
 check("split: errors whose sign alternates (size i.i.d.) are caught by the screen on the signed errors",
       any("autocorrelated" in x["message"] for x in w_alt), w_alt)
+# size persistent, sign i.i.d. (volatility clustering): only the screen on |errors| sees it (review r2)
+ls_ = np.asarray(pd.Series(rng.standard_normal(300)).ewm(alpha=0.05).mean()) * 4
+vol = pd.Series(np.where(rng.random(300) < 0.5, -1.0, 1.0) * np.exp(ls_))
+w_vol = CI(vol, vol * 0, method="split", calib_size=150, show=False)["warnings"]
+check("split: errors with persistent size and random sign are caught by the screen on their size",
+      any("autocorrelated" in x["message"] for x in w_vol), w_vol)
 # infinite or empty intervals are counted in a finding
 r_ = CI(pd.Series(y_), pd.Series(np.zeros(30)), alpha=0.2, gamma=0.5, show=False)
 check("aci: a notice counts the empty intervals", any("empty (a sure miss)" in x["message"] for x in r_["warnings"]))

@@ -1,5 +1,5 @@
 {
- "note": "Corpus of reviewer replies for the two v2.7.0 graders: 'tuning' = the replies of tests/test_v270.py v1 and of the r1-B review (the patterns were adjusted on them); 'holdout' = replies written after the patterns were fixed and never used to adjust them.",
+ "note": "Corpus of reviewer replies for the two v2.7.0 graders: 'tuning' = the replies of tests/test_v270.py v1 and of the r1-B review (the patterns were adjusted on them); 'holdout' = replies written after the patterns were fixed and never used to adjust them. 'r2' = long correct replies from review r2 (a quote of the claim, 'não se mantém', 'não pode ir para produção'), added after the negative lookahead was narrowed; no wrong reply there.",
  "review-lstm-base-rate": {
   "tuning": {
    "good": [
@@ -88,6 +88,13 @@
     "Normalize as variáveis antes da LSTM.",
     "Há risco de overfitting na LSTM; use dropout."
    ]
+  },
+  "r2": {
+   "good": [
+    "Resumo da afirmação: o relatório diz que \"64,8% está bem acima de 50%, o modelo tem poder preditivo\". Veredito: a conclusão não se mantém. O modelo não supera a taxa-base de 66% (sempre prever alta). Achado crítico 2: rótulos de 21 pregões sobrepostos com K-fold embaralhado geram vazamento. O que mudaria minha opinião: walk-forward com purga e embargo.",
+    "Não pode ir para produção nem para a alocação: abaixo da taxa base e com vazamento por rótulos sobrepostos. Pode seguir este roteiro: label_overlap, walk_forward_splits(horizon=21)."
+   ],
+   "bad": []
   }
  },
  "review-automl-leaderboard": {
@@ -178,6 +185,13 @@
     "Os 7 pontos de AUC justificam o investimento.",
     "Treine de novo com mais dados antes de produção."
    ]
+  },
+  "r2": {
+   "good": [
+    "A afirmação \"vamos colocá-lo em produção\" não se sustenta: não pode ir para produção antes de um conjunto de teste separado, porque o vencedor de 25 modelos tem viés de seleção. A conclusão não se mantém.",
+    "Pode seguir este roteiro: reserve uma amostra de teste intocada e use validação cruzada aninhada; a AUC de 0,88 está inflada pela seleção."
+   ],
+   "bad": []
   }
  }
 }

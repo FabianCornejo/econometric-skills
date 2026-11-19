@@ -104,7 +104,8 @@ def compare(results: dict[str, pd.Series], freq: str = "D") -> pd.DataFrame:
 
 def _whole(x, name: str) -> int:
     """x as an int, refusing fractions (horizon=2.9 must not become 2 silently)."""
-    if isinstance(x, bool) or x != int(x):
+    if isinstance(x, bool) or not isinstance(x, (int, float, np.integer, np.floating)) or not np.isfinite(x) \
+            or x != int(x):
         raise ValueError(f"{name} must be a whole number, got {x!r}")
     return int(x)
 
@@ -125,12 +126,15 @@ def walk_forward_splits(n: int, train_size: int, test_size: int, expanding: bool
     TimeSeriesSplit anchors its folds at the end of the sample, this function at the start.
     Invalid arguments raise ValueError when the function is called, before any split is drawn."""
     horizon = _whole(horizon, "horizon")
+    n, train_size, test_size = _whole(n, "n"), _whole(train_size, "train_size"), _whole(test_size, "test_size")
+    step = test_size if step is None else _whole(step, "step")
+    if min(train_size, test_size, step) < 1:
+        raise ValueError("train_size, test_size and step must be at least 1")
     if horizon < 1:
         raise ValueError("horizon must be at least 1 (the label of row i uses periods i .. i + horizon - 1)")
     if train_size - (horizon - 1) < 1:
         raise ValueError(f"train_size = {train_size} leaves no training row after purging horizon - 1 = "
                          f"{horizon - 1} rows; use a longer training window")
-    step = step or test_size
 
     def _gen():
         start = 0
