@@ -351,6 +351,22 @@ for key, ref in RREF.items():
         add("survival.cox", abs(tab.loc[c, "coef"] - ref["coef"][i]), TC, f"R {key} coef {c}")
         add("survival.cox", abs(tab.loc[c, "se"] / ref["robust_se"][i] - 1), TS, f"R {key} SE {c}", "rel")
 
+# conformal_intervals: MAPIE 1.6.0 SplitConformalRegressor (values fixed in test_forecasting.py from a run outside the
+# repository; data and tolerance rebuilt from the test's own lines) — v2.7.0
+import forecasting as fcm  # noqa: E402
+from scipy import stats as _st  # noqa: E402
+F270 = "test_forecasting.py"
+require(F270, 'r = CI(pd.Series(y), pd.Series(fcast), alpha=alpha, method="split", calib_size=60, show=False)')
+ns = {"np": np, "stats": _st, "pd": pd}
+exec(lines_between(F270, "t = np.arange(1, 121)", "y = fcast + "), ns)
+exec(lines_between(F270, "Y_REF = ", "tol = max("), ns)
+for a_, ref_ in literal(F270, "MAPIE").items():
+    r_ = fcm.conformal_intervals(pd.Series(ns["y"]), pd.Series(ns["fcast"]), alpha=a_, method="split", calib_size=60,
+                                 show=False)
+    half_ = (r_["table"]["upper"] - r_["table"]["forecast"]).dropna()
+    add("forecasting.conformal_intervals", float(np.max(np.abs(half_ / ref_ - 1))), ns["tol"],
+        f"MAPIE split half-width, alpha {a_}", "rel")
+
 # exact published values
 for nv, zone in ((4, "green"), (5, "yellow"), (10, "red")):          # the cases of test_financial_modules.py
     add("risk.basel_traffic_light", float(risk.basel_traffic_light(nv) != zone), 0, f"{nv} violations -> {zone}")

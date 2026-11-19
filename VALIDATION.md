@@ -26,15 +26,15 @@ The *Tolerance* column is the one the test uses, read from the test. Many tests 
 
 ## Largest observed difference
 
-For the level-A rows whose reference is outside the Python scientific stack the skill is built on (published values, and R, Stata, DoubleML, csdid, lifelines), `tools/validation_diffs.py` redoes the test's comparison and records the largest difference and the tolerance of that comparison, written as *difference of tolerance*. Measured on 2026-11-16 with Python 3.13.18, numpy 2.5.5, pandas 3.1.1, scipy 1.18.1, statsmodels 0.15.0, linearmodels 7.1, scikit-learn 1.9.1; output in `tools/validation_diffs.json`. It reads data, designs and reference values from the tests themselves, and CI runs it with `--check` (every comparison within its tolerance) on the latest dependency versions. Rows compared with software run in the test (scipy, statsmodels, linearmodels, arch, pandas) or with a closed form computed in the test are not measured.
+For the level-A rows whose reference is outside the Python scientific stack the skill is built on (published values, and R, Stata, DoubleML, csdid, lifelines), `tools/validation_diffs.py` redoes the test's comparison and records the largest difference and the tolerance of that comparison, written as *difference of tolerance*. Measured on 2026-11-19 with Python 3.13.18, numpy 2.5.5, pandas 3.1.1, scipy 1.18.1, statsmodels 0.15.0, linearmodels 7.1, scikit-learn 1.9.1; output in `tools/validation_diffs.json`. It reads data, designs and reference values from the tests themselves, and CI runs it with `--check` (every comparison within its tolerance) on the latest dependency versions. Rows compared with software run in the test (scipy, statsmodels, linearmodels, arch, pandas) or with a closed form computed in the test are not measured.
 
 ## Summary
 
-289 public functions: level A 94, level B 143, level C 20, level D 32.
+293 public functions: level A 99, level B 142, level C 20, level D 32.
 
 | module | A | B | C | D |
 |---|---|---|---|---|
-| `backtest` | 0 | 3 | 1 | 6 |
+| `backtest` | 3 | 2 | 1 | 6 |
 | `causal` | 8 | 19 | 2 | 0 |
 | `dag` | 1 | 7 | 0 | 0 |
 | `data_prep` | 0 | 7 | 1 | 3 |
@@ -43,13 +43,13 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `discrete_choice` | 2 | 0 | 0 | 0 |
 | `estimation` | 4 | 2 | 0 | 0 |
 | `finance_empirics` | 9 | 4 | 1 | 0 |
-| `forecasting` | 0 | 7 | 1 | 1 |
+| `forecasting` | 1 | 7 | 1 | 1 |
 | `hte` | 0 | 10 | 0 | 1 |
 | `inference` | 15 | 0 | 0 | 0 |
 | `linear_models` | 1 | 11 | 0 | 0 |
 | `multivariate` | 4 | 4 | 0 | 0 |
 | `regimes` | 0 | 2 | 4 | 2 |
-| `reporting` | 0 | 3 | 1 | 2 |
+| `reporting` | 1 | 3 | 1 | 2 |
 | `risk` | 3 | 12 | 1 | 2 |
 | `segments` | 1 | 3 | 1 | 0 |
 | `simulation` | 2 | 23 | 0 | 1 |
@@ -80,11 +80,13 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `backtest.run_backtest` | B | simulated series with a planted look-ahead signal | mean strategy return < 0.002 with the lag; > 0.007 without | — | test_financial_modules.py: backtest lag kills look-ahead |  |
 | `backtest.performance` | C | — | — | — | test_financial_modules.py: performance table | only the keys of the table are checked |
 | `backtest.compare` | D | — | — | — | — |  |
-| `backtest.walk_forward_splits` | B | split structure known by construction | exact (no overlap, 5 splits) | — | test_financial_modules.py: walk-forward splits never overlap |  |
+| `backtest.walk_forward_splits` | A | sklearn TimeSeriesSplit(gap = horizon − 1), run in the test; purge over label intervals written row by row | exact | not measured (software run in the test) | test_backtest.py: walk_forward_splits: same splits as sklearn TimeSeriesSplit; test_backtest.py: walk_forward_splits: equal to the brute-force purge; test_financial_modules.py: walk-forward splits never overlap | `horizon` since v2.7.0 |
 | `backtest.tsmom_position` | B | trending simulated series | cumulative strategy return > 0.2 | — | test_financial_modules.py: TSMOM profits on a trending series | sign check, not a value |
 | `backtest.forecast_position` | D | — | — | — | — |  |
 | `backtest.buy_and_hold` | D | — | — | — | — |  |
 | `backtest.bootstrap_sharpe_ci` | D | — | — | — | — |  |
+| `backtest.purged_kfold_splits` | A | purge and embargo written row by row in the test; sklearn KFold(shuffle=False) for horizon 1 | exact | not measured (closed form in the test) | test_backtest.py: purged_kfold_splits: equal to the row-by-row reference; test_backtest.py: purged_kfold_splits: horizon 1 and no embargo is sklearn's unshuffled KFold; test_backtest.py: no skill: purged K-fold accuracy | v2.7.0; known truth too: a classifier with no skill scores 0.5 (band fixed from 200 replications) |
+| `backtest.label_overlap` | A | autocovariance of overlapping sums, max(h − \|k\|, 0), summed over pairs; a hand-worked case | relative 1e-10 | not measured (closed form in the test) | test_backtest.py: label_overlap: SE ratio equal to the autocovariance formula; test_backtest.py: label_overlap: hand-worked uniqueness | v2.7.0; simulation within 4 MC SEs |
 
 ## `causal`
 
@@ -241,6 +243,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `forecasting.pesaran_timmermann` | B | simulated forecasts with direction skill | one-sided p < 0.01 | — | test_financial_modules.py: Pesaran-Timmermann detects direction skill |  |
 | `forecasting.forecast_metrics` | D | — | — | — | — | exercised through evaluate |
 | `forecasting.evaluate` | B | simulated forecasts with known accuracy ranking | DM p < 0.01 for the better model | — | test_financial_modules.py: ARIMAX with lagged x wins and DM significant; test_show_text.py: evaluate |  |
+| `forecasting.conformal_intervals` | A | MAPIE 1.6.0 SplitConformalRegressor (half-widths fixed in the test); the conformal quantile by counting; ACI by an explicit loop; exact coverage ceil((m+1)(1−α))/(m+1) under i.i.d. errors; the Gibbs-Candès long-run bound | relative 1e-12 (1e-11 with scipy 1.14) | 2.2e-16 (relative) of 1e-12 | test_forecasting.py: split, alpha <alpha>: half-width equal to MAPIE SplitConformalRegressor; test_forecasting.py: aci: intervals equal to an explicit loop over time; test_forecasting.py: split, m = <m>: coverage | v2.7.0; coverage under dependence measured, not guaranteed (docstring) |
 
 ## `hte`
 
@@ -329,7 +332,8 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `reporting.regression_table` | C | — | — | — | test_causal_text_survival.py: regression table layout | layout only |
 | `reporting.export_table` | B | table exported and read back | equal after rounding to 6 decimals | — | test_setup_env.py: with openpyxl: a table exported to .xlsx reads back unchanged |  |
 | `reporting.rescale_hint` | D | — | — | — | — |  |
-| `reporting.run_manifest` | B | same and changed data | exact hashes; fields written | — | test_did_covariates.py: manifest |  |
+| `reporting.run_manifest` | B | same and changed data; a study card changed by hand | exact hashes; fields written | — | test_did_covariates.py: manifest; test_reporting.py: run_manifest: study card hash; test_reporting.py: run_manifest: a card changed by hand | `study_card=` and the `files=` notice since v2.7.0 |
+| `reporting.study_card` | A | sha256 recomputed in the test from the bytes on disk | exact | not measured (closed form in the test) | test_reporting.py: study_card: file written, stored hash equal to the hash recomputed from disk; test_reporting.py: study_card: re-running with the same fields | v2.7.0 |
 | `reporting.cross_check` | B | constructed estimates and SEs | exact verdicts | — | test_v2461.py: cross_check |  |
 
 ## `risk`

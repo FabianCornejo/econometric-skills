@@ -15,7 +15,7 @@ What is checked:
   5. every repository path cited in a row (tools/..., tests/data/...) exists;
   6. the "largest observed difference" column: a row has a number there exactly when the function is in
      tools/validation_diffs.json, the number is the one measured, every level-A row whose reference is external
-     (published values, R, Stata, DoubleML, csdid, lifelines, robomit, sensemakr; not "on the data of" a book) is
+     (published values, R, Stata, DoubleML, csdid, lifelines, robomit, sensemakr, MAPIE; not "on the data of" a book) is
      measured, and every measured comparison is within its tolerance.
 
 Run from the repository root:  python3 tests/test_validation_md.py
@@ -212,7 +212,7 @@ for k, c in rows.items():
         cell_bad.append((k, c[4]))
 check("difference column: the measured value for the functions in tools/validation_diffs.json, level A only",
       not cell_bad, cell_bad[:6])
-EXT = re.compile(r"\b(R|Stata|DoubleML|csdid|lifelines|robomit|sensemakr|Wooldridge|published)\b")
+EXT = re.compile(r"\b(R|Stata|DoubleML|csdid|lifelines|robomit|sensemakr|MAPIE|Wooldridge|published)\b")
 unmeasured = [k for k, c in rows.items() if c[1] == "A" and k not in diffs
               and EXT.search(re.sub(r"on the data of [^;]*", "", c[2]))]
 check("level A rows whose reference is external (published values, R, Stata, DoubleML, csdid, lifelines, robomit, "
