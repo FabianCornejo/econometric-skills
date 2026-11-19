@@ -14,6 +14,9 @@ Use when the goal is an out-of-sample forecast (yields, sales, returns, macro se
 9. Reading a backtest honestly
 10. Checklist
 11. Armstrong's forecasting checklist (before trusting any forecast)
+12. Labels that look ahead: overlap, purging and embargo (v2.7.0)
+13. Intervals for any forecaster: conformal (v2.7.0)
+14. A machine-learning or foundation model as a challenger (v2.7.0)
 
 ## 1. The two rules
 
@@ -69,7 +72,8 @@ fc = forecasting.rolling_origin(y, order, start=0.8, h=1, refit_every=12, window
 - `refit_every`: re-estimate parameters every k origins and only update the state in between (`res.append`). Refit every period is the purist option but slow; refitting monthly on daily data is standard.
 - `window=None` = expanding window (more data, slower adaptation); a fixed window adapts to breaks at the cost of variance. Try both: if conclusions flip, report it.
 - For model selection inside the training window, nest a second walk-forward; never pick hyper-parameters on the test window.
-- `backtest.walk_forward_splits` gives the train/test indices for any model (machine learning included).
+- `backtest.walk_forward_splits` gives the train/test indices for any model (machine learning included). When the label of a row looks ahead (a 21-day return, "did the index rise over the next month"), pass `horizon=` so the training rows whose labels reach into the test window are purged (§12).
+- Never `KFold(shuffle=True)` on a time series: neighbouring rows land in train and test and the score measures memory, not skill (§12).
 
 ## 6. Benchmarks and accuracy tests
 
@@ -126,6 +130,8 @@ The threshold avoids trading on forecasts smaller than costs: set it at least at
 - [ ] Costs and turnover included; threshold ≥ round-trip cost.
 - [ ] Number of variants tried reported; Sharpe with a confidence interval.
 - [ ] Results by subperiod or regime.
+- [ ] Labels that look ahead: `backtest.label_overlap` run; splits with `horizon=`; accuracy judged against the base rate (§12).
+- [ ] Every forecast with an interval: the model's own, or `forecasting.conformal_intervals`, with its empirical coverage (§13).
 
 ## 11. Armstrong's forecasting checklist
 
@@ -141,3 +147,35 @@ From the evidence-based principles of Armstrong (2001, *Principles of Forecastin
 - [ ] **Uncertainty**: prediction intervals from the out-of-sample errors or a bootstrap with parameter uncertainty (`ts_univariate.ar_bootstrap_forecast`), not only the analytic normal ones; their coverage was checked. Intervals are usually too narrow: say so.
 - [ ] **Judgement**: any manual adjustment is recorded with its reason and kept separate from the model forecast.
 - [ ] **Disclosure**: data vintage, method, parameters and code are given so that someone else can reproduce the forecast (`reporting.run_manifest`).
+
+## 12. Labels that look ahead: overlap, purging and embargo
+
+A label built from the next h periods (a monthly return computed every day from daily prices, a churn flag over the next 90 days) overlaps its neighbours in h − 1 periods. Three consequences, each with its tool:
+
+- **Less information than rows.** `backtest.label_overlap(h, n)` reports the labels left without overlap (⌈n/h⌉), their average uniqueness (López de Prado 2018, §4.4) and by how much a naive standard error of a mean of such labels is too small (about √h with i.i.d. shocks; 4.5 for 240 monthly labels at h = 21). Use HAC errors with h − 1 lags (Hansen and Hodrick 1980) or keep one label every h periods.
+- **Leakage between training and test.** The last h − 1 training rows have labels that use test-period data. `walk_forward_splits(..., horizon=h)` drops them (the same splits as sklearn's `TimeSeriesSplit(gap=h-1)`). For cross-validation (choosing a model or its tuning), `backtest.purged_kfold_splits(n, n_splits, horizon=h, embargo=e)` keeps contiguous blocks, purges every training row whose label shares a period with a test label and, after each block, embargoes e more rows (López de Prado 2018, §7.4). In simulations with labels over 21 periods and no skill at all (v2.7.0, `tests/test_backtest.py`), a 1-nearest-neighbour classifier scored 90% accuracy under shuffled K-fold, 52% under contiguous blocks without purging and 50% with `purged_kfold_splits`.
+- **The base rate.** With overlapping labels, a "64% accuracy" is compared with the share of the majority class in the same test window (and with "always up"), with an interval that respects the overlap; `discrete_choice.binary_effects` reports accuracy next to the base rate and the AUC.
+
+The final evaluation stays walk-forward with the same horizon; purged K-fold is for choices made before it.
+
+## 13. Intervals for any forecaster: conformal
+
+`forecasting.conformal_intervals(actual, forecast, method="aci", h=h)` turns the out-of-sample errors of any model (target-dated, as `rolling_origin` returns them) into prediction intervals, with no model of the error:
+
+- **What it uses.** The interval for a target forecast at origin t uses only errors already observed at t: for h > 1, the errors of the last h − 1 targets are not yet known and are left out.
+- **Methods.** `"split"` (one calibration block; Lei et al. 2018) and `"rolling"` (recent errors at each origin) cover at least 1 − α only if the errors are exchangeable. `"aci"` (default; Gibbs and Candès 2021) moves the level after each miss so that the share of misses tracks α over time, with no assumption on the data; for h > 1 the update waits for the error to arrive.
+- **What was measured** (v2.7.0, 1000 simulations per cell): with overlapping (h = 4) or persistent (AR 0.9) errors, 95% split and rolling intervals covered 84–95%, worst with 19 calibration errors; ACI covered 93–95% in every cell, h up to 12.
+- **What is guaranteed.** ACI's guarantee is long-run: the share of misses is within (max(α, 1 − α) + hγ)/(Tγ) of α over T forecasts, which is 0.38 for T = 500 and the paper's γ = 0.005. The function prints that slack; report the empirical coverage (with its Wilson interval) as measured, not as guaranteed.
+- Intervals are symmetric around the forecast: a biased forecaster gets wide intervals. Check the bias first (`forecast_metrics`).
+
+## 14. A machine-learning or foundation model as a challenger
+
+A gradient-boosting model, an LSTM or a pre-trained foundation model (TimesFM, Chronos, Moirai…) is evaluated like any other forecaster, never as the default:
+
+1. Same targets, same origins, same information set: produce its forecasts in the walk-forward loop (`walk_forward_splits` with `horizon=`), scaler and features fitted inside each training window.
+2. The simple benchmarks first (§6): naive, seasonal naive, historical mean for returns. Report MASE and Theil U.
+3. A Diebold-Mariano test against the best benchmark over the same forecast sample (`forecasting.evaluate`); for classification, accuracy against the base rate and the AUC.
+4. An interval: `forecasting.conformal_intervals` on its out-of-sample errors, with the empirical coverage.
+5. Count the variants tried (architectures, feature sets, hyper-parameters, seeds) and report the number; a leaderboard's winner is selected on the validation score and needs a test window used once (`review-checklist.md`).
+6. Licence of the weights: some foundation models are open, others are for non-commercial use only (TimesFM 3.0 weights, for example); state it when a client will use the forecast.
+

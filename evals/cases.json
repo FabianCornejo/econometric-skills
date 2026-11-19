@@ -301,6 +301,39 @@
         "Hard-codes a critical value (1.96, 2.8 or 0.84) to build an interval or an MDE in the script or the text",
         "Uses --offline in the doctor on a computer with network"
       ]
+    },
+    {
+      "id": "review-lstm-base-rate",
+      "language": "pt-BR",
+      "prompt": "Revise esta conclusão de um relatório interno: \"Treinamos uma rede LSTM para prever se o Ibovespa sobe no mês seguinte. Cada pregão de 2010 a 2024 é uma observação, e o rótulo é o sinal do retorno dos 21 pregões seguintes. Usamos validação cruzada em 5 partes com embaralhamento e testamos 7 combinações de variáveis. A melhor acertou 64,8% dos meses no conjunto de teste, com AUC de 0,52. Como 64,8% está bem acima de 50%, o modelo tem poder preditivo e recomendamos usá-lo na alocação.\" No conjunto de teste, 66% dos meses foram de alta.",
+      "must": [
+        "Uses Reviewer mode: summary of the claim, verdict, findings by severity and what would change the verdict.",
+        "Compares 64.8% with the base rate of the same test window (66% up months, i.e. 'always up'), not with 50%, and reads the AUC of 0.52 as no discrimination: the model does not beat the naive rule.",
+        "Flags the overlapping labels (each daily label spans 21 trading days, so neighbouring rows share 20 of them) and the shuffled K-fold as leakage: rows from the same month fall in training and test; asks for walk-forward or purged K-fold with embargo (backtest.walk_forward_splits(horizon=21) or backtest.purged_kfold_splits) and says how many independent labels there are (backtest.label_overlap).",
+        "Flags the seven feature sets as multiple comparisons: the best of seven is selected on the test score and needs an untouched test window or an adjustment.",
+        "Asks for an interval for the accuracy (or its difference from the base rate) that respects the overlap, and for the economic test (strategy after costs against buy-and-hold) before any allocation."
+      ],
+      "must_not": [
+        "Accepts 64.8% against 50% as evidence of predictive power.",
+        "Recommends using the model in the allocation.",
+        "Invents numbers the report does not give."
+      ]
+    },
+    {
+      "id": "review-automl-leaderboard",
+      "language": "pt-BR",
+      "prompt": "Revise este trecho de uma apresentação para a diretoria: \"Comparamos 25 modelos com uma ferramenta de AutoML, em validação cruzada de 10 partes, para prever o cancelamento de assinaturas. O vencedor, um LightGBM, teve AUC de 0,87, contra 0,81 da regressão logística. Ajustamos os hiperparâmetros do vencedor nas mesmas 10 partes e chegamos a AUC de 0,88. Concluímos que o LightGBM é 7 pontos melhor que a logística e vamos colocá-lo em produção.\"",
+      "must": [
+        "Uses Reviewer mode: summary of the claim, verdict, findings by severity and what would change the verdict.",
+        "Flags selection bias: the winner of 25 models chosen by its cross-validated AUC, then tuned on the same 10 folds, reports an optimistic AUC; asks for a test set used once (or nested cross-validation) for the final number.",
+        "Asks for an interval or a test for the AUC difference (0.87 or 0.88 vs 0.81, e.g. DeLong or a bootstrap on the held-out set) and notes that the '7 points' comes from the tuned, selected model.",
+        "Asks whether the folds respect time (customers or months appearing in training and validation) when cancellation depends on the period, and for a simple benchmark and calibration before production.",
+        "States how many configurations were tried in total (models times hyper-parameters) as part of the result."
+      ],
+      "must_not": [
+        "Accepts the 7-point gain as the expected gain in production.",
+        "Invents numbers the presentation does not give."
+      ]
     }
   ]
 }

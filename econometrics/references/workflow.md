@@ -17,6 +17,8 @@ Five to ten lines, shown to the user and kept at the top of the report. It is a 
 | Threats | Confounders not measured, reverse causality, selection, measurement error, look-ahead |
 | Robustness plan | At least two checks chosen now (step 6) |
 
+**Write it down before estimating** (v2.7.0): `reporting.study_card(path="study_card.json", question=..., estimand=..., design=..., ...)` saves the card in the working folder with the time and a sha256 of its content, and `reporting.run_manifest(..., study_card="study_card.json")` records that hash next to the results. Re-running the script leaves the card untouched; a change needs `amend=True` and a reason, kept in the file with the previous version. Add `alpha` and `family_of_tests` (the tests whose p-values will be adjusted). A forecast gets a short card: question, estimand ("forecast of y at h = 1..12"), design (models and benchmarks), `horizon`, `loss` (MAE, RMSE, pinball), `benchmarks` and `window`.
+
 Separating X from W (EconML's convention) prevents a common error: reading the coefficient of a control as if it were an effect. A control is in the model to clean the coefficient of interest, not to be interpreted.
 
 Choose W with a causal graph: write it from institutional knowledge and run `dag.adjustment_report(g, treatment, y, df)` (`causal-inference.md` §2.1). It returns the valid adjustment sets and flags mediators, colliders, post-treatment variables and instruments, which must not be in W. For a planned study, add the design's MDE to the card (`simulation.mde_did` / `power_did_sim`, `causal-inference.md` §6.2).

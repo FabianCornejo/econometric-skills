@@ -92,7 +92,9 @@ except ModuleNotFoundError as e:   # name a command that starts THIS Python ('py
 ```
 
 # ... then load data (or simulate data with the same structure), estimate, diagnose, and end with
-# reporting.run_manifest(data={"panel": df}, seed=SEED, results={"ATT": res["overall"]}, path="manifest.json")
+# reporting.run_manifest(data={"panel": df}, files=[DATA_FILE], seed=SEED, results={"ATT": res["overall"]},
+#                        study_card="study_card.json", path="manifest.json")
+# (write the card with reporting.study_card before the first estimate; DATA_FILE is the file the data came from)
 
 To run it in your own environment, set `ECONOMETRICS_SKILL_DIR` to the skill folder there; never write that path, a sandbox path or the versioned plugin cache path (`plugins/cache/econometric-skills/econometrics/<version>/`, which changes at every release) into the file. List the modules the script really uses in the `import` line of the block.
 
@@ -250,3 +252,10 @@ From the v2.6.12 validation (an IV of the return to schooling, log wage on educa
 
 - **One conversion of a log coefficient, printed by the script, the same everywhere.** For log y, print 100·(e^b − 1) and the same transformation of the CI limits in the script, and quote that number in the summary, the body and any table. 100·b is an approximation (good for |b| below about 0.1): use either the exact or the approximate figure for a coefficient, never both, and call the approximate one approximate.
 - **The direction of the IV bias, said once and with its reason.** Keep three things apart: (1) OLS: plim b_OLS − β = Cov(x, u)/Var(x), so OLS is biased in the direction of the sign of Cov(x, u) (ability raises schooling and wages: OLS too high); (2) 2SLS in large samples: plim b_2SLS − β = Cov(z, u)/Cov(z, x), zero only if the instrument is exogenous, with the sign of Cov(z, u) times the sign of Cov(z, x); with a positive first stage, an instrument correlated with the omitted factor in the same direction as x (parents' schooling with ability) makes 2SLS too high as well, and with a weak first stage the ratio can be larger than OLS's bias; (3) 2SLS in finite samples is biased toward OLS, more so the weaker the instruments. A 2SLS estimate below OLS does not by itself show which is right: OLS biased up, measurement error in x (which pulls OLS toward zero and makes 2SLS larger, not smaller), a local effect for compliers (LATE) and an invalid instrument all move the gap. Name the assumed sign of each covariance and draw one conclusion; never call the same estimate biased down and above the true value.
+
+## Rules added in v2.7.0
+
+- **Findings with a level and an action.** Functions added from v2.7.0 on (`backtest.purged_kfold_splits`, `backtest.label_overlap`, `forecasting.conformal_intervals`, `reporting.study_card`) return each finding as `level` ("warning": the number may mislead if read as it is; "notice": context the reader needs), `message` and `action`. Relay all three; never drop the action, and never present a "warning" finding as a footnote.
+- **Coverage measured is not coverage guaranteed.** A conformal interval from `"split"` or `"rolling"` is guaranteed only for exchangeable errors; with overlapping or persistent errors say the level is not guaranteed and report the empirical coverage with its interval. For `"aci"`, give the empirical coverage and the slack the function prints; when the slack is above 0.05, write that the long-run guarantee is not informative at this sample length.
+- **Overlapping labels.** With labels that look h periods ahead, say how many independent labels the sample holds (`label_overlap`), use splits with `horizon=h`, and judge accuracy against the base rate of the same window; a score from shuffled K-fold is not evidence of skill.
+- **The study card predates the results.** Write it with `reporting.study_card` before the first estimate and pass it to `run_manifest(study_card=)`; report every amendment with its reason and whether results had been seen. A card changed by hand (the manifest says so) is reported as such. Pass the source file in `files=` so the raw input can be checked, not only the cleaned DataFrame.

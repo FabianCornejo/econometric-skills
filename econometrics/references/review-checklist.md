@@ -49,6 +49,10 @@ Every check you request names the function of this skill that runs it (`estimati
 - [ ] Missing data handled and N reported per model; outliers and influential points checked?
 - [ ] Nominal vs real, seasonality, breaks, frequency alignment?
 - [ ] Look-ahead in forecasts, signals or risk models?
+- [ ] Labels that look ahead (a return over the next month computed every day, churn over the next 90 days): do they overlap, and were the splits purged? Shuffled K-fold on a time series, or contiguous folds without purging, lets the score measure memory rather than skill (`backtest.label_overlap`, `backtest.walk_forward_splits(horizon=)`, `backtest.purged_kfold_splits`). A t-statistic on overlapping labels without HAC errors is inflated by about √h.
+- [ ] Classification accuracy compared with the base rate of the same test window (and "always the majority class"), with an interval, and the AUC? 64% accuracy when 66% of the months went up is no skill (`discrete_choice.binary_effects`).
+- [ ] A leaderboard or AutoML result: how many models, feature sets and settings were compared; was the winner chosen on the same window that reports its score; is there a test window used once and a naive benchmark? The best of many is biased upward by selection.
+- [ ] A forecast without an interval, or an interval whose coverage was never checked out of sample (`forecasting.conformal_intervals`)?
 
 **Robustness and magnitude**
 - [ ] At least two robustness checks, with results that do not depend on one specification?
