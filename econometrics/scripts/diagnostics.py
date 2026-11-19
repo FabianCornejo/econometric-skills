@@ -612,8 +612,9 @@ def _count_dirs(Mr, amps, amp_ref, s_all, n_obs, k_tot):
       columns behind the projection, amp_ref, if larger), so every column's rounding is about eps, and the singular
       values of that matrix are compared with 2·eps·(√n + √k). Before v2.6.13 the floor used the largest factor of
       all the columns: z3 = 1e12 + z merged two other instruments that differ by 1e-6 (review r1-A N4 of v2.6.12).
-      Known limit (v2.6.13 review r1-A A4): amp_ref, the factor of the columns behind the projection (an exogenous
-      regressor stored as 1e10 + w), still applies to every column and can merge instruments that differ by 1e-6."""
+      Since v2.7.1, _new_dirs calls this with amp_ref = 1 and handles the columns behind the projection direction by
+      direction (_src_floor): with the largest factor on every column, an exogenous regressor stored as 1e10 + w merged
+      instruments that differ by 1e-6 (v2.6.13 review r1-A A4)."""
     eps = np.finfo(float).eps
     s = np.linalg.svd(Mr, compute_uv=False)
     k_rel = int(np.sum(s > _rank_tol(s_all, n_obs)))
@@ -623,10 +624,35 @@ def _count_dirs(Mr, amps, amp_ref, s_all, n_obs, k_tot):
     return min(k_rel, k_floor)
 
 
-def _new_dirs(M, Q, s_ref, amp_ref, n_obs, centre: bool = True):
+# v2.7.1 (claude/medicoes-v2.7.1.md, M3a): constant of the per-direction floor for the rounding that the columns behind a
+# projection carry (an offset such as 1e10 + w). No error in the measured cases for any C from 1 to 256 (below 1 a column
+# that is 2·w exactly counted as a new instrument; from 1e3 on, offsets of 1e14 removed real instruments); 16 is the
+# geometric middle
+_SRC_FLOOR_C = 16.0
+_SRC_RCOND = 1e-8           # coefficients of a direction on the source columns: near-collinear sources are truncated
+
+
+def _src_floor(Mc, Vt, src):
+    """Rounding floor of each direction Mc·v_i (v2.7.1, review r1-A A4 of v2.6.13): the rounding that a source column S_k
+    of the projection carries (its offset factor a_k times eps, on entries of size 1 after scaling) reaches a direction
+    in proportion to the direction's coefficient on S_k, so the floor is C·eps·Σ_k |c_ik|·a_k·‖S_k‖, with c the
+    coefficients of Mc·v_i on the source columns. A direction that W does not explain (two instruments that differ by
+    1e-6·e) gets almost no floor from an offset in W; a column that is 2·w exactly, with w stored as 1e10 + w, gets the
+    full rounding of w and merges, as before."""
+    S, a = src
+    if not S.shape[1]:
+        return np.zeros(Vt.shape[0])
+    coef = np.linalg.lstsq(S, Mc @ Vt.T, rcond=_SRC_RCOND)[0]
+    size = np.maximum(a, 1.0) * np.linalg.norm(S, axis=0)
+    return _SRC_FLOOR_C * np.finfo(float).eps * (np.abs(coef) * size[:, None]).sum(axis=0)
+
+
+def _new_dirs(M, Q, s_ref, amp_ref, n_obs, centre: bool = True, src=None):
     """Directions of M (centred and scaled) outside span(Q): left singular vectors and their count. The tolerance is
-    _rank_tol, with a floor for the rounding that centring a column with a large offset leaves, in each column of M
-    or in the columns behind Q (amp_ref; v2.6.9 round 3, v2.6.12 review r1, per column since v2.6.13).
+    _rank_tol, with a floor for the rounding that centring a column with a large offset leaves in each column of M
+    (v2.6.9 round 3, v2.6.12 review r1, per column since v2.6.13), and, since v2.7.1, a floor for the rounding of the
+    columns behind Q computed direction by direction (_src_floor). src = (S, a): the scaled source columns that span Q
+    and their offset factors; without it, Q's own columns with the single factor amp_ref.
     centre=False (v2.6.13 review r1-A A2): the columns are only scaled, for models whose span has no constant (there,
     centring M would test another model)."""
     if centre:
@@ -638,13 +664,16 @@ def _new_dirs(M, Q, s_ref, amp_ref, n_obs, centre: bool = True):
     if not Mc.shape[1]:
         return np.zeros((n_obs, 0)), 0
     Mr = Mc - Q @ (Q.T @ Mc)
-    U, _, _ = np.linalg.svd(Mr, full_matrices=False)
+    U, s, Vt = np.linalg.svd(Mr, full_matrices=False)
     s_all = max(s_ref, np.linalg.svd(Mc, compute_uv=False).max())
-    k = _count_dirs(Mr, amps, amp_ref, s_all, n_obs, Mc.shape[1] + Q.shape[1])
+    k = _count_dirs(Mr, amps, 1.0, s_all, n_obs, Mc.shape[1] + Q.shape[1])
+    if Q.shape[1]:
+        floor = _src_floor(Mc, Vt, src if src is not None else (Q, np.full(Q.shape[1], max(float(amp_ref), 1.0))))
+        k = min(k, int(np.sum(s > floor)))
     return U[:, :k], k
 
 
-def _w_basis(X0, n_obs, add_const: bool = True):
+def _w_basis(X0, n_obs, add_const: bool = True, return_src: bool = False):
     """Orthonormal basis of the exogenous regressors (centred, scaled, constant put back) and its rounding factor.
     add_const=False (v2.6.13, iv_report): the columns as they are, scaled but not centred, for models without a
     constant in their span."""
@@ -658,10 +687,12 @@ def _w_basis(X0, n_obs, add_const: bool = True):
         Wm = X0[:, m > 0] / m[m > 0]
         amps = np.ones(Wm.shape[1])
     if not Wm.shape[1]:
-        return np.zeros((n_obs, 0)), 0.0, 1.0
+        out = (np.zeros((n_obs, 0)), 0.0, 1.0)
+        return out + ((Wm, amps),) if return_src else out
     UW, sW, _ = np.linalg.svd(Wm, full_matrices=False)
     r_w = _count_dirs(Wm, amps, 1.0, sW.max(), n_obs, Wm.shape[1])
-    return UW[:, :r_w], sW.max(), float(np.max(amps))
+    out = (UW[:, :r_w], sW.max(), float(np.max(amps)))
+    return out + ((Wm, amps),) if return_src else out
 
 
 # v2.6.13 (claude/medicoes-v2.6.13.md, M5): the smallest relative range (ptp / max|x|) among 368 numeric columns of 20
@@ -698,18 +729,28 @@ def _constant_in_span(X):
     return float(np.linalg.norm(res1)) <= 1e-10 * np.sqrt(n), near
 
 
-def _iv_basis(Wraw, Zraw, n_obs, add_const: bool = True):
+def _iv_basis(Wraw, Zraw, n_obs, add_const: bool = True, return_src: bool = False):
     """Bases of the exogenous regressors and of the instrument directions beyond them, and the leverages
     (v2.6.13: one function for endogeneity_test and iv_report). Returns QW, s_w, amp_w, UZ (orthonormal directions
     of Z outside span(W)), n_z, amp_z, h (first-stage leverage, from [W, Z]) and hz (the instruments' part of it,
     h − h_W)."""
-    QW, s_w, amp_w = _w_basis(Wraw, n_obs, add_const=add_const)
+    QW, s_w, amp_w, (Ws, aw) = _w_basis(Wraw, n_obs, add_const=add_const, return_src=True)
     Zraw = np.asarray(Zraw, dtype=float).reshape(n_obs, -1)
-    UZ, n_z = _new_dirs(Zraw, QW, s_w, amp_w, n_obs, centre=add_const)
+    UZ, n_z = _new_dirs(Zraw, QW, s_w, amp_w, n_obs, centre=add_const, src=(Ws, aw))
     amp_z = _scaled_centred(Zraw)[1] if add_const else 1.0
     hz = np.sum(UZ ** 2, axis=1)
     h = np.sum(QW ** 2, axis=1) + hz
-    return QW, s_w, amp_w, UZ, n_z, amp_z, h, hz
+    out = (QW, s_w, amp_w, UZ, n_z, amp_z, h, hz)
+    if not return_src:
+        return out
+    # v2.7.1: the scaled source columns of W and Z with their offset factors, for the per-direction floor of the
+    # endogenous regressors (an offset in one instrument no longer counts for directions that do not use it)
+    if add_const:
+        Zs, az = _scaled_centred(Zraw, per_column=True)
+    else:
+        m = np.max(np.abs(Zraw), axis=0) if Zraw.shape[1] else np.zeros(0)
+        Zs, az = Zraw[:, m > 0] / m[m > 0], np.ones(int(np.sum(m > 0)))
+    return out + ((np.column_stack([Ws, Zs]), np.concatenate([aw, az])),)
 
 
 # v2.6.13 (claude/medicoes-v2.6.13.md, M2): with HC0, and for the robust overidentification score test of
@@ -752,6 +793,12 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     - HC0 with an average leverage k/n of 0.19 or more (k = exogenous directions plus instruments; v2.6.13): the same
       warning, whatever the df (simulated size 8.7-15.7%; HC1 stayed at 4.5-7.9% and HC3 at or below 6.6%, but HC3 is
       conservative with many controls and few rows: 0.8-1.6% with 20 controls and n = 52-60).
+    - HC0 below that (v2.7.1): a separate warning whenever the test is computed with HC0, because HC0 rejected
+      5.9-11.4% at every k/n from 0.08 to 0.19 (HC1 4.5-9.1%, HC3 2.3-6.3%; 1000 replications per cell, n = 50, 120
+      and 300, claude/medicoes-v2.7.1.md M3c).
+    - An offset in an exogenous regressor or an instrument (1e10 + w) no longer merges instruments, or makes an
+      endogenous regressor "perfect", along directions that the offset column does not enter (v2.7.1; the floor for
+      that rounding is computed direction by direction).
     Keys: first_stage_F (dict by endogenous regressor), statistic, p, n_instruments, warnings, high_leverage_rows
     (index labels of the rows with leverage 1; empty if none), perfect_first_stage (list of regressors).
     """
@@ -796,8 +843,9 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     # - n_z = number of singular values of that residual above the tolerance (_rank_tol, v2.6.12; and a floor for
     #   the rounding left by centring a column with a large offset, in Z or in W). z and 2z count once; z and 3w
     #   (w exogenous) count once, and the F is the F of z alone.
-    QW, s_w, amp_w, UZ, n_z, amp_z, _, _ = _iv_basis(d[wcols].to_numpy(dtype=float).reshape(n_obs, len(wcols)),
-                                                     d[list(Z.columns)].to_numpy(dtype=float), n_obs)
+    QW, s_w, amp_w, UZ, n_z, amp_z, _, _, src_wz = _iv_basis(d[wcols].to_numpy(dtype=float).reshape(n_obs, len(wcols)),
+                                                             d[list(Z.columns)].to_numpy(dtype=float), n_obs,
+                                                             return_src=True)
     r_w = QW.shape[1]
     n_x = len(xcols)
     if n_z < len(Z.columns):
@@ -820,12 +868,13 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
     # rounding (F of 1e32 and "endogenous" before); the same rank rule decides it, for each regressor and jointly
     perfect, joint_degenerate = [], False
     if n_z > 0 and not fs_saturated:
-        perfect = [c for j, c in enumerate(xcols) if _new_dirs(XV[:, [j]], QWZ, s_wz, amp_wz, n_obs)[1] == 0]
+        perfect = [c for j, c in enumerate(xcols)
+                   if _new_dirs(XV[:, [j]], QWZ, s_wz, amp_wz, n_obs, src=src_wz)[1] == 0]
         if not perfect and n_x > 1:
             # the rank rule on the block, with the offset floor (review r3: without it, x2 = x1 + 3w with w stored as
             # 1e8 + w gave a test made of rounding that changed with the environment); the condition check below
             # covers residuals that differ by less than √eps
-            k_x = _new_dirs(XV, QWZ, s_wz, amp_wz, n_obs)[1]
+            k_x = _new_dirs(XV, QWZ, s_wz, amp_wz, n_obs, src=src_wz)[1]
             joint_degenerate = k_x < n_x
     if joint_degenerate:
         warn.append(f"the {n_x} endogenous regressors are jointly degenerate: only {k_x} direction(s) of them lie "
@@ -892,11 +941,8 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
             # the fit and for the leverage (r1: raw columns at 1e13 hid a leverage of 1); the Wald test on v̂ does not
             # depend on the scale of the columns
             Xt = np.column_stack([QW, XV - QW @ (QW.T @ XV), V])
-            Xn = Xt / np.maximum(np.linalg.norm(Xt, axis=0), 1e-300)
-            Ut, st, _ = np.linalg.svd(Xn, full_matrices=False)
-            Ut = Ut[:, : int(np.sum(st > _rank_tol(st.max(), n_obs)))]
-            ht = np.sum(Ut ** 2, axis=1)
-            hxv = ht - np.sum(QW ** 2, axis=1)      # the part of [x net of W, v̂] (beyond what W gives the row)
+            # hxv: the part of [x net of W, v̂] (beyond what W gives the row)
+            Xn, ht, hxv = _test_leverage(Xt, QW, n_obs)
             h_t_max = float(np.max(hxv))
             if robust and not lev_rows:
                 test_lev = list(d.index[(ht > 1 - lev_cut) & (hxv > 1e-4)])
@@ -933,6 +979,13 @@ def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = 
                     "case (simulated: size above 10% from leverage 0.5 with no first stage at all, P(F > 10) above 5% "
                     "with few degrees of freedom, and an HC0 test size of 8.7-15.7% from k/n = 0.19); use "
                     "cov_type='HC3' (the default)" + (f"; nonrobust first-stage F: {nr}" if nr else "") + ".")
+    elif str(cov_type).upper() == "HC0" and identified and not high_lev:
+        # v2.7.1 (claude/medicoes-v2.7.1.md, M3c; decision of the user): HC0 rejected 5.9-11.4% under exogeneity at every
+        # average leverage k/n from 0.08 to 0.19, with no natural cut (HC1 4.5-9.1%, HC3 2.3-6.3%), so it is flagged
+        # whenever it is chosen, not only from k/n = 0.19
+        warn.append("HC0 rejects too often in this test even without high leverage: simulated size 5.9-11.4% at a 5% "
+                    "level with average leverage k/n from 0.08 to 0.19 (HC1 4.5-9.1%, HC3 2.3-6.3%); use "
+                    "cov_type='HC3' (the default), or say that the p-value is optimistic.")
     out = {"first_stage_F": f_first, "statistic": stat_, "p": p_, "n_instruments": n_z,
            "warnings": warn, "high_leverage_rows": high_lev, "perfect_first_stage": perfect}
     if show:
@@ -985,6 +1038,7 @@ def overid_test(resid_2sls, included_exog: pd.DataFrame | None, instruments: pd.
     Regresses the 2SLS residuals on all included exogenous variables and excluded instruments.
     q = number of excluded instruments − number of endogenous regressors (must be ≥ 1).
     Assumes homoskedasticity; with heteroskedasticity use Hansen's J (IVGMM ... .j_stat).
+    Keys: nR2 (Wooldridge's statistic), sargan, q (degrees of freedom), p (of nR2).
     """
     parts = [instruments] if included_exog is None else [included_exog, instruments]
     Z = sm.add_constant(pd.concat(parts, axis=1))
@@ -1063,7 +1117,19 @@ def _formula_rows(formula: str, data: pd.DataFrame) -> pd.DataFrame:
     return data.dropna(subset=used) if used else data
 
 
-def _cf_degenerate(XE, Wb, Zb, amp_ref=1.0, centre=True):
+def _test_leverage(Xt, QW, n_obs):
+    """Leverage of the rows in a test regression (v2.7.1: one function for endogeneity_test and iv_report's control-
+    function test, review r1-A A5 of v2.6.13). Columns at unit norm (raw columns at 1e13 hid a leverage of 1, v2.6.12
+    review r1); returns the normed columns, the leverage h of each row and the part beyond what the exogenous regressors
+    QW (orthonormal) give the row."""
+    Xn = Xt / np.maximum(np.linalg.norm(Xt, axis=0), 1e-300)
+    Ut, st, _ = np.linalg.svd(Xn, full_matrices=False)
+    Ut = Ut[:, : int(np.sum(st > _rank_tol(st.max(), n_obs)))]
+    ht = np.sum(Ut ** 2, axis=1)
+    return Xn, ht, ht - np.sum(QW ** 2, axis=1)
+
+
+def _cf_degenerate(XE, Wb, Zb, amp_ref=1.0, centre=True, src=None):
     """endogeneity_test's rules for degenerate endogenous regressors, on [Wb, Zb] (v2.6.13): returns the kind (None,
     "perfect" or "joint"), the list of perfect columns (positions), an orthonormal basis of [Wb, Zb] and the first-stage
     residuals."""
@@ -1073,10 +1139,10 @@ def _cf_degenerate(XE, Wb, Zb, amp_ref=1.0, centre=True):
     UB, sB, _ = np.linalg.svd(B / np.maximum(np.max(np.abs(B), axis=0), 1e-300), full_matrices=False)
     QB = UB[:, : int(np.sum(sB > _rank_tol(sB.max(), n)))]
     V = XE - QB @ (QB.T @ XE)
-    perfect = [j for j in range(k) if _new_dirs(XE[:, [j]], QB, 1.0, amp_ref, n, centre=centre)[1] == 0]
+    perfect = [j for j in range(k) if _new_dirs(XE[:, [j]], QB, 1.0, amp_ref, n, centre=centre, src=src)[1] == 0]
     if perfect:
         return "perfect", perfect, QB, V
-    if k > 1 and _new_dirs(XE, QB, 1.0, amp_ref, n, centre=centre)[1] < k:
+    if k > 1 and _new_dirs(XE, QB, 1.0, amp_ref, n, centre=centre, src=src)[1] < k:
         return "joint", [], QB, V
     if k > 1:
         sv = np.linalg.svd(V / np.maximum(np.linalg.norm(V, axis=0), 1e-300), compute_uv=False)
@@ -1085,24 +1151,37 @@ def _cf_degenerate(XE, Wb, Zb, amp_ref=1.0, centre=True):
     return None, [], QB, V
 
 
-def _cf_test(yv, XE, Wb, Zb, cov, amp_ref=1.0, centre=True):
+def _cf_test(yv, XE, Wb, Zb, cov, amp_ref=1.0, centre=True, src=None):
     """Control-function (regression) test of exogeneity of the columns XE in the 2SLS model with exogenous columns
     Wb and instruments Zb (v2.6.13, iv_report): v̂ = residuals of XE on [Wb, Zb]; regress y on [Wb, XE net of Wb, v̂]
     (columns at unit norm, as in endogeneity_test) and test v̂ = 0 with the covariance cov. Degenerate cases follow
     endogeneity_test (review r1-A A3): an endogenous column with no direction outside span(W, Z) ("perfect"), the
     block with fewer directions than columns, or residuals whose columns at unit norm have σ_min/σ_max below √eps
-    ("jointly degenerate"). Returns F, p and None, "perfect" or "joint" (then F and p are NaN)."""
-    kind, perfect, QB, V = _cf_degenerate(XE, Wb, Zb, amp_ref, centre)
+    ("jointly degenerate"). Since v2.7.1 the leverage of the test regression follows endogeneity_test too (review r1-A
+    A5 of v2.6.13; _test_leverage): a row within 1e-8 of leverage 1 beyond the exogenous regressors ("leverage"; HC1 is
+    degenerate there) gives NaN. Returns F, p, None, "perfect", "joint" or "leverage" (then F and p are NaN), and
+    {"h_max": the largest leverage beyond W, "rows": positions of the rows at leverage 1}."""
+    kind, perfect, QB, V = _cf_degenerate(XE, Wb, Zb, amp_ref, centre, src=src)
+    info = {"h_max": 0.0, "rows": []}
     if kind:
-        return float("nan"), float("nan"), kind
+        return float("nan"), float("nan"), kind, info
     k = XE.shape[1]
+    n = len(yv)
     Xn = XE - Wb @ np.linalg.lstsq(Wb, XE, rcond=None)[0] if Wb.shape[1] else XE
-    Xt = np.column_stack([Wb, Xn, V])
-    Xt = Xt / np.maximum(np.linalg.norm(Xt, axis=0), 1e-300)
+    if Wb.shape[1]:
+        UW, sW, _ = np.linalg.svd(Wb / np.maximum(np.max(np.abs(Wb), axis=0), 1e-300), full_matrices=False)
+        QW = UW[:, : int(np.sum(sW > _rank_tol(sW.max(), n)))]
+    else:
+        QW = np.zeros((n, 0))
+    Xt, ht, hxv = _test_leverage(np.column_stack([Wb, Xn, V]), QW, n)
+    info["h_max"] = float(np.max(hxv)) if hxv.size else 0.0
+    info["rows"] = list(np.flatnonzero((ht > 1 - 1e-8) & (hxv > 1e-4)))
+    if info["rows"]:
+        return float("nan"), float("nan"), "leverage", info
     fit = sm.OLS(yv, Xt).fit(cov_type=cov)
     R = np.zeros((k, Xt.shape[1])); R[:, -k:] = np.eye(k)
     w = fit.wald_test(R, scalar=True, use_f=True)
-    return float(w.statistic), float(w.pvalue), None
+    return float(w.statistic), float(w.pvalue), None, info
 
 
 def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha: float = ALPHA,
@@ -1151,10 +1230,15 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
       warning (centre it), and the model is treated as having no constant unless another column gives one (the 1e-8
       cut comes from a survey of real columns, not from a simulation: the smallest relative range among 368 numeric
       columns of 20 Wooldridge datasets was 1.0e-3).
-    Keys of the result:
-      table             OLS and 2SLS coefficients, SEs, 2SLS p and confidence interval;
-      first_stage       partial F, its p, partial R² and strength label, one row per endogenous regressor;
-      tests             endogeneity and (if overidentified) overidentification: statistic and p;
+    Keys of the result (also in references/panel-iv.md, "What the result holds"):
+      table             columns "OLS", "OLS se", "2SLS", "2SLS se", "2SLS p", "2SLS ci_low", "2SLS ci_high", one row per
+                        coefficient;
+      first_stage       columns "partial F", "partial F p", "partial R²", "strength" (and "partial F (HC3)" with a row of
+                        leverage 0.5 or more), one row per endogenous regressor. The robust F is HC0 (as linearmodels):
+                        its p rejected 6-17% with irrelevant instruments while P(F > 10) stayed at or below 0.6% (v2.7.1,
+                        M3c), so read the strength from F against 10 and 104.7, not from the p;
+      tests             DataFrame indexed by the test's name (endogeneity, and overidentification if overidentified), columns
+                        "H0", "statistic", "p";
       anderson_rubin    one endogenous regressor: {"estimand", "ci_low", "ci_high", "pieces", "shape",
                         "p_at_zero", "level", "cov"}; several: {"estimand" (list), "joint_F_at_zero",
                         "joint_p_at_zero", "df", "pieces": None, "shape", "level", "cov"}; "cov" is the covariance
@@ -1241,7 +1325,7 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     yv = np.asarray(iv.model.dependent.ndarray, dtype=float).ravel()
     XE = np.asarray(iv.model.endog.ndarray, dtype=float).reshape(n_used, n_endog)
     Zr = np.asarray(iv.model.instruments.ndarray, dtype=float).reshape(n_used, q_instr)
-    Wb, _, amp_w, Zb, n_zdir, amp_z, h_fs, hz = _iv_basis(W0, Zr, n_used, add_const=has_const)
+    Wb, _, amp_w, Zb, n_zdir, amp_z, h_fs, hz, src_wz = _iv_basis(W0, Zr, n_used, add_const=has_const, return_src=True)
     if n_zdir < q_instr:              # linearmodels refuses rank-deficient instruments; keep its columns then
         Wb, Zb = W0, Zr
         hz = np.zeros(n_used); h_fs = np.zeros(n_used)
@@ -1271,7 +1355,8 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     yk, XEk = yv[keep_r], XE[keep_r]
     # review r2 R2: the degenerate cases decided once, for both covariance modes (a perfect first stage showed F 2.8e32
     # "strong" with "unadjusted", and Wu-Hausman NaN with no word)
-    deg_kind, deg_perfect, _, _ = _cf_degenerate(XE, Wb, Zb, amp_wz, has_const) if n_zdir == q_instr else (None, [], 0, 0)
+    deg_kind, deg_perfect, _, _ = (_cf_degenerate(XE, Wb, Zb, amp_wz, has_const, src=src_wz) if n_zdir == q_instr
+                                   else (None, [], 0, 0))
     # leverage 1 from the instruments: the robust covariances are degenerate on that row (resid 0 there); 1e-8 as for
     # HC0/HC1 in endogeneity_test (the first-stage F here is HC0, the control-function test HC1)
     lev_pos = np.flatnonzero((h_fs > 1 - 1e-8) & (hz > 1e-4)) if robust else np.zeros(0, int)
@@ -1359,12 +1444,27 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         # 4.5-7.9% in every cell). Its value stays in "endogeneity_linearmodels" (comparable with Stata).
         st_lm, p_lm = _lm(lambda: iv.wooldridge_regression)
         lm_endo = {"test": "Wooldridge robust regression (linearmodels)", "statistic": st_lm, "p": p_lm}
+        cf_info = {"h_max": 0.0, "rows": []}
         if lev_rows or skip_rob or deg_kind:
             st_e, p_e, k_cf = float("nan"), float("nan"), deg_kind
         else:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                st_e, p_e, k_cf = _cf_test(yk, XEk, Wk, Zk, "HC1", amp_ref=amp_wz, centre=has_const)
+                st_e, p_e, k_cf, cf_info = _cf_test(yk, XEk, Wk, Zk, "HC1", amp_ref=amp_wz, centre=has_const,
+                                                    src=(src_wz[0][keep_r], src_wz[1]))
+        # v2.7.1 (review r1-A A5 of v2.6.13): the leverage of the control-function regression, as endogeneity_test
+        # reads it (before, an outlier in x that the instruments do not reach gave a p with no word, and p = 0.11 at
+        # leverage 1 where endogeneity_test gives NaN)
+        if k_cf == "leverage":
+            lab = ", ".join(str(i) for i in rows[keep_r][cf_info["rows"]][:5]) + (" …" if len(cf_info["rows"]) > 5 else "")
+            warn.append(f"row(s) {lab} have leverage 1 in the control-function regression (an endogenous regressor takes "
+                        "a value there that nothing else in the model reaches): its residual there is zero and the HC1 "
+                        "covariance is degenerate, so the robust endogeneity test is not computed (NaN). Check those "
+                        "rows, then test again.")
+        elif cf_info["h_max"] >= _ROBUST_HIGH_LEVERAGE:
+            warn.append(f"a row with leverage {cf_info['h_max']:.2f} in the control-function regression: HC1 degrades as "
+                        "the leverage of a row approaches 1 (as in endogeneity_test, warned from 0.5); check that row "
+                        "(an outlier in an endogenous regressor) and read the endogeneity test with care.")
         tests.append({"test": "endogeneity (control function, HC1)", "H0": "regressors are exogenous: OLS is consistent",
                       "statistic": st_e, "p": p_e})
     else:

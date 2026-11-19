@@ -26,6 +26,7 @@ cross_check(estimates, se, ...)          the same quantity computed by independe
 from __future__ import annotations
 
 import hashlib
+import unicodedata
 import json
 import os
 import platform
@@ -38,7 +39,7 @@ import numpy as np
 import pandas as pd
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
-SKILL_VERSION = "2.7.0"
+SKILL_VERSION = "2.7.1"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
@@ -234,6 +235,19 @@ def _write_atomic(path: Path, text: str) -> None:
         raise ValueError(f"the study card could not be written to {path} ({e})") from None
 
 
+def _nfc(obj):
+    """Texts (keys and values, in lists too) in Unicode NFC (v2.7.1): "café" typed with a combining accent (NFD, as some
+    editors and macOS file names give it) and with a precomposed é is the same text, and must not make a re-run look like
+    a changed plan."""
+    if isinstance(obj, str):
+        return unicodedata.normalize("NFC", obj)
+    if isinstance(obj, list):
+        return [_nfc(x) for x in obj]
+    if isinstance(obj, dict):
+        return {_nfc(k): _nfc(v) for k, v in obj.items()}
+    return obj
+
+
 def _blank(v) -> bool:
     """A required field must be text, or a list of texts, with something in it (0, False and [" "] are blank)."""
     if isinstance(v, str):
@@ -252,7 +266,8 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     fields: question, estimand, design (required, not blank); assumption, y, treatment, X, W, Z, data,
     threats, robustness_plan, alpha, family_of_tests, mde; for a forecast, horizon, loss, benchmarks and
     window. Values are text, finite numbers or lists (JSON; numpy numbers are converted). Other names are
-    kept and reported as a notice.
+    kept and reported as a notice. Texts are compared and written in Unicode NFC (v2.7.1), so the same words
+    typed with combining accents count as the same plan.
 
     Re-running the same script is safe: with the same fields the file is left untouched (same time, same
     hash). Different fields are refused, because a card that changes after the results are seen is no
@@ -269,7 +284,7 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     Returns path, sha256, created_utc, fields, amendments, `used` and `warnings` (level, message, action)."""
     p = Path(path)
     try:
-        fields = json.loads(json.dumps(fields, default=_plain, allow_nan=False))
+        fields = _nfc(json.loads(json.dumps(fields, default=_plain, allow_nan=False)))
     except (TypeError, ValueError) as e:
         raise ValueError(f"study card fields must be text, finite numbers or lists: {e}") from None
     missing = [f for f in CARD_REQUIRED if _blank(fields.get(f))]
@@ -286,7 +301,7 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     if p.exists():
         card = _read_card(p)
         intact = card.get("sha256") == _card_hash(card)
-        same = _canonical(card["fields"]) == _canonical(fields)
+        same = _canonical(_nfc(card["fields"])) == _canonical(fields)     # a card written before v2.7.1 may hold NFD
         if not intact:
             warns.append(_finding("warning", f"{p.name} was changed outside reporting.study_card (its stored hash does not "
                                   "match its content)", "say so in the report; restore the card from version control, or "
@@ -300,8 +315,9 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
             if same:
                 action = "unchanged"
             else:
-                changed = sorted(k for k in set(card["fields"]) | set(fields)
-                                 if _canonical(card["fields"].get(k)) != _canonical(fields.get(k)))
+                on_file = _nfc(card["fields"])
+                changed = sorted(k for k in set(on_file) | set(fields)
+                                 if _canonical(on_file.get(k)) != _canonical(fields.get(k)))
                 hand = (" The card on file was edited by hand (its hash does not match): if the script holds the plan "
                         "as written, restore it, or record the difference with amend=True and a reason." if not intact else "")
                 raise ValueError(f"{p} already holds a study card (created {card.get('created_utc')}) and these fields "

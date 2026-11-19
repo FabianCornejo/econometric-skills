@@ -1374,6 +1374,10 @@ def prais_winsten(formula: str, data: pd.DataFrame, method: str = "prais", max_i
         if data[time].isna().any() or not data[time].is_unique:
             raise ValueError(f"'{time}' must have unique, non-missing values")
         data = data.sort_values(time)
+    elif data.index.hasnans:
+        # v2.7.1: a missing date (NaT) in the index fell into the "time order" message below
+        raise ValueError(f"the index has {int(data.index.isna().sum())} missing value(s) (NaT): give every row its date, "
+                         "or pass time='<column>'")
     elif not data.index.is_monotonic_increasing or not data.index.is_unique:
         raise ValueError("data are not in time order: sort them, or pass time='<column>'")
     ols = smf.ols(formula, data).fit()

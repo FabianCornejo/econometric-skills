@@ -412,13 +412,20 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
       short record ACI behaves like split conformal on all errors so far.
     The dependence screen of "split" and "rolling" runs Ljung-Box on the errors and on their size, at 2.5% each
     (5% in all; it fired on 6-7% of i.i.d. normal series with 40 to 100 errors, about 5% with 200).
+    Long horizons (v2.7.1, claude/medicoes-v2.7.1.md, M1; 1000 replications per cell, i.i.d. and GARCH returns, the
+    forecast an expanding historical mean): with h = 21 and 120 to 1000 targets, the default gamma left 18-28% of the
+    intervals infinite, in runs of up to ~300 rows, because ACI raised the level to 1 or close to it (the misses of
+    overlapping errors come in runs and each is seen h steps late); total coverage 91-95% (the infinite ones count as covered), 84-94% among the
+    finite ones. gamma = 0.005/h or 0.001 removed them, but the coverage fell to that of "rolling" (90-94%), and
+    calib_size of 100 or 250 did not help. With h = 1 or 5 the default left at most 1.6% infinite (coverage 93.7-95.2%).
+    The finding says which rows are infinite for which reason; `coverage_finite` gives the coverage of the finite ones.
     Intervals are symmetric around the forecast (absolute errors). A biased forecaster gets wide intervals:
     check the bias (forecast_metrics) first. With a level that rounds to 1 (ACI after many misses) the
     interval is infinite; with a level at or below 0 it is empty (a sure miss): both are counted in a finding.
 
     Returns a dict: `table` (actual, forecast, lower, upper, covered, level used, number of calibration
-    errors, empty), `coverage` with its 95% Wilson interval and `n_evaluated`, `guarantee`, `used`,
-    `warnings`."""
+    errors, empty), `coverage` with its 95% Wilson interval and `n_evaluated`, `n_infinite` and `coverage_finite` (the
+    coverage of the finite intervals with an actual; v2.7.1), `guarantee`, `used`, `warnings`."""
     from reporting import SKILL_VERSION, _finding, _print_findings
     if method not in ("aci", "rolling", "split"):
         raise ValueError("method must be 'aci', 'rolling' or 'split'")
@@ -440,6 +447,10 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
     f_s = pd.Series(forecast, dtype=float) if not isinstance(forecast, pd.Series) else forecast.astype(float)
     if len(a_s) != len(f_s) or not a_s.index.equals(f_s.index):
         raise ValueError("actual and forecast must have the same index (target dates, one row per target)")
+    if a_s.index.hasnans:
+        # v2.7.1 (review NIT of v2.7.0): before, a missing date fell into the "time order" message below
+        raise ValueError(f"the index has {int(a_s.index.isna().sum())} missing value(s) (NaT): every row needs its "
+                         "target date; fix or drop those rows first")
     if not (a_s.index.is_monotonic_increasing and a_s.index.is_unique):
         raise ValueError("the index must be in time order with one row per target (oldest first, no repeats): "
                          "otherwise later errors would calibrate earlier forecasts")
@@ -478,18 +489,22 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
     m_used = np.zeros(n, dtype=int)
     evaluated = np.zeros(n, dtype=bool)
     n_obs = int(obs.sum())
+    short_split = False
     if method == "split":
         cs = int(calib_size) if calib_size is not None else n_obs // 2
-        if cs < m_min:
-            raise ValueError(f"only {n_obs} rows with an actual: the default calibration block (half of them, {cs}) "
-                             f"is below {m_min}; pass a longer forecast record")
         if cs > n_obs:
             raise ValueError(f"calib_size = {cs} exceeds the {n_obs} rows with an actual")
         m_need = cs
-        cal = np.sort(r[:cs])
-        q = q_of(cal, 1 - alpha)
-        for i in range(cs - 1 + h, n):
-            half[i], level_used[i], m_used[i], evaluated[i] = q, 1 - alpha, cs, True
+        if cs < m_min:
+            # v2.7.1 (review NIT of v2.7.0): a record too short for the default block (half of the rows with an actual)
+            # gets the same finding as "aci" and "rolling" with too few errors, not an exception; an explicit calib_size
+            # below the minimum was refused above
+            short_split, m_need = True, 2 * m_min
+        else:
+            cal = np.sort(r[:cs])
+            q = q_of(cal, 1 - alpha)
+            for i in range(cs - 1 + h, n):
+                half[i], level_used[i], m_used[i], evaluated[i] = q, 1 - alpha, cs, True
     else:
         m_need = int(calib_size) if calib_size is not None else m_min   # full window before the first interval
         known: list = []                                    # sorted absolute errors known at the current origin
@@ -569,15 +584,43 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
             warns.append(_finding("notice", f"intervals use as few as {m_used[evaluated].min()} past errors; with dependent "
                                   "errors such short calibration under-covers most", "use a longer forecast record or "
                                   "method='aci'"))
-    n_inf = int((evaluated & np.isinf(half)).sum())
+    is_inf = evaluated & np.isinf(half)
+    n_inf = int(is_inf.sum())
     n_empty = int(empty.sum())
+    # v2.7.1 (claude/medicoes-v2.7.1.md, M1): two causes, told apart. With h = 21 and the default gamma, 18-28% of the
+    # intervals were infinite because ACI raised the level (runs of up to ~300 rows), not because of the warm-up: in the
+    # validation of v2.7.0, 204 of 465 (176 at level 1, 28 at levels of 0.9925-0.999 with 87-369 past errors; none from the warm-up)
+    # every infinite interval comes from a level above 1 - alpha (to 1, or close enough that ceil((m + 1)·level) > m): at
+    # the nominal level an interval is computed only from m_min errors on, where the rank is at most m (rolling and split
+    # never give one)
+    n_one = n_inf
+    lev_lo = float(np.min(level_used[is_inf])) if n_inf else np.nan
+    runs = np.diff(np.flatnonzero(np.diff(np.r_[0, is_inf.astype(int), 0])))[::2]
+    longest = int(runs.max()) if runs.size else 0
+    fin_obs = evaluated & obs & ~np.isinf(half) & ~empty
+    T_fin = int(fin_obs.sum())
+    cov_fin = float(np.mean(covered[fin_obs])) if T_fin else np.nan
     if n_inf or n_empty:
         fut = int((evaluated & ~obs & (np.isinf(half) | empty)).sum())
-        warns.append(_finding("notice", f"{n_inf} interval(s) are infinite and {n_empty} empty (a sure miss)"
+        why = []
+        if n_one:
+            why.append(f"{n_one} because ACI raised the level to {lev_lo:.4g} or more after misses that came in a run "
+                       "(with m past errors a level above m/(m + 1) has no finite quantile)"
+                       + (f"; each error is seen {h} steps late, so ACI corrects late" if h > 1 else ""))
+        if n_empty:
+            why.append(f"{n_empty} empty because the level went past 0 (a sure miss)")
+        cov_txt = (f"; the infinite ones count as covered: coverage of the {T_fin} finite intervals with an actual is "
+                   f"{cov_fin:.1%}, against {cov:.1%} in all" if n_inf and T_fin and T else "")
+        warns.append(_finding("notice", f"{n_inf} of {int(evaluated.sum())} interval(s) are infinite and {n_empty} empty"
                               + (f", {fut} of them for targets not yet observed" if fut else "")
-                              + ": the level moved to 1 or past 0, or too few errors for this level",
-                              "report those rows as 'no informative interval', not as an interval; a longer record or "
-                              "a smaller gamma makes them rarer"))
+                              + f" (longest run of infinite intervals: {longest} rows): " + "; ".join(why) + cov_txt,
+                              "report those rows as 'no informative interval', not as an interval, and give the coverage "
+                              "of the finite intervals next to the total"
+                              + (". With a horizon this long and a short record this is expected (simulated with h = 21: "
+                                 "18-28% infinite; a smaller gamma removes them, but the coverage falls to that of "
+                                 "method='rolling', 90-94%): no setting gives finite intervals with the nominal coverage "
+                                 "here, because overlapping errors leave about T/h independent ones" if n_one and h > 1
+                                 else "; a longer record makes them rarer")))
     if T and hi_c < 1 - alpha:
         act = ("the intervals are too narrow for these errors: widen them (method='aci') and say so" if method != "aci"
                else "the record is too short for the long-run guarantee to bind, or the errors changed: say the intervals "
@@ -585,19 +628,23 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
         warns.append(_finding("warning", f"empirical coverage {cov:.1%} ({k} of {T}) is below {_pct(1 - alpha)} beyond its "
                               f"95% Wilson interval [{lo_c:.1%}, {hi_c:.1%}]", act))
     if T == 0:
-        warns.append(_finding("warning", "no row could be evaluated: too few past errors before the last observed target",
+        warns.append(_finding("warning", "no row could be evaluated: too few past errors before the last observed target"
+                              + (f" (method 'split' calibrates on the first half of the {n_obs} rows with an actual, "
+                                 f"fewer than the {m_min} errors a {_pct(1 - alpha)} interval needs)" if short_split else ""),
                               f"supply at least {m_need + h} forecasts with their actual values"))
     used = {"method": method, "alpha": alpha, "h": h, "calib_size": calib_size, "gamma": gamma if method == "aci" else None,
             "n_rows": n, "n_future": int((~obs).sum()), "warm_up_rows": int((~evaluated).sum()),
             "min_calib_errors": m_min, "coverage_ci_level": 0.95, "ljung_box_level": _LB_LEVEL if method != "aci" else None,
             "skill_version": SKILL_VERSION}
     out = {"table": table, "coverage": cov, "coverage_ci": (lo_c, hi_c), "n_evaluated": T, "guarantee": guarantee,
-           "used": used, "warnings": warns}
+           "n_infinite": n_inf, "coverage_finite": cov_fin, "used": used, "warnings": warns}
     if show:
         print(f"\nConformal prediction intervals ({method}, level {_pct(1 - alpha)}, horizon {h})")
         if T:
             print(f"  empirical coverage: {cov:.1%} ({k} of {T} observed targets; Wilson 95% CI "
                   f"[{lo_c:.1%}, {hi_c:.1%}])")
+        if n_inf and T_fin:
+            print(f"  coverage of the {T_fin} finite intervals: {cov_fin:.1%} ({n_inf} infinite, counted as covered above)")
         if method == "aci" and T:
             print(f"  long-run guarantee: share of misses within ±{guarantee['slack']:.3f} of {alpha:g} over these {T} forecasts")
         last = table[evaluated].tail(3)

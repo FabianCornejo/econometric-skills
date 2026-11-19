@@ -51,6 +51,15 @@ Costs of IV: less efficient than OLS (larger variance); biased in finite samples
 
 **All of it in one call**: `diagnostics.iv_report("lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]", df)` (linearmodels syntax, one bracketed block) gives OLS and 2SLS side by side, the first-stage partial F and partial R² with a weak/acceptable/strong label, the endogeneity test, the overidentification test only when the model is overidentified, and, with one endogenous regressor, the Anderson-Rubin confidence set (§4). `cov_type="robust"` (default) uses the robust versions of the tests; `cov_type="unadjusted"` reproduces textbook tables (Wooldridge Example 15.1: 0.059, SE 0.035).
 
+**What the result holds** (v2.7.1; read these keys instead of the source code). `r = diagnostics.iv_report(...)`:
+- `r["table"]`: one row per coefficient (the formula's names, e.g. `"educ"`, `"Intercept"`), columns `OLS`, `OLS se`, `2SLS`, `2SLS se`, `2SLS p`, `2SLS ci_low`, `2SLS ci_high`.
+- `r["first_stage"]`: one row per endogenous regressor, columns `partial F`, `partial F p`, `partial R²`, `strength` (the label), and `partial F (HC3)` when a row has leverage 0.5 or more. Read the strength from the F against 10 and 104.7, not from `partial F p`: the robust F is HC0 (as linearmodels and Stata's `ivreg2, robust`), and its p rejected 6–17% with irrelevant instruments in simulations while P(F > 10) stayed at or below 0.6% (v2.7.1).
+- `r["tests"]`: one row per test, indexed by its name (`"endogeneity (control function, HC1)"`, or `"endogeneity (Wu-Hausman)"` with `cov_type="unadjusted"`; `"overidentification (…)"` only when overidentified), columns `H0`, `statistic`, `p`. Example: `r["tests"]["p"].iloc[0]` is the endogeneity p.
+- `r["anderson_rubin"]`: with one endogenous regressor `estimand`, `ci_low`, `ci_high`, `pieces` (list of intervals), `shape`, `p_at_zero`, `level`, `cov`; with several, `joint_F_at_zero`, `joint_p_at_zero`, `df` instead of the interval.
+- Also `n`, `n_dropped`, `endogenous`, `instruments`, `overidentified_by`, `cov_type`, `warnings` (list of texts), `high_leverage_rows`, `endogeneity_linearmodels` (`test`, `statistic`, `p`; robust only), and the fitted `iv` and `ols` results of linearmodels.
+
+`diagnostics.endogeneity_test(y, X_exog, x_endog, Z)` returns `first_stage_F` (dict by endogenous regressor), `statistic`, `p`, `n_instruments`, `warnings`, `high_leverage_rows`, `perfect_first_stage`. `diagnostics.overid_test(resid_2sls, included_exog, instruments, n_endog)` returns `nR2`, `sargan`, `q` (degrees of freedom), `p`.
+
 **Endogeneity (Durbin-Wu-Hausman, regression version)**:
 1. Regress the suspect endogenous variable on all exogenous variables and instruments; keep the residual v̂.
 2. Add v̂ to the structural equation estimated by OLS (with robust errors if needed).
