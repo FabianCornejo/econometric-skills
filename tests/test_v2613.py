@@ -154,8 +154,9 @@ for h_set, expect in ((0.45, False), (0.55, True), (1 - 1e-6, True)):
         ok = ok and fs["strength"].iloc[0].startswith(want) and "[HC3 F, high-leverage row]" in fs["strength"].iloc[0]
     else:
         ok = ok and "partial F (HC3)" not in fs.columns
-    check(f"leverage {h_set:g} from the instrument: warning {'with the HC3 F (hand sandwich, 1e-8) and label from the '
-          'smaller F' if expect else 'absent'}; HC0 F = hand sandwich", ok, (hh, rh["warnings"], fs))
+    what = "with the HC3 F (hand sandwich) and label from the smaller F" if expect else "absent"
+    check(f"leverage {h_set:g} from the instrument: warning {what}; HC0 F = hand sandwich", ok,
+          (hh, rh["warnings"], fs))
 
 # leverage that comes from W only does not count (a group dummy with one row is exogenous, not an instrument)
 rng = np.random.default_rng(261303)
