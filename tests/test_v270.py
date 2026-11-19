@@ -16,6 +16,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "econometrics" / "scripts"))
+import _console  # noqa: E402,F401  (non-ASCII text on a Windows console)
 import reporting  # noqa: E402
 
 results = []
