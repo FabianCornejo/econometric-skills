@@ -126,17 +126,23 @@ def kfold_reference(n, k, h, e):
     return out
 
 
-ok, cases = True, 0
+ok, cases, refused = True, 0, 0
 for n in (23, 50, 101):
     for k in (2, 3, 5):
         for h in (1, 2, 4, 9):
             for e in (0, 1, 3):
+                ref = kfold_reference(n, k, h, e)
+                if any(not tr for tr, _ in ref):        # a fold with no training row: refused
+                    ok &= bool(raises(bt.purged_kfold_splits, n, k, horizon=h, embargo=e, show=False))
+                    refused += 1
+                    continue
                 r = bt.purged_kfold_splits(n, k, horizon=h, embargo=e, show=False)
-                ok &= [(a.tolist(), b.tolist()) for a, b in r["splits"]] == kfold_reference(n, k, h, e)
+                ok &= [(a.tolist(), b.tolist()) for a, b in r["splits"]] == ref
                 t = r["table"]
                 ok &= bool(((t["n_train"] + t["n_test"] + t["purged"] + t["embargoed"]) == n).all())
                 cases += 1
-check(f"purged_kfold_splits: equal to the row-by-row reference in {cases} configurations; table adds up to n", ok)
+check(f"purged_kfold_splits: equal to the row-by-row reference in {cases} configurations, table adds up to n; "
+      f"refused in the {refused} where a fold keeps no training row", ok and cases > 80 and refused > 0)
 
 ok = True
 for n, k in ((20, 4), (23, 5), (101, 3)):
@@ -156,6 +162,21 @@ check("purged_kfold_splits: used records the choices",
 for bad in (dict(n=10, n_splits=1), dict(n=3, n_splits=4), dict(n=10, horizon=0), dict(n=10, embargo=-1)):
     check(f"purged_kfold_splits: refuses {bad}", raises(bt.purged_kfold_splits, **bad, show=False))
 
+check("purged_kfold_splits, walk_forward_splits, label_overlap: a fractional horizon is refused, not truncated",
+      raises(bt.purged_kfold_splits, 50, 5, horizon=2.9, show=False) and raises(bt.walk_forward_splits, 50, 20, 5, horizon=2.9)
+      and raises(bt.label_overlap, 2.9, 50, show=False))
+check("walk_forward_splits: invalid arguments raise when called, before iterating",
+      raises(bt.walk_forward_splits, 12, 4, 2, horizon=5))
+# the 'rows removed' share is the worst fold over its own rows (review r1-A N5): n = 10, 3 blocks (4, 3, 3), horizon 2,
+# embargo 2 (found by search): the old share (fewest training rows over the most other rows) was 50%, no warning;
+# the middle fold removes 4 of its 7 other rows, 57%
+t10 = bt.purged_kfold_splits(10, 3, horizon=2, embargo=2, show=False)
+old = 1 - t10["table"]["n_train"].min() / (10 - t10["table"]["n_test"].max())
+worst = max(1 - t10["table"]["n_train"] / (10 - t10["table"]["n_test"]))
+check(f"purged_kfold_splits: the warning uses the worst fold's own share ({worst:.0%}; the old formula gave {old:.0%})",
+      abs(old - 0.5) < 1e-12 and abs(worst - 4 / 7) < 1e-12 and [w["level"] for w in t10["warnings"]] == ["warning"]
+      and "57%" in t10["warnings"][0]["message"], (t10["table"], t10["warnings"]))
+check("label_overlap: a single label has no neighbour, so no finding", bt.label_overlap(21, 1, show=False)["warnings"] == [])
 # findings: the embargo notice appears with overlapping labels and no embargo, and only then
 lv = lambda r: [w["level"] for w in r["warnings"]]  # noqa: E731
 check("purged_kfold_splits: notice when labels overlap and there is no embargo",

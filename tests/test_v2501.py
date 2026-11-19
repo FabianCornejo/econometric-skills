@@ -755,7 +755,7 @@ V2610_SUBS = (
      "coefficient's SE, printed by the script).", "(`inference.power_curve`, `simulation.power_mde`)."),
 )
 # v2.7.0 (CHANGELOG v2.7.0) added where the manifest gets the data file and the study card; remove exactly that.
-V270_MAN = ", with the data file in `files=` and the study card in `study_card=`"
+V270_MAN = ", with the data file in `files=` (or `simulated=True`) and the study card in `study_card=`"
 sec4_v250 = sec4.replace(V251_ASK, "", 1).replace(V251_DID, "", 1)
 sec4_v250 = sec4_v250.replace(V270_MAN, "", 1)
 for piece in V266:

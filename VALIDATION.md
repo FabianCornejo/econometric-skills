@@ -30,7 +30,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 
 ## Summary
 
-293 public functions: level A 99, level B 142, level C 20, level D 32.
+293 public functions: level A 98, level B 143, level C 20, level D 32.
 
 | module | A | B | C | D |
 |---|---|---|---|---|
@@ -49,7 +49,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `linear_models` | 1 | 11 | 0 | 0 |
 | `multivariate` | 4 | 4 | 0 | 0 |
 | `regimes` | 0 | 2 | 4 | 2 |
-| `reporting` | 1 | 3 | 1 | 2 |
+| `reporting` | 0 | 4 | 1 | 2 |
 | `risk` | 3 | 12 | 1 | 2 |
 | `segments` | 1 | 3 | 1 | 0 |
 | `simulation` | 2 | 23 | 0 | 1 |
@@ -333,7 +333,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `reporting.export_table` | B | table exported and read back | equal after rounding to 6 decimals | — | test_setup_env.py: with openpyxl: a table exported to .xlsx reads back unchanged |  |
 | `reporting.rescale_hint` | D | — | — | — | — |  |
 | `reporting.run_manifest` | B | same and changed data; a study card changed by hand | exact hashes; fields written | — | test_did_covariates.py: manifest; test_reporting.py: run_manifest: study card hash; test_reporting.py: run_manifest: a card changed by hand | `study_card=` and the `files=` notice since v2.7.0 |
-| `reporting.study_card` | A | sha256 recomputed in the test from the bytes on disk | exact | not measured (closed form in the test) | test_reporting.py: study_card: file written, stored hash equal to the hash recomputed from disk; test_reporting.py: study_card: re-running with the same fields | v2.7.0 |
+| `reporting.study_card` | B | known truth: a card written, re-run, amended, edited by hand and unreadable; sha256 recomputed in the test from the bytes on disk with the documented recipe | exact | — | test_reporting.py: study_card: file written, stored hash equal to the hash recomputed from disk; test_reporting.py: study_card: re-running with the same fields | v2.7.0 |
 | `reporting.cross_check` | B | constructed estimates and SEs | exact verdicts | — | test_v2461.py: cross_check |  |
 
 ## `risk`

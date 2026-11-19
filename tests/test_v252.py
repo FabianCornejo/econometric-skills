@@ -942,8 +942,11 @@ check("causal case: generic 'sensibilidade' no longer passes; the sensitivity mu
                             "resultados ao numero de bins")
       and not ca_pat.search("Funcionarios depois da adesao e pos-tratamento: nao use como controle."))
 n_cases = len([d for d in (R).iterdir() if d.is_dir()])
+WORDS = {20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three", 24: "twenty-four", 25: "twenty-five",
+         26: "twenty-six", 27: "twenty-seven", 28: "twenty-eight", 29: "twenty-nine", 30: "thirty"}
 check(f"README states how many requests the routing evals send, and it matches the {n_cases} cases on disk",
-      f"sends twenty-two plain requests" in (ROOT / "README.md").read_text(encoding="utf-8") and n_cases == 22,
+      # the number follows the cases on disk (v2.7.0 added two; the check fixed 22 until then)
+      f"sends {WORDS.get(n_cases, str(n_cases))} plain requests" in (ROOT / "README.md").read_text(encoding="utf-8"),
       n_cases)
 
 

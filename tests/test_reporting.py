@@ -118,9 +118,59 @@ rp.study_card(path=q, show=False, **CARD)
 card = json.loads(q.read_text(encoding="utf-8"))
 card["fields"]["alpha"] = 0.10                      # changed by hand, hash left as it was
 q.write_text(json.dumps(card), encoding="utf-8")
+hand_bytes = q.read_bytes()
 r = rp.study_card(path=q, show=False, **{**CARD, "alpha": 0.10})
-check("study_card: a card changed by hand is reported (warning) and not rewritten",
-      [w["level"] for w in r["warnings"]] == ["warning"] and r["action"] == "unchanged")
+check("study_card: a card changed by hand is reported (warning) and not rewritten (bytes unchanged)",
+      [w["level"] for w in r["warnings"]] == ["warning"] and r["action"] == "unchanged" and q.read_bytes() == hand_bytes)
+
+# ============================================================ 4b. review r1-B: blanks, values, amendments, unreadable cards
+for bad in (None, [], {}, "  "):
+    check(f"study_card: a blank required field ({bad!r}) is refused",
+          bool(raises(rp.study_card, path=tmp / "blank.json", show=False, question=bad, estimand="e", design="d")))
+check("study_card: NaN is refused (not valid JSON)", bool(raises(rp.study_card, path=tmp / "nan.json", show=False,
+                                                                  question="q", estimand="e", design="d", alpha=float("nan"))))
+r = rp.study_card(path=tmp / "np.json", show=False, question="q", estimand="e", design="d", alpha=np.float64(0.05),
+                  n=np.int64(500))
+check("study_card: numpy numbers are stored as plain numbers", r["fields"]["alpha"] == 0.05 and r["fields"]["n"] == 500
+      and type(r["fields"]["n"]) is int)
+rp.study_card(path=tmp / "int.json", show=False, question="q", estimand="e", design="d", alpha=1)
+msg = raises(rp.study_card, path=tmp / "int.json", show=False, question="q", estimand="e", design="d", alpha=1.0)
+check("study_card: 1 then 1.0 is refused and the message names the field", bool(msg) and "differ: alpha" in msg, msg)
+check("study_card: the refusal no longer suggests writing the card to another path", "another path" not in msg)
+# amend=True with the same fields on an intact card: a notice, nothing recorded
+before_same = p.read_bytes()
+r = rp.study_card(path=p, amend=True, reason="no change", show=False, **{**CARD, "estimand": "ATE on log hourly wage"})
+check("study_card: amend with unchanged fields records nothing and says so (notice)", r["action"] == "unchanged"
+      and p.read_bytes() == before_same and any("nothing to amend" in w["message"] for w in r["warnings"]))
+# amending a card edited by hand: the amendment notes it, keeps the replaced skill version, and the manifest warns
+q2 = tmp / "hand2.json"
+rp.study_card(path=q2, show=False, **CARD)
+c2 = json.loads(q2.read_text(encoding="utf-8"))
+c2["fields"]["design"] = "changed by hand"
+q2.write_text(json.dumps(c2), encoding="utf-8")
+r = rp.study_card(path=q2, amend=True, reason="restore the plan", show=False, **CARD)
+a0 = json.loads(q2.read_text(encoding="utf-8"))["amendments"][0]
+check("study_card: amending a hand-edited card records edited_by_hand_before and the replaced skill version",
+      r["action"] == "amended" and a0["edited_by_hand_before"] is True and a0["replaced_skill_version"] == rp.SKILL_VERSION
+      and a0["replaced_fields"]["design"] == "changed by hand")
+m = rp.run_manifest(data={"d": pd.DataFrame({"a": [1]})}, simulated=True, study_card=q2, show=False)
+check("run_manifest: a hand edit before an amendment stays a warning after the card is re-sealed",
+      m["study_card"]["intact"] and any("changed by hand before the amendment" in w["message"] for w in m["warnings"]))
+# unreadable files: study_card refuses with a clear message; run_manifest warns and still returns the manifest
+(tmp / "empty.json").write_text("", encoding="utf-8")
+(tmp / "notcard.json").write_text('{"a": 1}', encoding="utf-8")
+(tmp / "adir").mkdir()
+for nm in ("empty.json", "notcard.json", "adir"):
+    check(f"study_card: refuses to overwrite {nm} (not a card) with a ValueError",
+          bool(raises(rp.study_card, path=tmp / nm, show=False, question="q", estimand="e", design="d")))
+    m = rp.run_manifest(study_card=tmp / nm, show=False)
+    check(f"run_manifest: an unreadable card ({nm}) is a warning, the manifest is still returned",
+          m["study_card"] is None and [w["level"] for w in m["warnings"]] == ["warning"] and "skill_version" in m)
+bom = tmp / "bom.json"
+rp.study_card(path=bom, show=False, **CARD)
+bom.write_bytes(b"\xef\xbb\xbf" + bom.read_bytes())
+m = rp.run_manifest(study_card=bom, show=False)
+check("run_manifest: a card saved with a UTF-8 BOM (Windows editors) is read and intact", m["study_card"]["intact"])
 
 # ============================================================ 5. run_manifest
 df = pd.DataFrame({"y": np.arange(5.0), "x": np.ones(5)})
@@ -143,6 +193,11 @@ check("run_manifest: data without files= gives the notice with the files=[DATA_F
       [w["level"] for w in m["warnings"]] == ["notice"] and "files=[DATA_FILE]" in m["warnings"][0]["action"])
 m = rp.run_manifest(data={"d": df}, files=[src], show=False)
 check("run_manifest: data with files= and no card: no finding, study_card None", m["warnings"] == [] and m["study_card"] is None)
+m = rp.run_manifest(data={"d": df}, simulated=True, show=False)
+check("run_manifest: simulated=True silences the files= notice and is recorded", m["warnings"] == [] and m["simulated"] is True)
+m = rp.run_manifest(data={"d": df}, files=[tmp / "nope.csv"], show=False)
+check("run_manifest: a file that does not exist is a warning, recorded as 'missing'",
+      [w["level"] for w in m["warnings"]] == ["warning"] and list(m["files"].values()) == ["missing"])
 m = rp.run_manifest(show=False)
 check("run_manifest: nothing passed, no finding", m["warnings"] == [])
 keys = {"created_utc", "skill_version", "python", "platform", "packages", "seed", "data", "files", "results", "notes"}

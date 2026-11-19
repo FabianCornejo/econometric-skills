@@ -356,8 +356,8 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
 # ---------------------------------------------------------------------------
 # Prediction intervals for any forecaster (conformal)
 # ---------------------------------------------------------------------------
-def _wilson(k: int, n: int, alpha: float):
-    z = stats.norm.ppf(1 - alpha / 2)
+def _wilson(k: int, n: int, level: float = 0.95):
+    z = stats.norm.ppf(1 - (1 - level) / 2)
     p = k / n
     d = 1 + z ** 2 / n
     c = (p + z ** 2 / (2 * n)) / d
@@ -365,14 +365,22 @@ def _wilson(k: int, n: int, alpha: float):
     return c - hw, c + hw
 
 
+def _pct(x: float) -> str:
+    return f"{100 * x:.4g}%"
+
+
+_LB_LEVEL = 0.05          # level of the Ljung-Box screen for dependent errors, whatever the interval's alpha
+
+
 def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "aci", h: int = 1,
                         calib_size: int | None = None, gamma: float = 0.005, show: bool = True) -> dict:
     """Prediction intervals for out-of-sample point forecasts of any model (ARIMA, machine learning, a
     foundation model, a judgement call), from the model's own past errors (conformal inference).
 
-    actual, forecast : series indexed by TARGET date, one row per consecutive target, as rolling_origin
-                       returns them; the forecast of row i was made at origin i - h. Rows at the end with
-                       no actual yet (the future) get an interval and are left out of the coverage.
+    actual, forecast : series indexed by TARGET date in time order, one row per consecutive target, as
+                       rolling_origin returns them; the forecast of row i was made at origin i - h. To get
+                       the interval of a forecast not yet realised, append its row with actual = NaN: rows
+                       at the end with no actual get an interval and are left out of the coverage.
     method   : "aci" (default) — adaptive conformal inference (Gibbs and Candès 2021, eq. 2): the level is
                moved after every observed error, alpha_t = alpha + gamma * sum(alpha - err), so the share
                of misses tracks alpha over time even when errors are dependent or their size drifts;
@@ -385,41 +393,53 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
     calib_size : number of recent known errors used at each origin ("rolling", "aci"; None = all known
                so far) or the size of the calibration block ("split"; None = the first half of the rows
                with an actual). The interval half-width is the ceil((m + 1)(1 - level))-th smallest of
-               the m absolute errors. Rows whose origin has fewer than calib_size known errors (with None,
-               ceil((1 - alpha) / alpha), 19 for alpha = 0.05) get no interval (warm-up).
+               the m absolute errors (at least the smallest). Rows whose origin has fewer than calib_size
+               known errors (with None, ceil((1 - alpha) / alpha), 19 for alpha = 0.05) get no interval
+               (warm-up).
     gamma    : ACI step (0.005 in the paper).
 
-    Guarantees, and what was measured instead (v2.7.0, claude/medicoes-v2.7.0.md in the development notes):
+    Guarantees, and what was measured instead (v2.7.0, development notes):
     - split/rolling: coverage >= 1 - alpha only if the errors are exchangeable (independent, same
       distribution). With overlapping errors (h = 4) or persistent ones (AR coefficient 0.9), 95% intervals
-      covered 84-95%, worst with few calibration errors (19).
+      covered 84-95% in simulations, worst with few calibration errors (19).
     - aci with h = 1: |share of misses - alpha| <= (max(alpha, 1 - alpha) + gamma) / (T gamma) over any T
       forecasts, whatever the data (Proposition 4.1). With gamma = 0.005 that slack is 0.38 for T = 500:
       a long-run promise, uninformative in short samples, so the result reports it and the measured
-      coverage. With h > 1 the paper's result does not apply as stated; the same argument with the error
-      arriving h - 1 steps late gives slack (max(alpha, 1 - alpha) + h gamma) / (T gamma) (derived for
-      this skill, not published); measured coverage was 93-95% for h from 2 to 12.
+      coverage. With h > 1 the paper's proposition does not apply as stated; the same argument with the
+      update delayed until each error is observed gives (max(alpha, 1 - alpha) + h gamma) / (T gamma)
+      (proof in the v2.7.0 review notes, not published). Measured over 500 targets, 93-95% for h from 2
+      to 12; over 60 targets with h = 12 and AR(0.9) errors, about 90%, no better than "rolling": with a
+      short record ACI behaves like split conformal on all errors so far.
     Intervals are symmetric around the forecast (absolute errors). A biased forecaster gets wide intervals:
-    check the bias (forecast_metrics) first.
+    check the bias (forecast_metrics) first. With a level that rounds to 1 (ACI after many misses) the
+    interval is infinite; with a level at or below 0 it is empty (a sure miss): both are counted in a finding.
 
     Returns a dict: `table` (actual, forecast, lower, upper, covered, level used, number of calibration
-    errors), `coverage` with its Wilson interval and `n_evaluated`, `guarantee`, `used`, `warnings`."""
+    errors, empty), `coverage` with its 95% Wilson interval and `n_evaluated`, `guarantee`, `used`,
+    `warnings`."""
     from reporting import SKILL_VERSION, _finding, _print_findings
     if method not in ("aci", "rolling", "split"):
         raise ValueError("method must be 'aci', 'rolling' or 'split'")
     if not 0 < alpha < 1:
         raise ValueError("alpha must be in (0, 1)")
+    if h != int(h) or int(h) < 1:
+        raise ValueError("h must be a whole number of periods, at least 1")
     h = int(h)
-    if h < 1:
-        raise ValueError("h must be at least 1")
-    if gamma <= 0:
+    if calib_size is not None and calib_size != int(calib_size):
+        raise ValueError("calib_size must be a whole number of errors")
+    if not gamma > 0:
         raise ValueError("gamma must be positive")
     a_s = pd.Series(actual, dtype=float) if not isinstance(actual, pd.Series) else actual.astype(float)
     f_s = pd.Series(forecast, dtype=float) if not isinstance(forecast, pd.Series) else forecast.astype(float)
     if len(a_s) != len(f_s) or not a_s.index.equals(f_s.index):
         raise ValueError("actual and forecast must have the same index (target dates, one row per target)")
+    if not (a_s.index.is_monotonic_increasing and a_s.index.is_unique):
+        raise ValueError("the index must be in time order with one row per target (oldest first, no repeats): "
+                         "otherwise later errors would calibrate earlier forecasts")
     if f_s.isna().any():
         raise ValueError("forecast has missing values; drop or fill those targets first")
+    if np.isinf(f_s.to_numpy()).any() or np.isinf(a_s.to_numpy()).any():
+        raise ValueError("actual or forecast has infinite values; fix those targets first")
     obs = a_s.notna().to_numpy()
     if obs.any() and not obs[:np.flatnonzero(obs)[-1] + 1].all():
         raise ValueError("actual has missing values before its last observed row; only the trailing rows (the "
@@ -430,16 +450,20 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
     m_min = int(np.ceil((1 - alpha) / alpha - 1e-12))       # smallest m with ceil((m+1)(1-alpha)) <= m
     if calib_size is not None and int(calib_size) < m_min:
         raise ValueError(f"calib_size = {calib_size} is below {m_min}, the fewest errors that give a finite "
-                         f"{1 - alpha:.0%} interval")
+                         f"{_pct(1 - alpha)} interval")
 
     def q_of(err_sorted, level):
-        """ceil((m + 1) level)-th smallest of the m sorted errors; inf when that rank exceeds m."""
+        """ceil((m + 1) level)-th smallest of the m sorted errors (at least the 1st); inf when the rank exceeds m."""
         m = len(err_sorted)
+        if abs(level) < 1e-12:                             # ACI: alpha_t = 1 up to rounding of the running sum
+            level = 0.0
+        elif abs(1 - level) < 1e-12:
+            level = 1.0
         if level <= 0:
             return np.nan                                  # empty set (alpha_t >= 1): every target is a miss
         if level >= 1:
             return np.inf
-        k = int(np.ceil((m + 1) * level - 1e-12))
+        k = max(1, int(np.ceil((m + 1) * level - 1e-12)))  # a level a hair above 0 is the smallest error, never rank 0
         return np.inf if k > m else float(err_sorted[k - 1])
 
     half = np.full(n, np.nan)
@@ -454,6 +478,7 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
                              f"is below {m_min}; pass a longer forecast record")
         if cs > n_obs:
             raise ValueError(f"calib_size = {cs} exceeds the {n_obs} rows with an actual")
+        m_need = cs
         cal = np.sort(r[:cs])
         q = q_of(cal, 1 - alpha)
         for i in range(cs - 1 + h, n):
@@ -493,20 +518,20 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
     T = int(ev.sum())
     k = int(np.nansum(covered[ev])) if T else 0
     cov = k / T if T else np.nan
-    lo_c, hi_c = _wilson(k, T, alpha) if T else (np.nan, np.nan)
+    lo_c, hi_c = _wilson(k, T) if T else (np.nan, np.nan)
 
     warns = []
     if method == "aci":
         slack = (max(alpha, 1 - alpha) + h * gamma) / (T * gamma) if T else np.inf
         guarantee = {"kind": "long-run share of misses (Gibbs and Candès 2021, Prop. 4.1" +
-                     (")" if h == 1 else ", with the delay of h - 1 steps: derived for this skill, not published)"),
-                     "slack": float(slack), "T": T}
+                     (")" if h == 1 else "; for h > 1 the same argument with the delayed update, proved for this skill, "
+                      "not published)"), "slack": float(slack), "T": T}
         if h > 1:
-            warns.append(_finding("notice", f"h = {h}: the published ACI guarantee is for one-step forecasts; with errors that "
-                                  f"arrive {h - 1} steps late this skill uses a derived bound (slack h·gamma) whose coverage "
-                                  "was measured at 93-95% in simulations, not proved in the literature",
+            warns.append(_finding("notice", f"h = {h}: the paper proves the ACI guarantee for one-step forecasts; with errors "
+                                  f"that arrive {h - 1} steps late, the bound with h·gamma used here was proved for this "
+                                  "skill and is not published",
                                   "report the empirical coverage next to the interval and say it is measured"))
-        if not slack <= 0.05:
+        if T and slack > 0.05:
             warns.append(_finding("notice", f"the long-run guarantee says only that the share of misses is within "
                                   f"±{slack:.2f} of {alpha:g} over these {T} forecasts (gamma {gamma:g}): not informative "
                                   "at this length", f"report the empirical coverage ({cov:.1%} of {T}) as measured, not as "
@@ -515,41 +540,56 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
         guarantee = {"kind": "finite-sample coverage >= 1 - alpha, only if the errors are exchangeable "
                      "(Lei et al. 2018, Thm 2.2)", "slack": np.nan, "T": T}
         dep = None
-        rk = r[obs]
-        if len(rk) >= 20:
-            lags = int(min(10, len(rk) // 5))
+        e_obs = (y - f)[obs]
+        if len(e_obs) >= 20:
+            lags = int(min(10, len(e_obs) // 5))
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                dep = float(acorr_ljungbox(rk - rk.mean(), lags=[lags], return_df=True)["lb_pvalue"].iloc[0])
+                ps = [float(acorr_ljungbox(x - x.mean(), lags=[lags], return_df=True)["lb_pvalue"].iloc[0])
+                      for x in (e_obs, np.abs(e_obs))]
+            dep = min(ps)
         reasons = []
         if h > 1:
             reasons.append(f"errors of {h}-step forecasts overlap")
-        if dep is not None and dep < alpha:
-            reasons.append(f"absolute errors are autocorrelated (Ljung-Box p = {dep:.3g})")
+        if dep is not None and dep < _LB_LEVEL / 2:
+            reasons.append(f"the errors or their size are autocorrelated (Ljung-Box, smaller p = {dep:.3g}, "
+                           f"screen at {_LB_LEVEL:g} split over the two tests)")
         if reasons:
-            warns.append(_finding("warning", "; ".join(reasons) + f": the {1 - alpha:.0%} coverage of '{method}' intervals is "
-                                  "not guaranteed (simulated: 84-95%, worst with few calibration errors)",
+            warns.append(_finding("warning", "; ".join(reasons) + f": the {_pct(1 - alpha)} coverage of '{method}' intervals "
+                                  "is not guaranteed (simulated: 84-95%, worst with few calibration errors)",
                                   "use method='aci', or report the empirical coverage as the interval's real level"))
         if 0 < (m_used[evaluated].min() if evaluated.any() else 0) < 50:
             warns.append(_finding("notice", f"intervals use as few as {m_used[evaluated].min()} past errors; with dependent "
                                   "errors such short calibration under-covers most", "use a longer forecast record or "
                                   "method='aci'"))
+    n_inf = int((evaluated & np.isinf(half)).sum())
+    n_empty = int(empty.sum())
+    if n_inf or n_empty:
+        fut = int((evaluated & ~obs & (np.isinf(half) | empty)).sum())
+        warns.append(_finding("notice", f"{n_inf} interval(s) are infinite and {n_empty} empty (a sure miss)"
+                              + (f", {fut} of them for targets not yet observed" if fut else "")
+                              + ": the level moved to 1 or past 0, or too few errors for this level",
+                              "report those rows as 'no informative interval', not as an interval; a longer record or "
+                              "a smaller gamma makes them rarer"))
     if T and hi_c < 1 - alpha:
-        warns.append(_finding("warning", f"empirical coverage {cov:.1%} ({k} of {T}) is below {1 - alpha:.0%} beyond its "
-                              f"{1 - alpha:.0%} Wilson interval [{lo_c:.1%}, {hi_c:.1%}]",
-                              "the intervals are too narrow for these errors: widen them (method='aci') and say so"))
+        act = ("the intervals are too narrow for these errors: widen them (method='aci') and say so" if method != "aci"
+               else "the record is too short for the long-run guarantee to bind, or the errors changed: say the intervals "
+                    "are too narrow, give the empirical coverage, and consider a larger gamma or a longer record")
+        warns.append(_finding("warning", f"empirical coverage {cov:.1%} ({k} of {T}) is below {_pct(1 - alpha)} beyond its "
+                              f"95% Wilson interval [{lo_c:.1%}, {hi_c:.1%}]", act))
     if T == 0:
         warns.append(_finding("warning", "no row could be evaluated: too few past errors before the last observed target",
-                              f"supply at least {m_min + h} forecasts with their actual values"))
+                              f"supply at least {m_need + h} forecasts with their actual values"))
     used = {"method": method, "alpha": alpha, "h": h, "calib_size": calib_size, "gamma": gamma if method == "aci" else None,
             "n_rows": n, "n_future": int((~obs).sum()), "warm_up_rows": int((~evaluated).sum()),
-            "min_calib_errors": m_min, "skill_version": SKILL_VERSION}
+            "min_calib_errors": m_min, "coverage_ci_level": 0.95, "ljung_box_level": _LB_LEVEL if method != "aci" else None,
+            "skill_version": SKILL_VERSION}
     out = {"table": table, "coverage": cov, "coverage_ci": (lo_c, hi_c), "n_evaluated": T, "guarantee": guarantee,
            "used": used, "warnings": warns}
     if show:
-        print(f"\nConformal prediction intervals ({method}, level {1 - alpha:.0%}, horizon {h})")
+        print(f"\nConformal prediction intervals ({method}, level {_pct(1 - alpha)}, horizon {h})")
         if T:
-            print(f"  empirical coverage: {cov:.1%} ({k} of {T} observed targets; Wilson {1 - alpha:.0%} CI "
+            print(f"  empirical coverage: {cov:.1%} ({k} of {T} observed targets; Wilson 95% CI "
                   f"[{lo_c:.1%}, {hi_c:.1%}])")
         if method == "aci" and T:
             print(f"  long-run guarantee: share of misses within ±{guarantee['slack']:.3f} of {alpha:g} over these {T} forecasts")

@@ -133,6 +133,7 @@ def aci_reference(y, f, alpha, gamma, h, m_min):
     for i in range(n):
         o = i - h
         lev = 1 - (level_at[o] if o >= 0 else alpha)
+        lev = 0.0 if abs(lev) < 1e-12 else lev
         known = np.sort(err[:o + 1]) if o >= 0 else np.array([])
         if len(known) >= m_min:
             m = len(known)
@@ -140,8 +141,11 @@ def aci_reference(y, f, alpha, gamma, h, m_min):
                 half[i] = np.nan
                 miss = 1.0
             else:
-                k = math.ceil((m + 1) * lev - 1e-12)
-                half[i] = np.inf if lev >= 1 or k > m else known[k - 1]
+                # counting definition: the smallest known error with at least (m + 1) * level errors at or below
+                # it (levels within 1e-12 of 1 count as 1, of 0 as 0: the running sum is rounded)
+                need = (m + 1) * (1.0 if abs(1 - lev) < 1e-12 else lev)
+                cands = [e for e in known if (known <= e).sum() >= need - 1e-9]
+                half[i] = np.inf if lev >= 1 - 1e-12 or not cands else cands[0]
                 miss = float(err[i] > half[i])
             a_t = a_t + gamma * (alpha - miss)
         level_at[i] = a_t
@@ -222,12 +226,34 @@ check("used records method, alpha, h, gamma, calibration and version",
       r["used"]["method"] == "aci" and r["used"]["gamma"] == 0.005 and r["used"]["min_calib_errors"] == 19
       and "skill_version" in r["used"])
 
+# a level that the running sum leaves a hair above 0 is the empty set, as the exact level 0 (review r1-A S1: it took
+# the largest error, a +-100 interval among +-1 ones)
+y_ = np.ones(30)
+y_[0] = 100.0
+t_ = CI(pd.Series(y_), pd.Series(np.zeros(30)), alpha=0.2, gamma=0.5, show=False)["table"]
+lv_ = t_["level"]
+tiny = lv_[(lv_.abs() < 1e-12)]
+check("aci: every level within 1e-12 of 0 gives the empty set, never the largest error (alpha 0.2, gamma 0.5)",
+      len(tiny) >= 3 and (tiny > 0).any() and t_.loc[tiny.index, "empty"].all() and t_.loc[tiny.index, "upper"].isna().all(),
+      t_.loc[tiny.index])
+low = t_[(lv_ > 1e-12) & (lv_ <= 0.6)]
+check("aci: with the same data, every level from 0.1 to 0.6 uses the smallest error (half-width 1), not 100",
+      len(low) > 10 and ((low["upper"] - low["forecast"]) == 1.0).all())
+
 # ============================================================ 8. refusals
 s = pd.Series(np.arange(50.0))
 for nm, kw in (("unknown method", dict(method="bootstrap")), ("calib_size below 19", dict(calib_size=18)),
                ("h = 0", dict(h=0)), ("alpha = 1", dict(alpha=1.0)), ("gamma = 0", dict(gamma=0.0))):
     check(f"refuses {nm}", raises(CI, s, s * 0, show=False, **kw))
 check("accepts calib_size = 19 (the fewest errors for a finite 95% interval)", not raises(CI, s, s * 0, calib_size=19, show=False))
+check("refuses an index out of time order (newest first)", raises(CI, s[::-1], s[::-1] * 0, show=False))
+check("refuses a repeated target date", raises(CI, pd.Series(np.arange(50.0), index=[0] * 2 + list(range(1, 49))),
+                                              pd.Series(np.zeros(50), index=[0] * 2 + list(range(1, 49))), show=False))
+inf_ = s.copy()
+inf_.iloc[5] = np.inf
+check("refuses infinite actuals and forecasts", raises(CI, inf_, s * 0, show=False) and raises(CI, s, inf_, show=False))
+check("refuses a fractional horizon or calibration size", raises(CI, s, s * 0, h=2.9, show=False)
+      and raises(CI, s, s * 0, calib_size=25.5, show=False))
 holes = s.copy()
 holes.iloc[10] = np.nan
 check("refuses a missing actual before the last observed row", raises(CI, holes, s * 0, show=False))
@@ -266,7 +292,7 @@ check("split, autocorrelated errors: warning names Ljung-Box", any(x["level"] ==
 check("rolling with a short window (19): notice about few calibration errors",
       "notice" in lv(CI(iid, iid * 0, method="rolling", calib_size=19, show=False)))
 check("aci, h = 4: notice that the delayed bound is derived, not published",
-      any("not proved in the literature" in x["message"] for x in CI(iid, iid * 0, h=4, gamma=0.5, show=False)["warnings"]))
+      any("not published" in x["message"] and "proved for this" in x["message"] for x in CI(iid, iid * 0, h=4, gamma=0.5, show=False)["warnings"]))
 # slack = (0.95 + 0.05) / (T * 0.05) = 20 / T: T = 399 gives 0.0501 (notice), T = 400 gives 0.05 (no notice)
 for T_, want in ((399, True), (400, False)):
     e = pd.Series(np.random.default_rng(27109).standard_normal(T_ + 19))
@@ -291,6 +317,43 @@ same = pd.Series(rng.standard_normal(200))
 check("split, same scale: no under-coverage warning",
       not any("empirical coverage" in x["message"] for x in CI(same, same * 0, method="split", calib_size=100,
                                                                show=False)["warnings"]))
+
+# Ljung-Box screen at a fixed 5%, whatever the interval's alpha; on the errors and on their size (review r1-A S6)
+rng = np.random.default_rng(27111)
+fires = 0
+for _ in range(200):
+    e_ = pd.Series(rng.standard_normal(200))
+    fires += any("autocorrelated" in x["message"] for x in CI(e_, e_ * 0, alpha=0.2, method="rolling", calib_size=60,
+                                                               show=False)["warnings"])
+check(f"rolling, alpha 0.2, i.i.d. errors: the dependence warning fires in {fires} of 200 series (at most 5% + 3 SE)",
+      fires / 200 <= 0.05 + 3 * math.sqrt(0.05 * 0.95 / 200))
+sgn = pd.Series(np.asarray(pd.Series(rng.standard_normal(300)).ewm(alpha=0.2).mean()))
+check("split: autocorrelated signed errors are caught by the screen on the errors themselves",
+      any("autocorrelated" in x["message"] for x in CI(sgn, sgn * 0, method="split", calib_size=150, show=False)["warnings"]))
+# infinite or empty intervals are counted in a finding
+r_ = CI(pd.Series(y_), pd.Series(np.zeros(30)), alpha=0.2, gamma=0.5, show=False)
+check("aci: a notice counts the empty intervals", any("empty (a sure miss)" in x["message"] for x in r_["warnings"]))
+r_ = CI(iid, iid * 0, method="rolling", calib_size=60, show=False)
+check("rolling with finite intervals only: no such notice", not any("infinite" in x["message"] for x in r_["warnings"]))
+# no evaluated row: no slack notice with inf or nan, and the action gives the record needed
+r_ = CI(pd.Series(np.arange(20.0)), pd.Series(np.zeros(20)), h=3, show=False)
+check("aci with nothing evaluated: one warning, asking for calib + h = 22 forecasts, no 'inf' or 'nan' text",
+      r_["n_evaluated"] == 0 and [x["level"] for x in r_["warnings"]].count("warning") == 1
+      and "22 forecasts" in next(x for x in r_["warnings"] if x["level"] == "warning")["action"] and "nan" not in str(r_["warnings"]) and "inf" not in str(r_["warnings"]),
+      r_["warnings"])
+# the coverage interval is a 95% Wilson interval whatever alpha; the level prints with its digits (97.5%)
+r_ = CI(iid, iid * 0, alpha=0.025, show=False)
+lo_, hi_ = proportion_confint(round(r_["coverage"] * r_["n_evaluated"]), r_["n_evaluated"], alpha=0.05, method="wilson")
+check("alpha 0.025: coverage interval is the 95% Wilson interval", abs(r_["coverage_ci"][0] - lo_) < 1e-12
+      and abs(r_["coverage_ci"][1] - hi_) < 1e-12)
+_, out = quiet(CI, iid, iid * 0, alpha=0.025)
+check("alpha 0.025: printed as level 97.5%", "level 97.5%" in out, out[:200])
+# under-coverage action depends on the method
+big2 = pd.Series(np.r_[rng.standard_normal(100), 8 * rng.standard_normal(60)])
+w_ = CI(big2, big2 * 0, calib_size=100, show=False)["warnings"]
+check("aci under-covering: the action does not tell the user to switch to aci",
+      any("empirical coverage" in x["message"] for x in w_) and not any("method='aci'" in x["action"] for x in w_
+                                                                          if "empirical coverage" in x["message"]), w_)
 
 # ============================================================ 10. what show prints
 _, out = quiet(CI, iid, iid * 0, method="rolling", h=4, calib_size=60)

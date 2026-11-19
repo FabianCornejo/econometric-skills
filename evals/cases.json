@@ -1,5 +1,5 @@
 {
-  "version": "2.6.10",
+  "version": "2.7.0",
   "how_to_run": "See evals/README.md. Paste each prompt, alone, in a fresh conversation with the current econometrics skill installed. Grade the answer against every criterion; a case passes only if all 'must' criteria hold and no 'must_not' criterion is triggered.",
   "cases": [
     {
@@ -309,7 +309,7 @@
       "must": [
         "Uses Reviewer mode: summary of the claim, verdict, findings by severity and what would change the verdict.",
         "Compares 64.8% with the base rate of the same test window (66% up months, i.e. 'always up'), not with 50%, and reads the AUC of 0.52 as no discrimination: the model does not beat the naive rule.",
-        "Flags the overlapping labels (each daily label spans 21 trading days, so neighbouring rows share 20 of them) and the shuffled K-fold as leakage: rows from the same month fall in training and test; asks for walk-forward or purged K-fold with embargo (backtest.walk_forward_splits(horizon=21) or backtest.purged_kfold_splits) and says how many independent labels there are (backtest.label_overlap).",
+        "Flags the overlapping labels (each daily label spans 21 trading days, so neighbouring rows share 20 of them) and the shuffled K-fold as leakage: rows from the same month fall in training and test; asks for walk-forward or purged K-fold with embargo (backtest.walk_forward_splits(horizon=21) or backtest.purged_kfold_splits) and explains that the sample holds about one independent label per 21 trading days (backtest.label_overlap).",
         "Flags the seven feature sets as multiple comparisons: the best of seven is selected on the test score and needs an untouched test window or an adjustment.",
         "Asks for an interval for the accuracy (or its difference from the base rate) that respects the overlap, and for the economic test (strategy after costs against buy-and-hold) before any allocation."
       ],
@@ -328,7 +328,7 @@
         "Flags selection bias: the winner of 25 models chosen by its cross-validated AUC, then tuned on the same 10 folds, reports an optimistic AUC; asks for a test set used once (or nested cross-validation) for the final number.",
         "Asks for an interval or a test for the AUC difference (0.87 or 0.88 vs 0.81, e.g. DeLong or a bootstrap on the held-out set) and notes that the '7 points' comes from the tuned, selected model.",
         "Asks whether the folds respect time (customers or months appearing in training and validation) when cancellation depends on the period, and for a simple benchmark and calibration before production.",
-        "States how many configurations were tried in total (models times hyper-parameters) as part of the result."
+        "Asks how many configurations were tried in total (models times hyper-parameter settings) and says that number belongs in the result; does not invent it."
       ],
       "must_not": [
         "Accepts the 7-point gain as the expected gain in production.",
