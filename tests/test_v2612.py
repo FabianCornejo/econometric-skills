@@ -276,10 +276,13 @@ Xa = np.column_stack([W2, z1, z2, z3])
 bh = np.linalg.lstsq(Xa, d.y.to_numpy(), rcond=None)[0]
 ea = d.y.to_numpy() - Xa @ bh
 XtXi = np.linalg.inv(Xa.T @ Xa)
-Vh = XtXi @ (Xa.T * ea ** 2) @ Xa @ XtXi * n / (n - Xa.shape[1])        # HC1 sandwich by hand
+# v2.6.13: the robust AR uses HC3 (claude/medicoes-v2.6.13.md, M1 and M3: HC1 rejected 4.3-11.9%, and up to 78% with
+# a high-leverage row); this check compared with an HC1 sandwich until v2.6.12 and now compares with HC3
+ha = np.sum((Xa @ np.linalg.inv(Xa.T @ Xa)) * Xa, axis=1)                # leverages by hand
+Vh = XtXi @ (Xa.T * (ea / (1 - ha)) ** 2) @ Xa @ XtXi                     # HC3 sandwich by hand
 bz = bh[2:]
 wald = float(bz @ np.linalg.solve(Vh[2:, 2:], bz)) / 3
-check("two endogenous, robust: joint AR F = HC1 Wald F written by hand (relative 1e-8)",
+check("two endogenous, robust: joint AR F = HC3 Wald F written by hand (relative 1e-8)",
       rel(rb["anderson_rubin"]["joint_F_at_zero"], wald) < 1e-8, (rb["anderson_rubin"]["joint_F_at_zero"], wald))
 # size under H0 (β = 0) with weak instruments: the AR test is exact under normal homoskedastic errors.
 # Band fixed before running: 1000 samples, 5% ± 3 Monte Carlo SEs (0.69 pp) = [2.9%, 7.1%]
@@ -503,10 +506,11 @@ r, _, _ = quiet(dg.iv_report, "y ~ 0 + w + [x ~ z]", d)
 check("0 + w with w = 1e8 + N(0, 1): no constant in the span → the warning (it disappeared with 1e-8)",
       any("no constant" in m for m in r["warnings"]), r["warnings"])
 rc, tc, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d, cov_type="kernel")
-check("cov_type='kernel': the AR line says it uses HC1, not the kernel covariance; key cov = 'HC1'",
-      "it uses HC1 (heteroskedasticity only), not the kernel covariance" in tc and rc["anderson_rubin"]["cov"] == "HC1", tc[-300:])
+# v2.6.13: the robust AR uses HC3 (it was HC1 here until v2.6.12)
+check("cov_type='kernel': the AR line says it uses HC3, not the kernel covariance; key cov = 'HC3'",
+      "it uses HC3 (heteroskedasticity only), not the kernel covariance" in tc and rc["anderson_rubin"]["cov"] == "HC3", tc[-300:])
 rr, tr, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d, cov_type="robust")
-check("cov_type='robust': no such note", "not the" not in tr.split("Anderson-Rubin")[-1] and rr["anderson_rubin"]["cov"] == "HC1")
+check("cov_type='robust': no such note", "not the" not in tr.split("Anderson-Rubin")[-1] and rr["anderson_rubin"]["cov"] == "HC3")
 ru1, _, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d, cov_type="Unadjusted")
 ru2, _, _ = quiet(dg.iv_report, "y ~ 1 + [x ~ z]", d, cov_type="unadjusted")
 check("cov_type='Unadjusted' = 'unadjusted' (linearmodels 6.1 raised KeyError)",
