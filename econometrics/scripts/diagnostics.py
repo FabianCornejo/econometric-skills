@@ -629,7 +629,7 @@ def _count_dirs(Mr, amps, amp_ref, s_all, n_obs, k_tot):
 # that is 2·w exactly counted as a new instrument; from 1e3 on, offsets of 1e14 removed real instruments); 16 is the
 # geometric middle
 _SRC_FLOOR_C = 16.0
-_SRC_TRUNC_C = 4.0     # cut of source directions made of their own rounding (review r1-A A1); no error measured for 2-8
+_SRC_TRUNC_C = 4.0     # cut of source directions made of their own rounding (review r1-A A1); no error up to 1e14 for 1-16
 _SRC_RCOND = 1e-8           # relative cut on the source directions, besides the rounding cut below
 
 
@@ -1174,7 +1174,7 @@ def _cf_test(yv, XE, Wb, Zb, cov, amp_ref=1.0, centre=True, src=None):
     degenerate there) gives NaN. Returns F, p, None, "perfect", "joint" or "leverage" (then F and p are NaN), and
     {"h_max": the largest leverage beyond W, "rows": positions of the rows at leverage 1}."""
     kind, perfect, QB, V = _cf_degenerate(XE, Wb, Zb, amp_ref, centre, src=src)
-    info = {"h_max": 0.0, "rows": []}
+    info = {"h_max": 0.0, "rows": [], "argmax": None}
     if kind:
         return float("nan"), float("nan"), kind, info
     k = XE.shape[1]
@@ -1187,6 +1187,7 @@ def _cf_test(yv, XE, Wb, Zb, cov, amp_ref=1.0, centre=True, src=None):
         QW = np.zeros((n, 0))
     Xt, ht, hxv = _test_leverage(np.column_stack([Wb, Xn, V]), QW, n)
     info["h_max"] = float(np.max(hxv)) if hxv.size else 0.0
+    info["argmax"] = int(np.argmax(hxv)) if hxv.size else None
     info["rows"] = list(np.flatnonzero((ht > 1 - 1e-8) & (hxv > 1e-4)))
     if info["rows"]:
         return float("nan"), float("nan"), "leverage", info
@@ -1456,7 +1457,7 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         # 4.5-7.9% in every cell). Its value stays in "endogeneity_linearmodels" (comparable with Stata).
         st_lm, p_lm = _lm(lambda: iv.wooldridge_regression)
         lm_endo = {"test": "Wooldridge robust regression (linearmodels)", "statistic": st_lm, "p": p_lm}
-        cf_info = {"h_max": 0.0, "rows": []}
+        cf_info = {"h_max": 0.0, "rows": [], "argmax": None}
         if lev_rows or skip_rob or deg_kind:
             st_e, p_e, k_cf = float("nan"), float("nan"), deg_kind
         else:
@@ -1473,9 +1474,13 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
                         "a value there that nothing else in the model reaches): its residual there is zero and the HC1 "
                         "covariance is degenerate, so the robust endogeneity test is not computed (NaN). Check those "
                         "rows, then test again.")
-        elif cf_info["h_max"] >= _ROBUST_HIGH_LEVERAGE and h_max < _ROBUST_HIGH_LEVERAGE:
-            # review r1 of v2.7.1: when the leverage comes from an instrument, the first-stage warning already names it
-            warn.append(f"a row with leverage {cf_info['h_max']:.2f} in the control-function regression: HC1 degrades as "
+        elif cf_info["h_max"] >= _ROBUST_HIGH_LEVERAGE and not (
+                h_max >= _ROBUST_HIGH_LEVERAGE and cf_info["argmax"] is not None
+                and rows[keep_r][cf_info["argmax"]] == rows[int(np.argmax(hz))]):
+            # review r1 of v2.7.1: not repeated when the same row already has the first-stage warning (an instrument
+            # drives it); review r2 R1: still given when the high-leverage row of the test regression is another one
+            cf_row = rows[keep_r][cf_info["argmax"]]
+            warn.append(f"row {cf_row} has leverage {cf_info['h_max']:.2f} in the control-function regression: HC1 degrades as "
                         "the leverage of a row approaches 1 (as in endogeneity_test, warned from 0.5); check that row "
                         "(an outlier in an endogenous regressor or an instrument) and read the endogeneity test with care.")
         tests.append({"test": "endogeneity (control function, HC1)", "H0": "regressors are exogenous: OLS is consistent",

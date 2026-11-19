@@ -235,23 +235,27 @@ def _write_atomic(path: Path, text: str) -> None:
         raise ValueError(f"the study card could not be written to {path} ({e})") from None
 
 
-def _nfc(obj):
+def _nfc(obj, strict: bool = True):
     """Texts (keys and values, in lists too) in Unicode NFC (v2.7.1): "café" typed with a combining accent (NFD, as some
     editors and macOS file names give it) and with a precomposed é is the same text, and must not make a re-run look like
     a changed plan."""
     if isinstance(obj, str):
         return unicodedata.normalize("NFC", obj)
     if isinstance(obj, list):
-        return [_nfc(x) for x in obj]
+        return [_nfc(x, strict) for x in obj]
     if isinstance(obj, dict):
         out = {}
         for k, v in obj.items():
             kk = _nfc(k)
-            if kk in out:
-                raise ValueError(f"two study card fields are the same name once normalised (NFC): {k!r}")
-            out[kk] = _nfc(v)
+            if kk in out and strict:
+                raise _NameClash(f"two study card fields are the same name once normalised (NFC): {k!r}")
+            out[kk] = _nfc(v, strict)
         return out
     return obj
+
+
+class _NameClash(ValueError):
+    pass
 
 
 def _blank(v) -> bool:
@@ -292,6 +296,8 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     p = Path(path)
     try:
         fields = _nfc(json.loads(json.dumps(fields, default=_plain, allow_nan=False)))
+    except _NameClash:
+        raise
     except (TypeError, ValueError) as e:
         raise ValueError(f"study card fields must be text, finite numbers or lists: {e}") from None
     missing = [f for f in CARD_REQUIRED if _blank(fields.get(f))]
@@ -308,7 +314,7 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     if p.exists():
         card = _read_card(p)
         intact = card.get("sha256") == _card_hash(card)
-        same = _canonical(_nfc(card["fields"])) == _canonical(fields)     # a card written before v2.7.1 may hold NFD
+        same = _canonical(_nfc(card["fields"], strict=False)) == _canonical(fields)     # a card written before v2.7.1 may hold NFD
         if not intact:
             warns.append(_finding("warning", f"{p.name} was changed outside reporting.study_card (its stored hash does not "
                                   "match its content)", "say so in the report; restore the card from version control, or "
@@ -322,7 +328,7 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
             if same:
                 action = "unchanged"
             else:
-                on_file = _nfc(card["fields"])
+                on_file = _nfc(card["fields"], strict=False)    # review r2 R5: a v2.7.0 card stays readable
                 changed = sorted(k for k in set(on_file) | set(fields)
                                  if _canonical(on_file.get(k)) != _canonical(fields.get(k)))
                 hand = (" The card on file was edited by hand (its hash does not match): if the script holds the plan "

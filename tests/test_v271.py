@@ -167,6 +167,11 @@ check("coverage_finite counts the empty intervals (sure misses) among the finite
       te["empty"].sum() > 0 and abs(oe["coverage_finite"] - float(np.nanmean(te["covered"].to_numpy()[fe]))) < 1e-12
       and oe["coverage_finite"] < 1, (int(te["empty"].sum()), oe["coverage_finite"]))
 
+we_ = next(w for w in oe["warnings"] if "empty" in w["message"])
+check("only empty intervals: the finding says 'are empty' (not '0 ... infinite'), and the action is about gamma "
+      "(review r2 R7)", we_["message"].startswith(f"{int(te['empty'].sum())} of the") and "infinite" not in we_["message"]
+      and "a smaller gamma makes them rarer" in we_["action"] and "coverage of the finite" not in we_["action"], we_)
+
 # ============================================================ 3. 'split' with a short record, and NaT in the index
 rng = np.random.default_rng(271)
 for n_obs in (0, 1, 37):
@@ -182,6 +187,18 @@ for n_obs in (0, 1, 37):
           ok, w_)
 aa = pd.Series(np.r_[rng.normal(size=38), [np.nan]]); ff = pd.Series(np.zeros(39))
 oo = fc.conformal_intervals(aa, ff, method="split", show=False)
+# review r2 R4: the record the action asks for is enough, and one row fewer is not, for h from 1 to 30 (default block)
+okc = []
+for h_ in (1, 5, 21, 30):
+    a_s = pd.Series(np.random.default_rng(h_).normal(size=5)); o_s = fc.conformal_intervals(a_s, a_s * 0, method="split",
+                                                                                           h=h_, show=False)
+    need = int(re.search(r"at least (\d+) forecasts", next(w["action"] for w in o_s["warnings"]
+                                                           if "no row" in w["message"])).group(1))
+    a_n = pd.Series(np.random.default_rng(99).normal(size=need))
+    okc.append(fc.conformal_intervals(a_n, a_n * 0, method="split", h=h_, show=False)["n_evaluated"] > 0
+               and fc.conformal_intervals(a_n.iloc[:-1], a_n.iloc[:-1] * 0, method="split", h=h_,
+                                          show=False)["n_evaluated"] == 0)
+check("split: the number of forecasts the action asks for is enough and one fewer is not (h = 1, 5, 21, 30)", all(okc), okc)
 check("split with 38 observed rows (the first that works): rows evaluated, no such finding",
       oo["n_evaluated"] > 0 and not any("calibrates on the first half" in w["message"] for w in oo["warnings"]))
 check("split: an explicit calib_size below the minimum or above the observed rows is still refused",
@@ -237,6 +254,24 @@ with tempfile.TemporaryDirectory() as td:
     check("study_card: two field names that are the same once normalised are refused, not merged",
           raises(lambda: reporting.study_card(os.path.join(td, "c.json"), question="q", estimand="e", design="d",
                                               show=False, **{nfc[-4:]: 1, nfd[-5:]: 2}), "same name once normalised"))
+
+    # review r2 R5: a v2.7.0 card whose field names clash once normalised stays readable
+    p3 = os.path.join(td, "clash.json")
+    oldc = {"fields": {"question": "q", "estimand": "e", "design": "d", nfd[-5:]: 1, nfc[-4:]: 2},
+            "created_utc": "2026-11-19T12:00:00+00:00", "skill_version": "2.7.0", "amendments": []}
+    oldc["sha256"] = reporting._card_hash(oldc)
+    Path(p3).write_text(json.dumps(oldc, ensure_ascii=False), encoding="utf-8")
+    check("a v2.7.0 card whose names clash after NFC is read (a different plan is refused with the usual message)",
+          raises(lambda: reporting.study_card(p3, question="q2", estimand="e", design="d", show=False),
+                 "these fields differ"))
+    try:
+        reporting.study_card(os.path.join(td, "c2.json"), question="q", estimand="e", design="d", show=False,
+                             **{nfc[-4:]: 1, nfd[-5:]: 2})
+        msg_c = ""
+    except ValueError as e:
+        msg_c = str(e)
+    check("the clash of names is refused with its own message, not 'fields must be text'",
+          msg_c.startswith("two study card fields") and "must be text" not in msg_c, msg_c)
 
 # ============================================================ 5. IV: offset in W or Z (M3a)
 n = 200
@@ -370,6 +405,20 @@ rl = dg.iv_report("y ~ 1 + w + [x ~ z]", pd.DataFrame(dict(y=xl + wl + ul, x=xl,
 check("iv_report, an instrument with one extreme row: one leverage warning (first stage), none from the control function "
       "(review r1-A A6, r1-B B3)", sum("from the instruments" in m_ for m_ in rl["warnings"]) == 1
       and not any("control-function regression" in m_ for m_ in rl["warnings"]), rl["warnings"])
+
+# review r2 R1: an instrument drives row 5 and an outlier in x drives row 40 of the control-function regression: the
+# control-function warning is still given, and names row 40 (the reviewer's case, seed 10)
+rng = np.random.default_rng(10)
+z_ = rng.normal(size=60); z2_ = rng.normal(size=60); w_ = rng.normal(size=60); u_ = rng.normal(size=60)
+z_[5] = 9.0
+x_ = 0.8 * z_ + 0.8 * z2_ + 0.5 * u_ + rng.normal(size=60)
+x_[40] = 25.0
+r2l = dg.iv_report("y ~ 1 + w + [x ~ z + z2]", pd.DataFrame({"y": 1 + x_ + w_ + u_, "x": x_, "z": z_, "z2": z2_, "w": w_}),
+                   show=False)
+check("iv_report, instrument leverage at row 5 and an outlier in x at row 40: both warnings, the second names row 40",
+      any("from the instruments" in m_ for m_ in r2l["warnings"])
+      and any(m_.startswith("row 40 has leverage") and "control-function regression" in m_ for m_ in r2l["warnings"]),
+      r2l["warnings"])
 
 # ============================================================ 8. the keys of the IV functions in panel-iv.md
 import wooldridge as woo  # noqa: E402

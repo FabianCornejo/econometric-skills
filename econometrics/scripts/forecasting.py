@@ -498,12 +498,15 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
         if cs > n_obs:
             raise ValueError(f"calib_size = {cs} exceeds the {n_obs} rows with an actual")
         m_need = cs
+        # review r2 R4: the record that gives one evaluated target: the block, then h rows; with the default block
+        # (half of the rows with an actual) that is at least 2·m_min rows and 2h − 1 rows
+        need_split = max(2 * m_min, 2 * h - 1) if calib_size is None else cs + h
         if cs < m_min:
             # v2.7.1 (review NIT of v2.7.0): a record too short for the default block (half of the rows with an actual)
             # gets the same finding as "aci" and "rolling" with too few errors, not an exception; an explicit calib_size
             # below the minimum was refused above
             # the smallest record that works: half of it at least m_min, and a target observed h rows after the block
-            short_split, m_need = True, max(2 * m_min, 2 * h - 1)
+            short_split = True
         else:
             cal = np.sort(r[:cs])
             q = q_of(cal, 1 - alpha)
@@ -615,19 +618,25 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
         cov_txt = (f"; the infinite ones count as covered: coverage of the {T_fin} finite intervals with an actual is "
                    f"{cov_fin:.1%}, against {cov:.1%} in all" if n_inf and T_fin and T else "")
         share_inf = n_inf / max(int(evaluated.sum()), 1)
-        warns.append(_finding("notice", f"{n_inf} of the {int(evaluated.sum())} interval(s) computed ({T} with an actual) "
-                              f"are infinite and {n_empty} empty"
+        head_txt = (f"{n_inf} of the {int(evaluated.sum())} interval(s) computed ({T} with an actual) are infinite and "
+                    f"{n_empty} empty" if n_inf else
+                    f"{n_empty} of the {int(evaluated.sum())} interval(s) computed ({T} with an actual) are empty")
+        # review r2 R7: with empty intervals only, the advice is about gamma (they need a level pushed past 0)
+        act_txt = ("report those rows as 'no informative interval', not as an interval, and give the coverage of the "
+                   "finite intervals next to the total" if n_inf else
+                   "report those rows as sure misses, not as intervals; they appear only when gamma is large enough to "
+                   "push the level past 0 after a run of covered targets: a smaller gamma makes them rarer")
+        warns.append(_finding("notice", head_txt
                               + (f", {fut} of them for targets not yet observed" if fut else "")
                               + (f" (longest run of infinite intervals: {longest} rows)" if n_inf else "")
                               + ": " + "; ".join(why) + cov_txt,
-                              "report those rows as 'no informative interval', not as an interval, and give the coverage "
-                              "of the finite intervals next to the total"
+                              act_txt
                               + (". With overlapping errors (h > 1) this is expected: in simulations with h = 21 and 120 to "
                                  "1000 targets, 18-28% of the intervals were infinite on average; a smaller gamma removed "
                                  "them, but the coverage fell to that of method='rolling' (90-94% there), and no setting "
                                  "gave finite intervals at the nominal level, because overlapping errors leave about T/h "
                                  "independent ones. Compare with method='rolling' on these data" if n_inf and h > 1
-                                 and share_inf >= 0.05 else "; a longer record makes them rarer")))
+                                 and share_inf >= 0.05 else "; a longer record makes them rarer" if n_inf else "")))
     if T and hi_c < 1 - alpha:
         act = ("the intervals are too narrow for these errors: widen them (method='aci') and say so" if method != "aci"
                else "the record is too short for the long-run guarantee to bind, or the errors changed: say the intervals "
@@ -638,7 +647,8 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
         warns.append(_finding("warning", "no row could be evaluated: too few past errors before the last observed target"
                               + (f" (method 'split' calibrates on the first half of the {n_obs} rows with an actual, "
                                  f"fewer than the {m_min} errors a {_pct(1 - alpha)} interval needs)" if short_split else ""),
-                              f"supply at least {m_need if short_split else m_need + h} forecasts with their actual values"))
+                              f"supply at least {need_split if method == 'split' else m_need + h} forecasts with their "
+                              "actual values"))
     used = {"method": method, "alpha": alpha, "h": h, "calib_size": calib_size, "gamma": gamma if method == "aci" else None,
             "n_rows": n, "n_future": int((~obs).sum()), "warm_up_rows": int((~evaluated).sum()),
             "min_calib_errors": m_min, "coverage_ci_level": 0.95, "ljung_box_level": _LB_LEVEL if method != "aci" else None,
