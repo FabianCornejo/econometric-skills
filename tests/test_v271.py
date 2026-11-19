@@ -120,6 +120,13 @@ check("h = 21: show prints the coverage of the finite intervals", f"coverage of 
       f"{out['coverage_finite']:.1%} ({out['n_infinite']} infinite, counted as covered above)" in txt, txt[:400])
 check("h = 21: show prints the level and action of the finding", "NOTICE: 94 of" in txt and "action: report those rows" in txt)
 
+# two runs of different length (6 and 26 rows; seed copied from the search output): the finding gives the longest
+a2, f2 = series(20261131)
+o2 = fc.conformal_intervals(a2, f2, h=21, show=False)
+m2 = next((w["message"] for w in o2["warnings"] if "infinite" in w["message"]), "")
+check("h = 21, two runs of 6 and 26 infinite intervals: the finding gives the longest (26)",
+      o2["n_infinite"] == 32 and "longest run of infinite intervals: 26 rows" in m2, m2)
+
 a0, f0 = series(20261120)
 o0 = fc.conformal_intervals(a0, f0, h=21, show=False)
 check("h = 21 without infinite intervals: no finding about them, n_infinite 0 and coverage_finite = coverage",
