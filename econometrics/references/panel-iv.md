@@ -43,7 +43,7 @@ liml = IVLIML.from_formula(f, data=df).fit(cov_type="robust")    # with weak ins
 # published table; with large N the difference is negligible.
 ```
 
-Costs of IV: less efficient than OLS (larger variance); biased in finite samples toward OLS; its small-sample distribution can differ a lot from the asymptotic one.
+Costs of IV: less efficient than OLS (larger variance); biased in finite samples toward OLS; its small-sample distribution can differ a lot from the asymptotic one. The large-sample bias of IV is Cov(z, u)/Cov(z, x): an instrument correlated with the omitted factor in the same direction as x biases IV the same way as OLS (interpretation-rules.md, v2.6.13).
 
 ## 3. Tests
 

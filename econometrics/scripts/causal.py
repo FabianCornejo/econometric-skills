@@ -783,7 +783,9 @@ def rdd(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: float | None =
         kernel: str = "triangular", p: int = 1, covs: list[str] | None = None, cluster: str | None = None,
         fuzzy: str | None = None, show: bool = True) -> dict:
     """Local-polynomial RD. Sharp by default; `fuzzy` = name of the actual treatment
-    (then the estimate is the local Wald/2SLS ratio). Bandwidth: IK if None."""
+    (then the estimate is the local Wald/2SLS ratio). Bandwidth: IK if None.
+    v2.6.13: with perfect compliance inside the bandwidth (the treatment equals the cutoff indicator) the first stage
+    is exact: "F" is inf and a warning says the fuzzy estimate equals the sharp one (before: an F of 1e31)."""
     import statsmodels.api as sm
     d = df.dropna(subset=[y, x] + (covs or []) + ([fuzzy] if fuzzy else [])).copy()
     d["_xc"] = d[x] - cutoff
@@ -815,7 +817,17 @@ def rdd(df: pd.DataFrame, y: str, x: str, cutoff: float = 0.0, h: float | None =
         est, se = iv.params[fuzzy], iv.std_errors[fuzzy]
         fs = sm.WLS(d[fuzzy], X, weights=d["_w"]).fit(**kw)
         first = {"jump_in_treatment": fs.params["_above"], "F": (fs.params["_above"] / fs.bse["_above"]) ** 2}
+        # v2.6.13: with perfect compliance inside the bandwidth the treatment is the cutoff indicator, the first stage
+        # fits exactly and its "F" is rounding (5.8e31 in the skill's test); the same rule as endogeneity_test's
+        # perfect first stage, relative to the treatment's own variation
+        t_c = d[fuzzy].to_numpy(float) - float(d[fuzzy].mean())
+        if np.linalg.norm(np.asarray(fs.resid)) <= np.sqrt(np.finfo(float).eps) * max(np.linalg.norm(t_c), 1e-300):
+            first["F"] = float("inf")
     rd_warns = []
+    if first and first["F"] == np.inf:
+        rd_warns.append("perfect compliance inside the bandwidth: the treatment equals the cutoff indicator, so the "
+                        "first stage is exact (F = inf, not a strength measure) and the fuzzy estimate equals the sharp "
+                        "one; report it as a sharp RD")
     if bw_method.startswith("Imbens-Kalyanaraman ("):
         rd_warns.append(f"bandwidth by {bw_method}, not the rdrobust MSE-optimal one: report it as IK")
     out = _out("RD effect" + (" (fuzzy, LATE)" if fuzzy else " (sharp)"), est, se, len(d), bandwidth=h,
