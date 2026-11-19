@@ -330,6 +330,10 @@ check(f"rolling, alpha 0.2, i.i.d. errors: the dependence warning fires in {fire
 sgn = pd.Series(np.asarray(pd.Series(rng.standard_normal(300)).ewm(alpha=0.2).mean()))
 check("split: autocorrelated signed errors are caught by the screen on the errors themselves",
       any("autocorrelated" in x["message"] for x in CI(sgn, sgn * 0, method="split", calib_size=150, show=False)["warnings"]))
+alt = pd.Series((-1.0) ** np.arange(300) * (1 + 0.1 * rng.standard_normal(300)))   # sign alternates, size i.i.d.
+w_alt = CI(alt, alt * 0, method="split", calib_size=150, show=False)["warnings"]
+check("split: errors whose sign alternates (size i.i.d.) are caught by the screen on the signed errors",
+      any("autocorrelated" in x["message"] for x in w_alt), w_alt)
 # infinite or empty intervals are counted in a finding
 r_ = CI(pd.Series(y_), pd.Series(np.zeros(30)), alpha=0.2, gamma=0.5, show=False)
 check("aci: a notice counts the empty intervals", any("empty (a sure miss)" in x["message"] for x in r_["warnings"]))
