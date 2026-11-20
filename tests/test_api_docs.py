@@ -144,6 +144,10 @@ def states_check():
             check(f"{fn}: {k_!r} seen None and not None (it says 'else None')", {"none", "value"} <= st, st)
         if "list of dicts with keys" in t_:
             check(f"{fn}: {k_!r} seen with at least one entry (its keys are checked)", "nonempty" in st, st)
+        if "none" in st and "None" not in t_ and "as passed" not in t_:
+            check(f"{fn}: {k_!r} came back None, so its entry must say when", False, t_)
+        if "only with" not in t_ and "absent" in st:
+            check(f"{fn}: {k_!r} came back absent although its entry does not say 'only with'", False, t_)
 
 
 ENTRIES = {}
@@ -368,6 +372,11 @@ f2 = act.rolling(5, min_periods=1).mean().shift(1).bfill()
 blk = head_check("evaluate", fc.evaluate)
 txt = " ".join(l_.strip() for l_ in blk)
 cols_doc = lists(txt, "columns")[0]
+# the rules this test applies below are the ones the block writes (mutation r1: a rule dropped from the text survived)
+for rule in ('"MAPE_%" only with direction="level" and no actual equal to 0',
+             '"directional_accuracy" and "PT_p_value" only with direction="return" or with last_actual=',
+             'the two DM columns only with two or more forecasts (NaN in the benchmark\'s row)'):
+    check(f"evaluate: the block writes the rule {rule[:50]!r}…", rule in txt, txt)
 act0 = act.copy()
 act0.iloc[7] = 0.0
 ret = act.diff().fillna(0.1)
