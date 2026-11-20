@@ -15,6 +15,7 @@
 Run from the repository root:  python3 tests/test_v271.py
 """
 import io
+import itertools
 import json
 import os
 import re
@@ -97,7 +98,8 @@ ev = t["level"].notna().to_numpy()
 inf_rows = ev & np.isinf(t["upper"].to_numpy())
 fin = ev & t["actual"].notna().to_numpy() & ~inf_rows & ~t["empty"].to_numpy()
 cov_fin_ref = float(np.mean(np.abs(t["actual"] - t["forecast"]).to_numpy()[fin] <= (t["upper"] - t["forecast"]).to_numpy()[fin]))
-runs = np.diff(np.flatnonzero(np.diff(np.r_[0, inf_rows.astype(int), 0])))[::2]
+# v2.7.2 (review r1-B B17 of v2.7.1): the reference no longer copies the implementation's diff formula
+runs = np.array([len(list(g_)) for k_, g_ in itertools.groupby(inf_rows) if k_])
 msg = next((w["message"] for w in out["warnings"] if "infinite" in w["message"]), "")
 act = next((w["action"] for w in out["warnings"] if "infinite" in w["message"]), "")
 check("h = 21: n_infinite counts the infinite intervals of the table", out["n_infinite"] == int(inf_rows.sum()) == 94,
@@ -136,6 +138,10 @@ o2 = fc.conformal_intervals(a2, f2, h=21, show=False)
 m2 = next((w["message"] for w in o2["warnings"] if "infinite" in w["message"]), "")
 check("h = 21, two runs of 6 and 26 infinite intervals: the finding gives the longest (26)",
       o2["n_infinite"] == 32 and "longest run of infinite intervals: 26 rows" in m2, m2)
+t2_ = o2["table"]
+runs2 = [len(list(g_)) for k_, g_ in itertools.groupby(t2_["level"].notna().to_numpy() & np.isinf(t2_["upper"].to_numpy())) if k_]
+check("h = 21, two runs: the runs counted from the table by groupby are 6 and 26 (v2.7.2, review r1-B B17)",
+      sorted(runs2) == [6, 26], runs2)
 
 a0, f0 = series(20261120)
 o0 = fc.conformal_intervals(a0, f0, h=21, show=False)

@@ -485,7 +485,14 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
                          "future) may be missing")
     y, f = a_s.to_numpy(), f_s.to_numpy()
     n = len(y)
-    r = np.abs(y - f)                                       # NaN for future rows
+    with np.errstate(over="ignore"):
+        r = np.abs(y - f)                                   # NaN for future rows
+    over = obs & np.isinf(r)
+    if over.any():
+        # v2.7.2 (review r1-A A8 of v2.7.1): finite actual and forecast whose difference overflows (1.5e308 and
+        # −1.5e308) gave infinite intervals in every method, and the finding blamed ACI even for "rolling" and "split"
+        raise ValueError(f"the error |actual − forecast| overflows to inf at {int(over.sum())} row(s) (first: "
+                         f"{a_s.index[np.flatnonzero(over)[0]]!r}); rescale the series (e.g. to thousands) first")
     m_min = int(np.ceil((1 - alpha) / alpha - 1e-12))       # smallest m with ceil((m+1)(1-alpha)) <= m
     if calib_size is not None and int(calib_size) < m_min:
         raise ValueError(f"calib_size = {calib_size} is below {m_min}, the fewest errors that give a finite "
