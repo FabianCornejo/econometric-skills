@@ -273,6 +273,16 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     sha256 of its content, so that "design before data" and "declare the family of tests" can be checked
     afterwards: run_manifest(study_card=path) records the hash next to the results.
 
+    Returns a dict (v2.7.2: keys exact):
+      "path"           str
+      "sha256"         str, hash of the card's content
+      "created_utc"    str
+      "fields"         dict, the card's fields as written (NFC)
+      "amendments"     list of the amendments, each with its time and reason
+      "action"         str: "written", "unchanged" or "amended"
+      "used"           dict, keys ["path", "action", "skill_version"]
+      "warnings"       list of dicts with keys ["level", "message", "action"]
+
     fields: question, estimand, design (required, not blank); assumption, y, treatment, X, W, Z, data,
     threats, robustness_plan, alpha, family_of_tests, mde; for a forecast, horizon, loss, benchmarks and
     window. Values are text, finite numbers or lists (JSON; numpy numbers are converted). Other names are
@@ -372,6 +382,22 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
     skill, the random seed, the platform and the time, plus the headline results. Two runs that
     print the same hashes and versions should give the same numbers; if a number changes,
     compare manifests first. path='manifest.json' also writes it to disk.
+
+    Returns a dict (v2.7.2: keys exact):
+      "created_utc"    str, ISO time
+      "skill_version"  str
+      "python"         str
+      "platform"       str
+      "packages"       dict, package name -> version
+      "seed"           as passed
+      "data"           dict, name -> keys ["sha256", "rows", "cols"] (a DataFrame alone is named "data")
+      "files"          dict, path -> sha256 of the bytes, or "missing"
+      "results"        dict, the results passed (numbers made plain)
+      "notes"          str
+      "simulated"      bool
+      "study_card"     dict with keys ["path", "sha256", "sha256_recomputed", "intact", "created_utc", "amendments",
+                       "amendment_reasons", "edited_by_hand"] when study_card= is given, else None
+      "warnings"       list of dicts with keys ["level", "message", "action"]
 
     Since v2.7.0: study_card='study_card.json' records the card's hash, creation time and amendments
     (reporting.study_card), and a card edited by hand is a warning; data passed without the source file
@@ -481,6 +507,17 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
     rel_tol (two implementations of the same estimator). Disagreement is a finding: report it,
     do not pick the most convenient number.
 
+    Returns a dict (v2.7.2: keys exact, the same with one route):
+      "table"          DataFrame, one row per route, columns ["estimate"] (named by label)
+      "spread"         float, max minus min of the estimates (NaN with one route)
+      "agree"          bool, or None when nothing was checked
+      "criterion"      str, the rule used ("within 1 SE (0.2)", "not checked", ...)
+      "null"           bool, every route compatible with zero
+      "kind"           str: "method" (with se) or "implementation" (without), or None
+      "weak"           bool, the tolerance is a large share of the estimate
+      "note"           str ("" when there is nothing to add)
+      "warnings"       list of str
+
     estimates: a dict or a pandas Series of numbers, e.g. att_gt's res["cross_check"] passed as
     it is (a Series dr/reg/ipw). At least two routes are needed: with one, nothing was checked,
     and the result says so instead of reporting agreement.
@@ -510,7 +547,7 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
         if show:
             print("\n  WARNING: " + msg)
         return {"table": s.rename(label).to_frame(), "spread": np.nan, "agree": None, "criterion": "not checked",
-                "kind": None, "weak": False, "null": False, "warnings": [msg]}
+                "kind": None, "weak": False, "null": False, "note": "", "warnings": [msg]}
     spread = float(s.max() - s.min())
     if se is not None and np.isfinite(se) and se > 0:
         kind = "method"

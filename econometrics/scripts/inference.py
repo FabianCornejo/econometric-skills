@@ -136,6 +136,15 @@ def _result(estimand, estimate, se, ci, p, n, method, alpha, h0=None, **extra):
 def describe_dist(x, name: str = "x", alpha: float = ALPHA, show: bool = True) -> dict:
     """Summary of one variable before any model: location, spread, shape and outliers.
 
+    Returns a dict (v2.7.2: keys exact):
+      "estimand", "estimate", "se", "ci_low", "ci_high", "p", "n", "method", "alpha"   the mean, its SE and t
+                       interval (estimand "mean"; p is NaN: no test)
+      "warnings"       list of str
+      "summary"        Series, index ["n", "missing", "mean", "sd", "se_mean", "cv", "min", "q1", "median", "q3", "max",
+                       "iqr", "skewness", "kurtosis", "excess_kurtosis", "jb_stat", "jb_p", "outliers", "extreme_outliers"]
+      "outlier_values" array of the values outside the fences
+      "fences"         tuple (low, high)
+
     kurtosis is the moment ratio b2 = m4 / m2^2 (3 for a normal). excess_kurtosis is the bias-adjusted
     G2 (0 for a normal), which is what Excel's KURT and pandas' .kurt() return: a value near 2 there is
     already heavy tails, not "lighter than normal". skewness is the adjusted G1 (Excel's SKEW).
@@ -1026,7 +1035,10 @@ def adjust_pvalues(pvalues, method: str = "holm", alpha: float = ALPHA) -> pd.Da
     of any false rejection; Holm is uniformly more powerful than Bonferroni); bh (Benjamini-Hochberg) controls
     the false discovery rate under independence or positive dependence; by (Benjamini-Yekutieli) under any
     dependence. Returns the adjusted p-values and the rejections at alpha, in the input order; missing p-values
-    stay missing and do not count in m."""
+    stay missing and do not count in m.
+
+    Returns a DataFrame (v2.7.2) in the input order, columns ["p", "p_adjusted", "reject"]; pass a Series to keep
+    its names as the index (a dict is not accepted: pd.Series(d) first)."""
     p_all = np.asarray(pvalues, float)
     ok = ~np.isnan(p_all)
     p = p_all[ok]

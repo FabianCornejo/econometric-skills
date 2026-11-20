@@ -131,6 +131,14 @@ def missing_report(df: pd.DataFrame, cols: list[str] | None = None, predictors: 
                    top_patterns: int = 5, show: bool = True) -> dict:
     """Missing-data diagnostics before estimating a model on `cols`.
 
+    Returns a dict (v2.7.2: keys exact):
+      "shares"         Series, missing share per column
+      "complete_n"     int, rows with no missing value in cols
+      "n"              int, rows
+      "patterns"       DataFrame, one row per pattern (1 = missing), a column per variable and "rows"
+      "tests"          DataFrame, only with predictors=: one row per column with missing values, columns
+                       ["share_missing", "F", "p"]
+
     - shares: missing share per column; complete_n: rows usable by listwise deletion.
     - patterns: most frequent missingness patterns (1 = missing).
     - tests (if predictors given): for each column with missing values, a linear probability

@@ -114,6 +114,9 @@ def walk_forward_splits(n: int, train_size: int, test_size: int, expanding: bool
                         step: int | None = None, horizon: int = 1):
     """Yield (train_idx, test_idx) integer arrays. Never shuffles; test always follows train.
 
+    Returns a generator (v2.7.2): each item is a tuple (train_idx, test_idx) of integer position arrays (use
+    .iloc, not .loc); list(...) gives all the splits.
+
     horizon (v2.7.0): how many periods each label looks ahead. The label of row i is built from
     periods i, ..., i + horizon - 1 (a 21-day return, "did the index rise over the next month" computed
     from daily prices). The last horizon - 1 training rows then have labels that run into the test
@@ -215,6 +218,16 @@ def purged_kfold_splits(n: int, n_splits: int = 5, horizon: int = 1, embargo: in
 def label_overlap(horizon: int, n: int, show: bool = True) -> dict:
     """How much n labels that each look `horizon` periods ahead overlap (López de Prado 2018, §4.2-4.4;
     Hansen and Hodrick 1980 for the moving-average error).
+
+    Returns a dict (v2.7.2: keys exact):
+      "n"              int
+      "horizon"        int
+      "independent_labels"  int
+      "average_uniqueness"  float
+      "se_ratio"       float, how many times too small the naive SE is
+      "uniqueness"     array, one value per label
+      "used"           dict, keys ["n", "horizon", "skill_version"]
+      "warnings"       list of dicts with keys ["level", "message", "action"]
 
     The label of row i uses periods i, ..., i + horizon - 1, so neighbouring labels share horizon - 1
     periods: monthly returns computed every day from daily prices are 21-day overlapping sums. Returns

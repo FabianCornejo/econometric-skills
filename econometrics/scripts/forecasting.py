@@ -320,7 +320,12 @@ def forecast_metrics(actual, forecast, naive=None, insample_scale: float | None 
 def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str | None = None,
              direction: str = "level", last_actual: pd.Series | None = None, h: int = 1,
              show: bool = True) -> pd.DataFrame:
-    """Compare several forecasts over the common sample; DM test of each vs `benchmark`."""
+    """Compare several forecasts over the common sample; DM test of each vs `benchmark`.
+
+    Returns a DataFrame (v2.7.2), one row per forecast (the dict's names), columns ["RMSE", "MAE", "bias(mean error)",
+    "MAPE_%", "Theil_U(RMSE/RMSE_naive)", "DM_vs_<benchmark>", "DM_p"]; with direction="sign", "MAPE_%" is not
+    there and "directional_accuracy" and "PT_p_value" are; Theil's U is relative to the benchmark whatever its name,
+    and the benchmark's own row has NaN in the DM columns. Example: tab.loc["model", "DM_p"]."""
     from diagnostics import diebold_mariano
     df = pd.concat({"actual": actual, **forecasts}, axis=1).dropna()
     if last_actual is not None:
@@ -376,6 +381,19 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
                         calib_size: int | None = None, gamma: float = 0.005, show: bool = True) -> dict:
     """Prediction intervals for out-of-sample point forecasts of any model (ARIMA, machine learning, a
     foundation model, a judgement call), from the model's own past errors (conformal inference).
+
+    Returns a dict (v2.7.2: keys exact):
+      "table"          DataFrame indexed like actual, columns ["actual", "forecast", "lower", "upper", "covered",
+                       "level", "n_calib", "empty"]
+      "coverage"       float, share of targets with an actual inside the interval (infinite ones count as covered)
+      "coverage_ci"    tuple (low, high), 95% Wilson interval
+      "n_evaluated"    int
+      "guarantee"      dict, keys ["kind", "slack", "T"]
+      "n_infinite"     int
+      "coverage_finite"  float, coverage of the finite intervals
+      "used"           dict, keys ["method", "alpha", "h", "calib_size", "gamma", "n_rows", "n_future", "warm_up_rows",
+                       "min_calib_errors", "coverage_ci_level", "ljung_box_level", "skill_version"]
+      "warnings"       list of dicts with keys ["level", "message", "action"]
 
     actual, forecast : series indexed by TARGET date in time order, one row per consecutive target, as
                        rolling_origin returns them; the forecast of row i was made at origin i - h. To get

@@ -771,6 +771,15 @@ _AVG_LEVERAGE = 0.19   # user's decision after review r1-B S3: at k/n = 0.16 the
 def endogeneity_test(y, X_exog, x_endog, Z, cov_type: str = "HC3", show: bool = True) -> dict:
     """Regression-based Durbin-Wu-Hausman test (control function), as in Wooldridge.
 
+    Returns a dict (v2.7.2: keys exact):
+      "first_stage_F"  dict, endogenous column -> first-stage F of the excluded instruments
+      "statistic"      float, the test statistic (F of the residuals' coefficients)
+      "p"              float, its p (NaN when not computed)
+      "n_instruments"  int
+      "warnings"       list of str
+      "high_leverage_rows"  list of index labels with leverage 1
+      "perfect_first_stage" list of the endogenous columns with an exact first stage
+
     1) x_endog ~ X_exog + Z (reduced form) → residuals v̂
     2) y ~ x_endog + X_exog + v̂ by OLS; v̂ significant ⇒ x_endog is endogenous.
     y: named Series; X_exog: DataFrame (no constant) or None; x_endog: DataFrame with 1+ columns;
@@ -1047,10 +1056,15 @@ def overid_test(resid_2sls, included_exog: pd.DataFrame | None, instruments: pd.
                 n_endog: int, show: bool = True) -> dict:
     """Overidentifying restrictions test (Wooldridge nR²; Sargan (n−k)R²).
 
+    Returns a dict (v2.7.2: keys exact):
+      "nR2"            float, Wooldridge's statistic
+      "sargan"         float, (n − k)R²
+      "q"              int, degrees of freedom
+      "p"              float, the p of nR2
+
     Regresses the 2SLS residuals on all included exogenous variables and excluded instruments.
     q = number of excluded instruments − number of endogenous regressors (must be ≥ 1).
     Assumes homoskedasticity; with heteroskedasticity use Hansen's J (IVGMM ... .j_stat).
-    Keys: nR2 (Wooldridge's statistic), sargan, q (degrees of freedom), p (of nR2).
     """
     parts = [instruments] if included_exog is None else [included_exog, instruments]
     Z = sm.add_constant(pd.concat(parts, axis=1))
@@ -1201,6 +1215,37 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
               ar_grid: int = 2001, show: bool = True) -> dict:
     """2SLS with the checks that decide whether to believe it (panel-iv.md sections 2-4).
 
+    Returns a dict (v2.7.2: keys exact, also in references/panel-iv.md, "What the result holds"):
+      "table"          DataFrame, one row per coefficient (the formula's names: "Intercept", "x", ...), columns
+                       ["OLS", "OLS se", "2SLS", "2SLS se", "2SLS p", "2SLS ci_low", "2SLS ci_high"]
+      "first_stage"    DataFrame, one row per endogenous regressor, columns ["partial F", "partial F p", "partial R²",
+                       "strength"], plus "partial F (HC3)" when a row has leverage 0.5 or more (robust cov_type). Read
+                       the strength from the F against 10 and 104.7, not from "partial F p": the robust F is HC0 (as
+                       linearmodels) and its p rejected 6-17% with irrelevant instruments while P(F > 10) stayed at or
+                       below 0.6% (v2.7.1, M3c)
+      "tests"          DataFrame indexed by the test's full name (index name "test"), columns ["H0", "statistic", "p"];
+                       rows "endogeneity (control function, HC1)" (robust cov_type) or "endogeneity (Wu-Hausman)"
+                       ("unadjusted", "homoskedastic"), then "overidentification (Wooldridge robust score, <q> df)" or
+                       "overidentification (Sargan, <q> df)" only when overidentified. Endogeneity p:
+                       r["tests"]["p"].iloc[0]; overidentification p: r["tests"]["p"].iloc[1]
+      "anderson_rubin" dict; one endogenous regressor: keys ["estimand", "ci_low", "ci_high", "pieces", "shape",
+                       "p_at_zero", "level", "cov"] (ci_low/ci_high ±inf at the grid edge, NaN when empty or not
+                       computed; pieces a list of (low, high)); several: keys ["estimand", "joint_F_at_zero",
+                       "joint_p_at_zero", "df", "pieces", "shape", "level", "cov"] (df a pair, pieces None); "cov" is
+                       the covariance of the AR regressions (HC3 when cov_type is robust or kernel)
+      "n"              int, rows used
+      "n_dropped"      int, rows dropped for missing values
+      "endogenous"     list of the endogenous columns
+      "instruments"    list of the excluded instrument columns
+      "overidentified_by"  int, instruments minus endogenous regressors
+      "cov_type"       str, as passed (lower case)
+      "warnings"       list of str
+      "high_leverage_rows"  list of index labels of rows with leverage 1 from the instruments (robust cov_type)
+      "endogeneity_linearmodels"  dict, keys ["test", "statistic", "p"] (robust cov_type), else None
+      "iv"             linearmodels IVResults (2SLS)
+      "ols"            linearmodels OLSResults on the same rows: the iv, ols results use .params, .std_errors,
+                       .pvalues and .conf_int(), not statsmodels' .bse
+
     formula: linearmodels syntax, "lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]".
     Reports OLS and 2SLS side by side, on the same rows (v2.6.12: rows with NaN in any variable of the formula are
     dropped first, and OLS is fitted on the rows 2SLS used); for each endogenous regressor the first-stage partial F
@@ -1242,26 +1287,7 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
     - a column that varies by less than 1e-8 of its size (1e11 + N(0, 1)) is not taken for a constant: it is named in a
       warning (centre it), and the model is treated as having no constant unless another column gives one (the 1e-8
       cut comes from a survey of real columns, not from a simulation: the smallest relative range among 368 numeric
-      columns of 20 Wooldridge datasets was 1.0e-3).
-    Keys of the result (also in references/panel-iv.md, "What the result holds"):
-      table             columns "OLS", "OLS se", "2SLS", "2SLS se", "2SLS p", "2SLS ci_low", "2SLS ci_high", one row per
-                        coefficient;
-      first_stage       columns "partial F", "partial F p", "partial R²", "strength" (and "partial F (HC3)" with a row of
-                        leverage 0.5 or more), one row per endogenous regressor. The robust F is HC0 (as linearmodels):
-                        its p rejected 6-17% with irrelevant instruments while P(F > 10) stayed at or below 0.6% (v2.7.1,
-                        M3c), so read the strength from F against 10 and 104.7, not from the p;
-      tests             DataFrame indexed by the test's name (endogeneity, and overidentification if overidentified), columns
-                        "H0", "statistic", "p";
-      anderson_rubin    one endogenous regressor: {"estimand", "ci_low", "ci_high", "pieces", "shape",
-                        "p_at_zero", "level", "cov"}; several: {"estimand" (list), "joint_F_at_zero",
-                        "joint_p_at_zero", "df", "pieces": None, "shape", "level", "cov"}; "cov" is the covariance
-                        of the AR regressions (HC3 when cov_type is robust or kernel);
-      n, n_dropped      rows used, and rows dropped for missing values;
-      high_leverage_rows  index labels of the rows with leverage 1 from the instruments (robust cov_type only);
-      endogeneity_linearmodels  robust cov_type: {"test", "statistic", "p"} of linearmodels' Wooldridge robust
-                        regression test (None otherwise);
-      endogenous, instruments   the model's columns; overidentified_by; cov_type; warnings;
-      iv, ols           the linearmodels results."""
+      columns of 20 Wooldridge datasets was 1.0e-3)."""
     from linearmodels.iv import IV2SLS
     cov_type = str(cov_type).lower()    # v2.6.12: linearmodels 6.1 raised KeyError on "Unadjusted"
     if cov_type == "clustered":
@@ -1587,6 +1613,8 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         print(fs.to_string(float_format=_fmt))
         print("\nTests:")
         print(tests[["statistic", "p"]].to_string(float_format=_fmt))
+        # v2.7.2: the agents of the v2.6.13 and v2.7.1 validations guessed this access ("endogeneity" alone: KeyError)
+        print("In code: " + "; ".join(f'r["tests"].loc["{t_}", "p"]' for t_ in tests.index))
         if robust and ar_note:
             print(f"The control-function test uses HC1 (heteroskedasticity only), not the {cov_type} covariance.")
         if q == 0:
