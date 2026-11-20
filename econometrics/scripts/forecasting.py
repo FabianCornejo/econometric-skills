@@ -293,6 +293,9 @@ def forecast_metrics(actual, forecast, naive=None, insample_scale: float | None 
     direction='return' : directional accuracy of the sign itself (series already a return).
     insample_scale     : MAE of the in-sample naive forecast, for MASE.
     """
+    if direction not in ("level", "return"):
+        # v2.7.2 (review r1-A A1): any other text was accepted and only dropped MAPE_%
+        raise ValueError("direction must be 'level' or 'return'")
     a = np.asarray(actual, float)
     f = np.asarray(forecast, float)
     e = a - f
@@ -320,7 +323,14 @@ def forecast_metrics(actual, forecast, naive=None, insample_scale: float | None 
 def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str | None = None,
              direction: str = "level", last_actual: pd.Series | None = None, h: int = 1,
              show: bool = True) -> pd.DataFrame:
-    """Compare several forecasts over the common sample; DM test of each vs `benchmark`."""
+    """Compare several forecasts over the common sample; DM test of each vs `benchmark`.
+
+    Returns a DataFrame (v2.7.2), one row per forecast (the dict's names); of the columns
+    ["RMSE", "MAE", "bias(mean error)", "MAPE_%", "Theil_U(RMSE/RMSE_naive)", "directional_accuracy", "PT_p_value",
+    "DM_vs_<benchmark>", "DM_p"], in this order, "MAPE_%" only with direction="level" and no actual equal to 0;
+    "directional_accuracy" and "PT_p_value" only with direction="return" or with last_actual=; the two DM columns
+    only with two or more forecasts (NaN in the benchmark's row). Theil's U is relative to the benchmark whatever
+    its name. direction is "level" (default) or "return". Example: tab.loc["model", "DM_p"]."""
     from diagnostics import diebold_mariano
     df = pd.concat({"actual": actual, **forecasts}, axis=1).dropna()
     if last_actual is not None:
@@ -337,12 +347,24 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
         rows[k] = m
     tab = pd.DataFrame(rows).T
     if show:
+        has_inf = bool(np.isinf(df.to_numpy(dtype=float)).any())
         print(f"\nOut-of-sample evaluation ({len(df)} forecasts, benchmark = {benchmark})")
         print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
         for k in forecasts:
             if k == benchmark:
                 continue
             p = tab.loc[k, "DM_p"]
+            if not np.isfinite(p) and has_inf:
+                # v2.7.2 (review r2 S2): dropna() keeps ±inf (pct_change of a zero); rescaling does not fix those
+                print(f"  {k}: DM test not computed: actual or a forecast has infinite values (e.g. a percentage "
+                      "change from zero); drop or fix those rows first")
+                continue
+            if not np.isfinite(p) and not np.isfinite(tab.loc[[k, benchmark], "RMSE"].astype(float)).all():
+                # v2.7.2 (review r1-B B3): with |error| above ~1.3e154 the squared loss overflows, and the reason below
+                # ("identical forecasts") was false
+                print(f"  {k}: DM test not computed: the squared errors overflow (errors above ~1e154 in absolute "
+                      "value); rescale the series (e.g. to thousands) first")
+                continue
             if not np.isfinite(p):
                 print(f"  {k}: DM test not computed (the loss difference with {benchmark} has no positive "
                       "variance, e.g. identical forecasts); compare the RMSE column")
@@ -369,6 +391,7 @@ def _pct(x: float) -> str:
     return f"{100 * x:.4g}%"
 
 
+_MAX_ABS = 1e150          # v2.7.2: largest |actual|, |forecast| or error conformal_intervals accepts (squares stay finite)
 _LB_LEVEL = 0.05          # level of the Ljung-Box screen for dependent errors, whatever the interval's alpha
 
 
@@ -377,10 +400,25 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
     """Prediction intervals for out-of-sample point forecasts of any model (ARIMA, machine learning, a
     foundation model, a judgement call), from the model's own past errors (conformal inference).
 
+    Returns a dict (v2.7.2: keys exact):
+      "table"          DataFrame indexed like actual, columns ["actual", "forecast", "lower", "upper", "covered",
+                       "level", "n_calib", "empty"]
+      "coverage"       float, share of targets with an actual inside the interval (infinite ones count as covered)
+      "coverage_ci"    tuple (low, high), 95% Wilson interval
+      "n_evaluated"    int
+      "guarantee"      dict, keys ["kind", "slack", "T"]
+      "n_infinite"     int
+      "coverage_finite"  float, coverage of the finite intervals
+      "used"           dict, keys ["method", "alpha", "h", "calib_size", "gamma", "n_rows", "n_future", "warm_up_rows",
+                       "min_calib_errors", "coverage_ci_level", "ljung_box_level", "skill_version"]
+      "warnings"       list of dicts with keys ["level", "message", "action"]
+
     actual, forecast : series indexed by TARGET date in time order, one row per consecutive target, as
                        rolling_origin returns them; the forecast of row i was made at origin i - h. To get
                        the interval of a forecast not yet realised, append its row with actual = NaN: rows
                        at the end with no actual get an interval and are left out of the coverage.
+                       Values beyond 1e150 in absolute value (actual, forecast or their difference) are refused:
+                       their squares can overflow (they do from ~1.3e154) (v2.7.2).
     method   : "aci" (default) — adaptive conformal inference (Gibbs and Candès 2021, eq. 2): the level is
                moved after every observed error, alpha_t = alpha + gamma * sum(alpha - err), so the share
                of misses tracks alpha over time even when errors are dependent or their size drifts;
@@ -467,7 +505,18 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
                          "future) may be missing")
     y, f = a_s.to_numpy(), f_s.to_numpy()
     n = len(y)
-    r = np.abs(y - f)                                       # NaN for future rows
+    with np.errstate(over="ignore"):
+        r = np.abs(y - f)                                   # NaN for future rows
+    # v2.7.2 (review r1-A A8 of v2.7.1; r1-B B1 and N4 of v2.7.2): finite actual and forecast whose difference
+    # overflows (1.5e308 and −1.5e308) gave infinite intervals in every method, with a finding that blamed ACI even
+    # for "rolling" and "split"; with errors above ~1.3e154 the squared errors of the Ljung-Box screen overflow
+    # (the screen went silent), and forecast ± half can overflow. One bound, 1e150, keeps all of them finite.
+    with np.errstate(invalid="ignore"):
+        big = (obs & ((np.abs(y) > _MAX_ABS) | ~(r <= _MAX_ABS))) | (np.abs(f) > _MAX_ABS)
+    if big.any():
+        raise ValueError(f"values beyond {_MAX_ABS:g} in absolute value (actual, forecast or their difference) at "
+                         f"{int(big.sum())} row(s) (first: {a_s.index[np.flatnonzero(big)[0]]!r}): squared errors "
+                         "can overflow there; rescale the series (e.g. to thousands) first")
     m_min = int(np.ceil((1 - alpha) / alpha - 1e-12))       # smallest m with ceil((m+1)(1-alpha)) <= m
     if calib_size is not None and int(calib_size) < m_min:
         raise ValueError(f"calib_size = {calib_size} is below {m_min}, the fewest errors that give a finite "

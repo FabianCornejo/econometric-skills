@@ -168,7 +168,8 @@ e_nan = e2.copy()
 e_nan[5] = np.nan
 r, t = run(dg.diebold_mariano, e1, e_nan)
 check("diebold_mariano: a missing forecast error -> 'not computed' because of the missing value, not the variance",
-      not np.isfinite(r["p"]) and has(t, "1 missing or infinite forecast error(s)") and "variance" not in t, t)
+      not np.isfinite(r["p"]) and has(t, "1 missing or infinite loss value(s)") and has(t, "forecast error")
+      and "variance" not in t, t)   # v2.7.2: the text also names a loss that overflows (review r1-B B3)
 r, t = run(dg.diebold_mariano, a7 * 1e-5, b7 * 1e-5, h=4)
 check("diebold_mariano: tiny losses with a non-positive variance are not called identical (no absolute tolerance)",
       has(t, "long-run variance of the loss difference is not positive") and "identical" not in t, t)

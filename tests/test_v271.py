@@ -15,6 +15,7 @@
 Run from the repository root:  python3 tests/test_v271.py
 """
 import io
+import itertools
 import json
 import os
 import re
@@ -97,7 +98,8 @@ ev = t["level"].notna().to_numpy()
 inf_rows = ev & np.isinf(t["upper"].to_numpy())
 fin = ev & t["actual"].notna().to_numpy() & ~inf_rows & ~t["empty"].to_numpy()
 cov_fin_ref = float(np.mean(np.abs(t["actual"] - t["forecast"]).to_numpy()[fin] <= (t["upper"] - t["forecast"]).to_numpy()[fin]))
-runs = np.diff(np.flatnonzero(np.diff(np.r_[0, inf_rows.astype(int), 0])))[::2]
+# v2.7.2 (review r1-B B17 of v2.7.1): the reference no longer copies the implementation's diff formula
+runs = np.array([len(list(g_)) for k_, g_ in itertools.groupby(inf_rows) if k_])
 msg = next((w["message"] for w in out["warnings"] if "infinite" in w["message"]), "")
 act = next((w["action"] for w in out["warnings"] if "infinite" in w["message"]), "")
 check("h = 21: n_infinite counts the infinite intervals of the table", out["n_infinite"] == int(inf_rows.sum()) == 94,
@@ -136,6 +138,19 @@ o2 = fc.conformal_intervals(a2, f2, h=21, show=False)
 m2 = next((w["message"] for w in o2["warnings"] if "infinite" in w["message"]), "")
 check("h = 21, two runs of 6 and 26 infinite intervals: the finding gives the longest (26)",
       o2["n_infinite"] == 32 and "longest run of infinite intervals: 26 rows" in m2, m2)
+t2_ = o2["table"]
+runs2 = [len(list(g_)) for k_, g_ in itertools.groupby(t2_["level"].notna().to_numpy() & np.isinf(t2_["upper"].to_numpy())) if k_]
+check("h = 21, two runs: the runs counted from the table by groupby are 6 and 26 (v2.7.2, review r1-B B17)",
+      sorted(runs2) == [6, 26], runs2)
+# v2.7.2 (review r1-B N3 of v2.7.2): the longest run first (47, then 16; seed copied from the output of
+# claude/scripts/v272/busca_n3.py in the development repository), so "the last run" cannot pass for "the longest"
+a3_, f3_ = series(20261202)
+o3_ = fc.conformal_intervals(a3_, f3_, h=21, show=False)
+t3_ = o3_["table"]
+runs3 = [len(list(g_)) for k_, g_ in itertools.groupby(t3_["level"].notna().to_numpy() & np.isinf(t3_["upper"].to_numpy())) if k_]
+m3_ = next((w["message"] for w in o3_["warnings"] if "infinite" in w["message"]), "")
+check("h = 21, the longest run first (47, then 16): the finding gives 47, not the last run",
+      runs3 == [47, 16] and "longest run of infinite intervals: 47 rows" in m3_, (runs3, m3_))
 
 a0, f0 = series(20261120)
 o0 = fc.conformal_intervals(a0, f0, h=21, show=False)
@@ -449,7 +464,8 @@ check("panel-iv.md: the column names it lists exist in the result (the text cann
 # review r1-B B7: every name in backticks in the iv_report part is a key, a column, a row label of the example, a quoted
 # test name or cov_type that exists, or one of the few code fragments listed here
 ru = dg.iv_report("lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]", mroz, cov_type="unadjusted", show=False)
-code = {"r = diagnostics.iv_report(...)", 'r["tests"]["p"].iloc[0]', "ivreg2, robust", "cov_type"}
+code = {"r = diagnostics.iv_report(...)", 'r["tests"]["p"].iloc[0]', "ivreg2, robust", "cov_type",
+        'r["tests"].loc["endogeneity (control function, HC1)", "p"]'}   # v2.7.2: the access by name
 row_labels = {f'"{i}"' for i in rr["table"].index}
 test_names = {f'"{i}"' for i in list(rr["tests"].index) + list(ru["tests"].index)}
 cov_ok = {'cov_type="robust"', 'cov_type="unadjusted"', '"kernel"', '"homoskedastic"'}

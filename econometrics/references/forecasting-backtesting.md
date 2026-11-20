@@ -87,7 +87,7 @@ fc = forecasting.rolling_origin(y, order, start=0.8, h=1, refit_every=12, window
 | `hist_mean` (expanding mean) | Returns. Campbell-Thompson (2008) out-of-sample R² is measured against it |
 
 `forecasting.evaluate(actual, {"naive": ..., "model": ...})` reports:
-- **RMSE, MAE, bias, MAPE** (MAPE only for strictly positive series far from zero), **Theil U** = RMSE / RMSE_benchmark (< 1 beats the benchmark), **MASE** if an in-sample scale is supplied.
+- **RMSE, MAE, bias, MAPE** (MAPE only for strictly positive series far from zero), **Theil U** = RMSE / RMSE_benchmark (< 1 beats the benchmark), **MASE** if an in-sample scale is supplied (`forecasting.forecast_metrics(..., insample_scale=)`; `evaluate` does not take one).
 - **Diebold-Mariano with HLN correction** vs the benchmark. For nested models (ARIMAX vs ARIMA without X) DM is conservative; Clark-West (2007) is the right test when the small model is nested in the large one.
 - **Directional accuracy** and the **Pesaran-Timmermann** test. A 55% hit rate can be significant on 1,000 forecasts and pure noise on 60. For levels, direction is the sign of the predicted *change* (pass `last_actual`), not the sign of the level.
 
