@@ -1219,32 +1219,31 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
       "table"          DataFrame, one row per coefficient (the formula's names: "Intercept", "x", ...), columns
                        ["OLS", "OLS se", "2SLS", "2SLS se", "2SLS p", "2SLS ci_low", "2SLS ci_high"]
       "first_stage"    DataFrame, one row per endogenous regressor, columns ["partial F", "partial F p", "partial R²",
-                       "strength"], plus "partial F (HC3)" when a row has leverage 0.5 or more (robust cov_type). Read
-                       the strength from the F against 10 and 104.7, not from "partial F p": the robust F is HC0 (as
-                       linearmodels) and its p rejected 6-17% with irrelevant instruments while P(F > 10) stayed at or
-                       below 0.6% (v2.7.1, M3c)
-      "tests"          DataFrame indexed by the test's full name (index name "test"), columns ["H0", "statistic", "p"];
-                       rows "endogeneity (control function, HC1)" (robust cov_type) or "endogeneity (Wu-Hausman)"
-                       ("unadjusted", "homoskedastic"), then "overidentification (Wooldridge robust score, <q> df)" or
-                       "overidentification (Sargan, <q> df)" only when overidentified. Endogeneity p:
-                       r["tests"]["p"].iloc[0]; overidentification p: r["tests"]["p"].iloc[1]
+                       "strength"]; read the strength from F against 10 and 104.7, not from its p (see below)
+      "tests"          DataFrame, index named "test" with each test's full name, columns ["H0", "statistic", "p"]: the
+                       endogeneity row first, "endogeneity (control function, HC1)" (robust, heteroskedastic, kernel)
+                       or "endogeneity (Wu-Hausman)" (unadjusted, homoskedastic), then, only when overidentified,
+                       "overidentification (Wooldridge robust score, <q> df)" (robust, heteroskedastic, kernel) or
+                       "overidentification (Sargan, <q> df)" (unadjusted, homoskedastic).
+                       r["tests"]["p"].iloc[0] is the endogeneity p (.iloc[1], the overidentification p, only then)
+      "iv", "ols"      linearmodels IVResults (2SLS) and OLSResults (same rows): the iv, ols results use .params,
+                       .std_errors, .pvalues and .conf_int(), not statsmodels' .bse
       "anderson_rubin" dict; one endogenous regressor: keys ["estimand", "ci_low", "ci_high", "pieces", "shape",
-                       "p_at_zero", "level", "cov"] (ci_low/ci_high ±inf at the grid edge, NaN when empty or not
-                       computed; pieces a list of (low, high)); several: keys ["estimand", "joint_F_at_zero",
-                       "joint_p_at_zero", "df", "pieces", "shape", "level", "cov"] (df a pair, pieces None); "cov" is
-                       the covariance of the AR regressions (HC3 when cov_type is robust or kernel)
-      "n"              int, rows used
-      "n_dropped"      int, rows dropped for missing values
-      "endogenous"     list of the endogenous columns
-      "instruments"    list of the excluded instrument columns
-      "overidentified_by"  int, instruments minus endogenous regressors
-      "cov_type"       str, as passed (lower case)
+                       "p_at_zero", "level", "cov"]; several: keys ["estimand", "joint_F_at_zero", "joint_p_at_zero",
+                       "df", "pieces", "shape", "level", "cov"] (more below)
+      "n", "n_dropped", "overidentified_by"  ints: rows used, rows dropped, instruments minus endogenous regressors
+      "endogenous", "instruments"  lists of columns
+      "cov_type"       str, lower case
       "warnings"       list of str
-      "high_leverage_rows"  list of index labels of rows with leverage 1 from the instruments (robust cov_type)
+      "high_leverage_rows"  list of row labels with leverage 1 from the instruments (robust cov_type)
       "endogeneity_linearmodels"  dict, keys ["test", "statistic", "p"] (robust cov_type), else None
-      "iv"             linearmodels IVResults (2SLS)
-      "ols"            linearmodels OLSResults on the same rows: the iv, ols results use .params, .std_errors,
-                       .pvalues and .conf_int(), not statsmodels' .bse
+    More on the keys: "partial F (HC3)" is added to first_stage (before "strength") when a row has leverage from
+    0.5 to below 1 with a robust cov_type (not with a row of leverage 1, where the robust F is NaN). With
+    cov_type="robust" the first-stage F is HC0 (as linearmodels; with "kernel", linearmodels' kernel F) and its p
+    rejected 6-17% with irrelevant instruments while P(F > 10) stayed at or below 0.6% (v2.7.1, M3c). In
+    anderson_rubin, ci_low/ci_high are ±inf at the grid edge and NaN when the set is empty or not computed, pieces
+    is a list of (low, high) (None with several endogenous regressors), df a pair, and "cov" the covariance of the
+    AR regressions (HC3 when cov_type is robust or kernel).
 
     formula: linearmodels syntax, "lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]".
     Reports OLS and 2SLS side by side, on the same rows (v2.6.12: rows with NaN in any variable of the formula are
@@ -1614,7 +1613,7 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
         print("\nTests:")
         print(tests[["statistic", "p"]].to_string(float_format=_fmt))
         # v2.7.2: the agents of the v2.6.13 and v2.7.1 validations guessed this access ("endogeneity" alone: KeyError)
-        print("In code: " + "; ".join(f'r["tests"].loc["{t_}", "p"]' for t_ in tests.index))
+        print("In code (r = the result): " + "; ".join(f'r["tests"].loc["{t_}", "p"]' for t_ in tests.index))
         if robust and ar_note:
             print(f"The control-function test uses HC1 (heteroskedasticity only), not the {cov_type} covariance.")
         if q == 0:

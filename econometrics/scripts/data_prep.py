@@ -136,8 +136,8 @@ def missing_report(df: pd.DataFrame, cols: list[str] | None = None, predictors: 
       "complete_n"     int, rows with no missing value in cols
       "n"              int, rows
       "patterns"       DataFrame, one row per pattern (1 = missing), a column per variable and "rows"
-      "tests"          DataFrame, only with predictors=: one row per column with missing values, columns
-                       ["share_missing", "F", "p"]
+      "tests"          DataFrame, only with a non-empty predictors=: one row per column outside predictors with missing
+                       values (none: empty), columns ["share_missing", "F", "p"]
 
     - shares: missing share per column; complete_n: rows usable by listwise deletion.
     - patterns: most frequent missingness patterns (1 = missing).
@@ -168,7 +168,8 @@ def missing_report(df: pd.DataFrame, cols: list[str] | None = None, predictors: 
             w = m.wald_test(R, scalar=True, use_f=True)
             rows[c] = {"share_missing": float(miss.loc[ok, c].mean()), "F": float(w.statistic),
                        "p": float(w.pvalue)}
-        out["tests"] = pd.DataFrame(rows).T
+        # v2.7.2 (review r1-A A6): always the three columns, also when no column outside predictors has missing values
+        out["tests"] = pd.DataFrame.from_dict(rows, orient="index", columns=["share_missing", "F", "p"])
     if show:
         print(f"\nMissing data: {out['complete_n']} of {out['n']} rows complete on {len(cols)} columns "
               f"({out['complete_n'] / max(out['n'], 1):.1%})")

@@ -455,7 +455,8 @@ check("panel-iv.md: the column names it lists exist in the result (the text cann
 # review r1-B B7: every name in backticks in the iv_report part is a key, a column, a row label of the example, a quoted
 # test name or cov_type that exists, or one of the few code fragments listed here
 ru = dg.iv_report("lwage ~ 1 + exper + expersq + [educ ~ motheduc + fatheduc]", mroz, cov_type="unadjusted", show=False)
-code = {"r = diagnostics.iv_report(...)", 'r["tests"]["p"].iloc[0]', "ivreg2, robust", "cov_type"}
+code = {"r = diagnostics.iv_report(...)", 'r["tests"]["p"].iloc[0]', "ivreg2, robust", "cov_type",
+        'r["tests"].loc["endogeneity (control function, HC1)", "p"]'}   # v2.7.2: the access by name
 row_labels = {f'"{i}"' for i in rr["table"].index}
 test_names = {f'"{i}"' for i in list(rr["tests"].index) + list(ru["tests"].index)}
 cov_ok = {'cov_type="robust"', 'cov_type="unadjusted"', '"kernel"', '"homoskedastic"'}

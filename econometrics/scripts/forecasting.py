@@ -293,6 +293,9 @@ def forecast_metrics(actual, forecast, naive=None, insample_scale: float | None 
     direction='return' : directional accuracy of the sign itself (series already a return).
     insample_scale     : MAE of the in-sample naive forecast, for MASE.
     """
+    if direction not in ("level", "return"):
+        # v2.7.2 (review r1-A A1): any other text was accepted and only dropped MAPE_%
+        raise ValueError("direction must be 'level' or 'return'")
     a = np.asarray(actual, float)
     f = np.asarray(forecast, float)
     e = a - f
@@ -322,10 +325,12 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
              show: bool = True) -> pd.DataFrame:
     """Compare several forecasts over the common sample; DM test of each vs `benchmark`.
 
-    Returns a DataFrame (v2.7.2), one row per forecast (the dict's names), columns ["RMSE", "MAE", "bias(mean error)",
-    "MAPE_%", "Theil_U(RMSE/RMSE_naive)", "DM_vs_<benchmark>", "DM_p"]; with direction="sign", "MAPE_%" is not
-    there and "directional_accuracy" and "PT_p_value" are; Theil's U is relative to the benchmark whatever its name,
-    and the benchmark's own row has NaN in the DM columns. Example: tab.loc["model", "DM_p"]."""
+    Returns a DataFrame (v2.7.2), one row per forecast (the dict's names); of the columns
+    ["RMSE", "MAE", "bias(mean error)", "MAPE_%", "Theil_U(RMSE/RMSE_naive)", "directional_accuracy", "PT_p_value",
+    "DM_vs_<benchmark>", "DM_p"], in this order, "MAPE_%" only with direction="level" and no actual equal to 0;
+    "directional_accuracy" and "PT_p_value" only with direction="return" or with last_actual=; the two DM columns
+    only with two or more forecasts (NaN in the benchmark's row). Theil's U is relative to the benchmark whatever
+    its name. direction is "level" (default) or "return". Example: tab.loc["model", "DM_p"]."""
     from diagnostics import diebold_mariano
     df = pd.concat({"actual": actual, **forecasts}, axis=1).dropna()
     if last_actual is not None:

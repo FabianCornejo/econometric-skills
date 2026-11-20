@@ -275,10 +275,11 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
 
     Returns a dict (v2.7.2: keys exact):
       "path"           str
-      "sha256"         str, hash of the card's content
+      "sha256"         str, the hash stored in the card (not that of the content if the card was edited by hand: a
+                       warning says so)
       "created_utc"    str
-      "fields"         dict, the card's fields as written (NFC)
-      "amendments"     list of the amendments, each with its time and reason
+      "fields"         dict, the card's fields (NFC when written by v2.7.1 or later)
+      "amendments"     list of the amendments, each with its time and reason (run_manifest gives their count)
       "action"         str: "written", "unchanged" or "amended"
       "used"           dict, keys ["path", "action", "skill_version"]
       "warnings"       list of dicts with keys ["level", "message", "action"]
@@ -388,15 +389,17 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
       "skill_version"  str
       "python"         str
       "platform"       str
-      "packages"       dict, package name -> version
+      "packages"       dict, package name -> version (None when not installed)
       "seed"           as passed
       "data"           dict, name -> keys ["sha256", "rows", "cols"] (a DataFrame alone is named "data")
       "files"          dict, path -> sha256 of the bytes, or "missing"
-      "results"        dict, the results passed (numbers made plain)
+      "results"        dict, the results passed as plain numbers; of a dict value only "estimate", "se", "ci_low",
+                       "ci_high", "p" and "n" are kept, and a non-number becomes text
       "notes"          str
       "simulated"      bool
       "study_card"     dict with keys ["path", "sha256", "sha256_recomputed", "intact", "created_utc", "amendments",
-                       "amendment_reasons", "edited_by_hand"] when study_card= is given, else None
+                       "amendment_reasons", "edited_by_hand"] ("amendments" a count here) when study_card= names a
+                       card that can be read, else None (a missing or unreadable card is also a warning)
       "warnings"       list of dicts with keys ["level", "message", "action"]
 
     Since v2.7.0: study_card='study_card.json' records the card's hash, creation time and amendments
@@ -508,12 +511,12 @@ def cross_check(estimates, se: float | None = None, tol_se: float = 1.0, rel_tol
     do not pick the most convenient number.
 
     Returns a dict (v2.7.2: keys exact, the same with one route):
-      "table"          DataFrame, one row per route, columns ["estimate"] (named by label)
+      "table"          DataFrame, one row per route, one column named by label (default: columns ["estimate"])
       "spread"         float, max minus min of the estimates (NaN with one route)
       "agree"          bool, or None when nothing was checked
       "criterion"      str, the rule used ("within 1 SE (0.2)", "not checked", ...)
-      "null"           bool, every route compatible with zero
-      "kind"           str: "method" (with se) or "implementation" (without), or None
+      "null"           bool, the routes agree and every one is compatible with zero
+      "kind"           str: "method" (with a positive se) or "implementation" (without), or None
       "weak"           bool, the tolerance is a large share of the estimate
       "note"           str ("" when there is nothing to add)
       "warnings"       list of str
