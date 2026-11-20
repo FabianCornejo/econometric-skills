@@ -353,6 +353,12 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
             if k == benchmark:
                 continue
             p = tab.loc[k, "DM_p"]
+            if not np.isfinite(p) and not np.isfinite(tab.loc[[k, benchmark], "RMSE"].astype(float)).all():
+                # v2.7.2 (review r1-B B3): with |error| above ~1.3e154 the squared loss overflows, and the reason below
+                # ("identical forecasts") was false
+                print(f"  {k}: DM test not computed: the squared errors overflow (errors above ~1e154 in absolute "
+                      "value); rescale the series (e.g. to thousands) first")
+                continue
             if not np.isfinite(p):
                 print(f"  {k}: DM test not computed (the loss difference with {benchmark} has no positive "
                       "variance, e.g. identical forecasts); compare the RMSE column")
@@ -379,6 +385,7 @@ def _pct(x: float) -> str:
     return f"{100 * x:.4g}%"
 
 
+_MAX_ABS = 1e150          # v2.7.2: largest |actual|, |forecast| or error conformal_intervals accepts (squares stay finite)
 _LB_LEVEL = 0.05          # level of the Ljung-Box screen for dependent errors, whatever the interval's alpha
 
 
@@ -404,6 +411,8 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
                        rolling_origin returns them; the forecast of row i was made at origin i - h. To get
                        the interval of a forecast not yet realised, append its row with actual = NaN: rows
                        at the end with no actual get an interval and are left out of the coverage.
+                       Values beyond 1e150 in absolute value (actual, forecast or their difference) are refused:
+                       their squares overflow (v2.7.2).
     method   : "aci" (default) — adaptive conformal inference (Gibbs and Candès 2021, eq. 2): the level is
                moved after every observed error, alpha_t = alpha + gamma * sum(alpha - err), so the share
                of misses tracks alpha over time even when errors are dependent or their size drifts;
@@ -492,12 +501,16 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
     n = len(y)
     with np.errstate(over="ignore"):
         r = np.abs(y - f)                                   # NaN for future rows
-    over = obs & np.isinf(r)
-    if over.any():
-        # v2.7.2 (review r1-A A8 of v2.7.1): finite actual and forecast whose difference overflows (1.5e308 and
-        # −1.5e308) gave infinite intervals in every method, and the finding blamed ACI even for "rolling" and "split"
-        raise ValueError(f"the error |actual − forecast| overflows to inf at {int(over.sum())} row(s) (first: "
-                         f"{a_s.index[np.flatnonzero(over)[0]]!r}); rescale the series (e.g. to thousands) first")
+    # v2.7.2 (review r1-A A8 of v2.7.1; r1-B B1 and N4 of v2.7.2): finite actual and forecast whose difference
+    # overflows (1.5e308 and −1.5e308) gave infinite intervals in every method, with a finding that blamed ACI even
+    # for "rolling" and "split"; with errors above ~1.3e154 the squared errors of the Ljung-Box screen overflow
+    # (the screen went silent), and forecast ± half can overflow. One bound, 1e150, keeps all of them finite.
+    with np.errstate(invalid="ignore"):
+        big = (obs & ((np.abs(y) > _MAX_ABS) | ~(r <= _MAX_ABS))) | (np.abs(f) > _MAX_ABS)
+    if big.any():
+        raise ValueError(f"values beyond {_MAX_ABS:g} in absolute value (actual, forecast or their difference) at "
+                         f"{int(big.sum())} row(s) (first: {a_s.index[np.flatnonzero(big)[0]]!r}): squared errors "
+                         "overflow there; rescale the series (e.g. to thousands) first")
     m_min = int(np.ceil((1 - alpha) / alpha - 1e-12))       # smallest m with ceil((m+1)(1-alpha)) <= m
     if calib_size is not None and int(calib_size) < m_min:
         raise ValueError(f"calib_size = {calib_size} is below {m_min}, the fewest errors that give a finite "

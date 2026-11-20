@@ -38,43 +38,98 @@ def read(rel):
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
-# ============================================================ 1. conformal_intervals: an error that overflows
+# ============================================================ 1. conformal_intervals: values whose squares overflow
 rng = np.random.default_rng(3)
 n = 80
-a = pd.Series(rng.normal(size=n))
-f = pd.Series(rng.normal(size=n))
+a = pd.Series(rng.normal(size=n), index=pd.RangeIndex(100, 100 + n))     # labels differ from positions (review N1)
+f = pd.Series(rng.normal(size=n), index=a.index)
 a_o, f_o = a.copy(), f.copy()
-a_o[10:20] = 1.5e308
-f_o[10:20] = -1.5e308          # both finite; their difference, 3e308, is not
-check("the overflow case: actual and forecast finite, their difference infinite (the case of the review)",
+a_o.iloc[10:20] = 1.5e308
+f_o.iloc[10:20] = -1.5e308          # both finite; their difference, 3e308, is not
+check("the overflow case: actual and forecast finite, their difference infinite (the case of review A8 of v2.7.1)",
       np.isfinite(a_o).all() and np.isfinite(f_o).all() and np.isinf(np.abs(a_o.to_numpy() - f_o.to_numpy())).sum() == 10)
-for m in ("aci", "rolling", "split"):
+
+
+def refused(a_, f_, **kw):
     try:
         with np.errstate(all="raise"):        # no floating-point warning on the way to the message
-            fc.conformal_intervals(a_o, f_o, method=m, show=False)
-        msg = ""
+            fc.conformal_intervals(a_, f_, show=False, **kw)
+        return ""
     except ValueError as e:
-        msg = str(e)
-    check(f"{m}: an error that overflows is refused, with the count and the first row", "overflows to inf at 10 row(s)"
-          in msg and "(first: 10)" in msg and "rescale" in msg, msg)
-# the other side: 1e308 and −7e307 differ by 1.7e308, finite; the function runs and nothing is infinite
-a_n, f_n = a.copy(), f.copy()
-a_n[10:20] = 1e308
-f_n[10:20] = -7e307
-check("the other side: 1e308 − (−7e307) is finite", np.isfinite(np.abs(a_n.to_numpy() - f_n.to_numpy())).all())
+        return str(e)
+
+
 for m in ("aci", "rolling", "split"):
-    r = fc.conformal_intervals(a_n, f_n, method=m, show=False)
+    msg = refused(a_o, f_o, method=m)
+    check(f"{m}: an error that overflows is refused, with the count and the first row's label (110, not position 10)",
+          "beyond 1e+150 in absolute value" in msg and "at 10 row(s) (first: 110)" in msg and "rescale" in msg, msg)
+# review r1-B B1 of v2.7.2: large but finite errors after the warm-up with a large forecast made forecast ± half
+# overflow with no word (n_infinite 0); now refused by the same bound
+a_b, f_b = a.copy(), f.copy()
+a_b.iloc[0:30] = 1e308
+f_b.iloc[0:30] = -7e307
+a_b.iloc[50] = f_b.iloc[50] = 1e308
+for m in ("aci", "rolling", "split"):
+    msg = refused(a_b, f_b, method=m)
+    check(f"{m}: finite errors of 1.7e308 and a forecast of 1e308 are refused (31 rows, the first labelled 100)",
+          "at 31 row(s) (first: 100)" in msg, msg)
+# a forecast beyond the bound on a future row (no actual yet) is refused too: its interval would overflow
+a_fu, f_fu = a.copy(), f.copy()
+a_fu.iloc[-3:] = np.nan
+f_fu.iloc[-1] = 1e200
+check("a future row with a forecast beyond the bound is refused (its interval forecast ± half would overflow)",
+      "at 1 row(s) (first: 179)" in refused(a_fu, f_fu, method="rolling"))
+# the other side: values of 1e149 (errors 2e149) run, with finite bounds and no warning from numpy
+a_n, f_n = a.copy(), f.copy()
+a_n.iloc[10:20] = 1e149
+f_n.iloc[10:20] = -1e149
+for m in ("aci", "rolling", "split"):
+    with np.errstate(all="raise"):
+        r = fc.conformal_intervals(a_n, f_n, method=m, show=False)
+    tb = r["table"].dropna(subset=["level"])
     blame = [w_["message"] for w_ in r["warnings"] if "ACI raised" in w_["message"]]
-    if m == "aci":
-        check("aci, large finite errors: runs", r["n_evaluated"] > 0)
-    else:
-        check(f"{m}, large finite errors: runs, no infinite interval and no finding that blames ACI",
-              r["n_infinite"] == 0 and not blame, (r["n_infinite"], blame))
-# future rows (actual NaN) are not errors: they never count as an overflow
+    check(f"{m}, errors of 2e149: runs with every bound finite and no finding that blames ACI",
+          r["n_evaluated"] > 0 and np.isfinite(tb[["lower", "upper"]].to_numpy()).all()
+          and (m == "aci" or (r["n_infinite"] == 0 and not blame)), (r["n_infinite"], blame))
+# the Ljung-Box screen of "rolling" still sees AR(0.9) errors at the scale 1e149 (it went silent above ~1e154)
+e_ = np.zeros(300)
+for t_ in range(1, 300):
+    e_[t_] = 0.9 * e_[t_ - 1] + rng.normal()
+for scale in (1.0, 1e149):
+    act_ = pd.Series(e_ * scale)
+    r = fc.conformal_intervals(act_, act_ * 0.0, method="rolling", show=False)
+    check(f"rolling, AR(0.9) errors at scale {scale:g}: the dependence screen still warns",
+          any("autocorrelated" in w_["message"] or "dependence" in w_["message"] for w_ in r["warnings"]),
+          [w_["message"][:80] for w_ in r["warnings"]])
+# rows with no actual yet and an ordinary forecast are not refused
 a_fut = a_n.copy()
 a_fut.iloc[-3:] = np.nan
 r = fc.conformal_intervals(a_fut, f_n, method="rolling", show=False)
-check("rows with no actual yet are not taken for an overflow", r["used"]["n_future"] == 3)
+check("rows with no actual yet and ordinary forecasts are accepted", r["used"]["n_future"] == 3)
+
+# ============================================================ 1b. evaluate and diebold_mariano: a loss that overflows
+import io  # noqa: E402
+from contextlib import redirect_stdout  # noqa: E402
+a_e = pd.Series(rng.normal(size=80))
+a_e.iloc[5] = 1e160                     # a finite error whose square overflows (review r1-B B3)
+fa, fb = pd.Series(rng.normal(size=80)), pd.Series(rng.normal(size=80))
+buf = io.StringIO()
+with redirect_stdout(buf), np.errstate(all="ignore"):
+    tab = fc.evaluate(a_e, {"a": fa, "b": fb})
+out_ = buf.getvalue()
+check("evaluate: a squared loss that overflows is named as such, not as 'identical forecasts'",
+      "the squared errors overflow" in out_ and "identical forecasts" not in out_ and np.isnan(tab.loc["b", "DM_p"]), out_)
+buf = io.StringIO()
+with redirect_stdout(buf), np.errstate(all="ignore"):
+    dg.diebold_mariano(a_e - fa, a_e - fb)
+out_ = buf.getvalue()
+check("diebold_mariano: the reason names a loss that overflows, not only a missing or infinite error",
+      "1 missing or infinite loss value(s)" in out_ and "overflows" in out_, out_)
+buf = io.StringIO()
+with redirect_stdout(buf):
+    fc.evaluate(pd.Series(np.arange(10.0)), {"a": pd.Series(np.arange(10.0) + 1), "b": pd.Series(np.arange(10.0) + 1)})
+check("evaluate: identical forecasts still get the variance reason", "no positive variance" in buf.getvalue(),
+      buf.getvalue())
 
 # ============================================================ 2. iv_report: the control-function leverage cut at 0.5
 nn = 120
@@ -111,7 +166,8 @@ for target in (0.49, 0.4995, 0.5005, 0.51):
     cf = [m_ for m_ in r["warnings"] if "control-function regression" in m_]
     p = float(r["tests"]["p"].iloc[0])
     side = "warning" if target > 0.5 else "no warning"
-    ok = (cf == [] if target < 0.5 else (len(cf) == 1 and cf[0].startswith("row 11 has leverage")))
+    # review r1-B N2: the number in the message is the leverage of the control-function regression (statsmodels)
+    ok = (cf == [] if target < 0.5 else (len(cf) == 1 and cf[0].startswith(f"row 11 has leverage {h:.2f} ")))
     check(f"control-function leverage {h:.4f} (statsmodels, row {row}): {side}; the p is computed", ok and np.isfinite(p)
           and row == 11 and abs(h - target) < 1e-9, (h, cf, p))
     fs_lev = [m_ for m_ in r["warnings"] if "first stage" in m_ and "leverage" in m_]
@@ -127,7 +183,7 @@ check("version 2.7.2 in SKILL_VERSION, the marketplace and the top of the CHANGE
       ver == "2.7.2" and mk["plugins"][0]["version"] == "2.7.2" and top and top.group(1) == "2.7.2",
       (ver, mk["plugins"][0]["version"], top and top.group(1)))
 sec = cl[cl.index("## v2.7.2"):cl.index("## v2.7.1")]
-for word in ("Returns", "test_api_docs", "iv_report", "overflow", "0.5", "groupby", "note"):
+for word in ("Returns", "test_api_docs", "iv_report", "1e150", "0.5", "groupby", "note", "direction", "diebold_mariano"):
     check(f"CHANGELOG v2.7.2 mentions {word!r}", word in sec)
 readme = read("README.md")
 m_r = re.search(r"\*\*(\d[\d,]*) checks\*\*", readme)

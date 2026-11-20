@@ -1934,7 +1934,10 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
         better = "model 1" if dbar < 0 else "model 2"
         if not np.isfinite(p):
             if not np.isfinite(d).all():
-                why = f"{int((~np.isfinite(d)).sum())} missing or infinite forecast error(s); align and drop them first"
+                # v2.7.2 (review r1-B B3): the loss can overflow with a finite error (squared loss above ~1.3e154)
+                why = (f"{int((~np.isfinite(d)).sum())} missing or infinite loss value(s): a missing or infinite "
+                       "forecast error (align and drop them first), or a loss that overflows (errors above ~1e154 with "
+                       "the squared loss: rescale the series)")
             elif np.ptp(d) == 0:
                 why = "the loss difference is constant (identical losses): there is nothing to test"
             else:

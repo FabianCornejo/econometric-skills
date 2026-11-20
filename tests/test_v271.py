@@ -142,6 +142,15 @@ t2_ = o2["table"]
 runs2 = [len(list(g_)) for k_, g_ in itertools.groupby(t2_["level"].notna().to_numpy() & np.isinf(t2_["upper"].to_numpy())) if k_]
 check("h = 21, two runs: the runs counted from the table by groupby are 6 and 26 (v2.7.2, review r1-B B17)",
       sorted(runs2) == [6, 26], runs2)
+# v2.7.2 (review r1-B N3 of v2.7.2): the longest run first (47, then 16; seed copied from the output of
+# claude/scripts/v272/busca_n3.py in the development repository), so "the last run" cannot pass for "the longest"
+a3_, f3_ = series(20261202)
+o3_ = fc.conformal_intervals(a3_, f3_, h=21, show=False)
+t3_ = o3_["table"]
+runs3 = [len(list(g_)) for k_, g_ in itertools.groupby(t3_["level"].notna().to_numpy() & np.isinf(t3_["upper"].to_numpy())) if k_]
+m3_ = next((w["message"] for w in o3_["warnings"] if "infinite" in w["message"]), "")
+check("h = 21, the longest run first (47, then 16): the finding gives 47, not the last run",
+      runs3 == [47, 16] and "longest run of infinite intervals: 47 rows" in m3_, (runs3, m3_))
 
 a0, f0 = series(20261120)
 o0 = fc.conformal_intervals(a0, f0, h=21, show=False)
