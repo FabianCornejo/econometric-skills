@@ -125,6 +125,33 @@ with redirect_stdout(buf), np.errstate(all="ignore"):
 out_ = buf.getvalue()
 check("diebold_mariano: the reason names a loss that overflows, not only a missing or infinite error",
       "1 missing or infinite loss value(s)" in out_ and "overflows" in out_, out_)
+# review r2 N5: only the benchmark's loss overflows: the same reason, not the variance one
+a_k = pd.Series(rng.normal(size=80))
+fbig = fb.copy()
+fbig.iloc[7] = 1e160
+buf = io.StringIO()
+with redirect_stdout(buf), np.errstate(all="ignore"):
+    fc.evaluate(a_k, {"bench": fbig, "a": fa})
+check("evaluate: only the benchmark overflows -> the overflow reason too", "the squared errors overflow" in buf.getvalue()
+      and "identical forecasts" not in buf.getvalue(), buf.getvalue())
+# review r2 S2: an infinite value in the data (a percentage change from zero) is named as such, not as an overflow
+a_i = a_k.copy()
+a_i.iloc[3] = np.inf
+buf = io.StringIO()
+with redirect_stdout(buf), np.errstate(all="ignore"):
+    fc.evaluate(a_i, {"a": fa, "b": fb})
+check("evaluate: an infinite value in actual is named as infinite input, not as an overflow to rescale",
+      "has infinite values" in buf.getvalue() and "overflow" not in buf.getvalue(), buf.getvalue())
+# review r2 S1: diebold_mariano gives the same statistic at any scale of the errors (its variance overflowed from
+# ~1e77 with the squared loss: DM 0, p 1, no word); the reference is the statistic at scale 1
+e1_, e2_ = rng.normal(size=100), 1.3 * rng.normal(size=100)
+ref_ = dg.diebold_mariano(e1_, e2_, h=3, show=False)
+for sc_ in (1e-100, 1e77, 1e100, 1e150):
+    with np.errstate(all="raise"):
+        r_ = dg.diebold_mariano(e1_ * sc_, e2_ * sc_, h=3, show=False)
+    check(f"diebold_mariano at scale {sc_:g}: the same statistic and p as at scale 1 (relative 1e-12), no warning",
+          abs(r_["DM_HLN"] / ref_["DM_HLN"] - 1) < 1e-12 and abs(r_["p"] / ref_["p"] - 1) < 1e-9
+          and abs(r_["mean_loss_diff"] / (ref_["mean_loss_diff"] * sc_ ** 2) - 1) < 1e-12, (r_, ref_))
 buf = io.StringIO()
 with redirect_stdout(buf):
     fc.evaluate(pd.Series(np.arange(10.0)), {"a": pd.Series(np.arange(10.0) + 1), "b": pd.Series(np.arange(10.0) + 1)})

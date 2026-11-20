@@ -198,6 +198,10 @@ for ct, form in (("robust", "y ~ 1 + w + [x ~ z1 + z2]"), ("unadjusted", "y ~ 1 
                  ("heteroskedastic", "y ~ 1 + w + [x ~ z1 + z2]"), ("kernel", "y ~ 1 + w + [x ~ z1 + z2]")):
     rr = dg.iv_report(form, d, cov_type=ct, show=False)
     keys_check("iv_report", blk, rr, f" ({ct}, {form.split('[')[1][:-1]})")
+    # review r2 N4: "endogeneity_linearmodels … (robust cov_type), else None" tied to the cov_type
+    check(f"iv_report ({ct}): endogeneity_linearmodels is None exactly with unadjusted or homoskedastic",
+          (rr["endogeneity_linearmodels"] is None) == (ct in ("unadjusted", "homoskedastic"))
+          and "(robust cov_type), else None" in ent["endogeneity_linearmodels"])
     for t_ in rr["tests"].index:
         gen = re.sub(r", \d+ df\)", ", <q> df)", t_)
         # review r1-A A7: the name must be the one written for THIS cov_type: "<name>" (…, ct, …)
@@ -220,6 +224,7 @@ dh.loc[0, "z1"] = 40.0                                   # one row far out in th
 rh = dg.iv_report("y ~ 1 + w + [x ~ z1 + z2]", dh, show=False)
 dl = d.assign(zd=0.0)
 dl.loc[5, "zd"] = 1.0                                    # an instrument that lives on one row: leverage 1
+dl.index = dl.index + 100                                # labels differ from positions (review r2 N4): row label 105
 rl = dg.iv_report("y ~ 1 + w + [x ~ z1 + zd]", dl, show=False)
 # leverage of row 0 beyond w from the instruments, by statsmodels' hat matrices (another path)
 h0 = (sm.add_constant(dh[["w", "z1", "z2"]]).pipe(lambda X: sm.OLS(dh.y, X).fit().get_influence().hat_matrix_diag[0])
@@ -231,7 +236,8 @@ check(f"iv_report, a row with leverage {h0:.2f} from the instruments: 'partial F
       and '"partial F (HC3)" is added to first_stage (before "strength") when a row has leverage from 0.5 to below 1'
       in flat, (h0, list(rh["first_stage"].columns)))
 check("iv_report, a row with leverage 1: no 'partial F (HC3)' column, the row is in high_leverage_rows",
-      "partial F (HC3)" not in rl["first_stage"].columns and rl["high_leverage_rows"] == [5], rl["high_leverage_rows"])
+      "partial F (HC3)" not in rl["first_stage"].columns and rl["high_leverage_rows"] == [105]
+      and "list of row labels with leverage 1" in ent["high_leverage_rows"], rl["high_leverage_rows"])
 keys_check("iv_report", blk, rh, " (leverage 0.8)")
 keys_check("iv_report", blk, rl, " (leverage 1)")
 # the printed access line runs and gives each test's p

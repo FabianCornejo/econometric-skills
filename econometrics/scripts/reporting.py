@@ -394,7 +394,7 @@ def run_manifest(data: dict | pd.DataFrame | None = None, files: list | None = N
       "data"           dict, name -> keys ["sha256", "rows", "cols"] (a DataFrame alone is named "data")
       "files"          dict, path -> sha256 of the bytes, or "missing"
       "results"        dict, the results passed as plain numbers; of a dict value only "estimate", "se", "ci_low",
-                       "ci_high", "p" and "n" are kept, and a non-number becomes text
+                       "ci_high", "p" and "n" are kept, and what JSON cannot hold becomes text
       "notes"          str
       "simulated"      bool
       "study_card"     dict with keys ["path", "sha256", "sha256_recomputed", "intact", "created_utc", "amendments",

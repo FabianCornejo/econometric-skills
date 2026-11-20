@@ -347,12 +347,18 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
         rows[k] = m
     tab = pd.DataFrame(rows).T
     if show:
+        has_inf = bool(np.isinf(df.to_numpy(dtype=float)).any())
         print(f"\nOut-of-sample evaluation ({len(df)} forecasts, benchmark = {benchmark})")
         print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
         for k in forecasts:
             if k == benchmark:
                 continue
             p = tab.loc[k, "DM_p"]
+            if not np.isfinite(p) and has_inf:
+                # v2.7.2 (review r2 S2): dropna() keeps ±inf (pct_change of a zero); rescaling does not fix those
+                print(f"  {k}: DM test not computed: actual or a forecast has infinite values (e.g. a percentage "
+                      "change from zero); drop or fix those rows first")
+                continue
             if not np.isfinite(p) and not np.isfinite(tab.loc[[k, benchmark], "RMSE"].astype(float)).all():
                 # v2.7.2 (review r1-B B3): with |error| above ~1.3e154 the squared loss overflows, and the reason below
                 # ("identical forecasts") was false
@@ -412,7 +418,7 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
                        the interval of a forecast not yet realised, append its row with actual = NaN: rows
                        at the end with no actual get an interval and are left out of the coverage.
                        Values beyond 1e150 in absolute value (actual, forecast or their difference) are refused:
-                       their squares overflow (v2.7.2).
+                       their squares can overflow (they do from ~1.3e154) (v2.7.2).
     method   : "aci" (default) — adaptive conformal inference (Gibbs and Candès 2021, eq. 2): the level is
                moved after every observed error, alpha_t = alpha + gamma * sum(alpha - err), so the share
                of misses tracks alpha over time even when errors are dependent or their size drifts;
@@ -510,7 +516,7 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
     if big.any():
         raise ValueError(f"values beyond {_MAX_ABS:g} in absolute value (actual, forecast or their difference) at "
                          f"{int(big.sum())} row(s) (first: {a_s.index[np.flatnonzero(big)[0]]!r}): squared errors "
-                         "overflow there; rescale the series (e.g. to thousands) first")
+                         "can overflow there; rescale the series (e.g. to thousands) first")
     m_min = int(np.ceil((1 - alpha) / alpha - 1e-12))       # smallest m with ceil((m+1)(1-alpha)) <= m
     if calib_size is not None and int(calib_size) < m_min:
         raise ValueError(f"calib_size = {calib_size} is below {m_min}, the fewest errors that give a finite "

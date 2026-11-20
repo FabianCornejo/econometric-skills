@@ -1230,7 +1230,7 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
                        .std_errors, .pvalues and .conf_int(), not statsmodels' .bse
       "anderson_rubin" dict; one endogenous regressor: keys ["estimand", "ci_low", "ci_high", "pieces", "shape",
                        "p_at_zero", "level", "cov"]; several: keys ["estimand", "joint_F_at_zero", "joint_p_at_zero",
-                       "df", "pieces", "shape", "level", "cov"] (more below)
+                       "df", "pieces", "shape", "level", "cov"] (pieces None, df a pair; more below)
       "n", "n_dropped", "overidentified_by"  ints: rows used, rows dropped, instruments minus endogenous regressors
       "endogenous", "instruments"  lists of columns
       "cov_type"       str, lower case
@@ -1924,10 +1924,17 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
     e1, e2 = np.asarray(e1, float), np.asarray(e2, float)
     d = np.abs(e1) ** power - np.abs(e2) ** power
     T = len(d)
-    dbar = d.mean()
-    gamma = [np.sum((d[k:] - dbar) * (d[:T - k] - dbar)) / T for k in range(h)]
+    # v2.7.2 (review r2 S1): the statistic does not depend on the scale of d, but its variance is a sum of d², which
+    # overflowed from errors of ~1e77 (squared loss) and gave DM = 0, p = 1 with no word; d is divided by its largest
+    # absolute value first (same statistic to rounding), so only a loss that is itself infinite stops the test
+    sc = float(np.max(np.abs(d))) if T and np.isfinite(d).all() else 1.0
+    sc = sc if sc > 0 else 1.0
+    ds = d / sc
+    dbar_s = ds.mean()
+    gamma = [np.sum((ds[k:] - dbar_s) * (ds[:T - k] - dbar_s)) / T for k in range(h)]
     var_d = (gamma[0] + 2 * sum(gamma[1:])) / T
-    dm = dbar / np.sqrt(var_d)
+    dm = dbar_s / np.sqrt(var_d)
+    dbar = dbar_s * sc
     hln = dm * np.sqrt((T + 1 - 2 * h + h * (h - 1) / T) / T)
     p = 2 * (1 - stats.t.cdf(abs(hln), T - 1))
     if show:
