@@ -19,6 +19,19 @@ Parsing rule: the block opens with a docstring line that starts with "Returns" a
 top-level entry is a line indented 6 spaces that starts with one or more quoted names; an entry whose text says
 "only with" (an argument) may be absent from the result, every other one must be there.
 
+v2.7.3 adds the 21 functions used in a single validation and their twins (claude/medicoes-v2.7.3.md, M1: the agent
+guessed wild_cluster_bootstrap's keys with .get(..., fallback) and vecm_fit's beta with a fixed number as fallback),
+with the same checks, plus:
+  - functions that return a DataFrame: the block's `columns [...]` is the real one, and its `attrs["…"]` entries are
+    the result's attrs, all and only;
+  - cox's tuple (res, tab): tab's columns, res.hr_table is tab;
+  - every "Example (r = the result): …" line runs on a real result (the expressions the agent would copy);
+  - the states the blocks name: vecm_fit with rank 0, 1 and k; cointegration's note None and text; panel_bp_lm NaN;
+    pesaran_timmermann with n < 10; hausman's classical_cov True, False and None; johansen_trace's column with level
+    0.05 and 0.10;
+  - rule T (decision D2 of v2.7.3): every public function of econometrics/scripts has a block ("Returns … (v2.7.")
+    within 12 lines of its def, unless it is in tests/returns_block_pending.txt, a frozen list that only shrinks.
+
 Run from the repository root:  python3 tests/test_api_docs.py
 """
 import ast
@@ -40,6 +53,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "econometrics" / "scripts"))
 import _console  # noqa: E402,F401  (non-ASCII text on a Windows console)
 import backtest as bt  # noqa: E402
+import estimation as est  # noqa: E402
+import multivariate as mv  # noqa: E402
+import survival as sv  # noqa: E402
+import ts_univariate as tu  # noqa: E402
 import data_prep as dp  # noqa: E402
 import diagnostics as dg  # noqa: E402
 import forecasting as fc  # noqa: E402
@@ -104,7 +121,9 @@ def head_check(name, func):
     k, blk = block(func)
     check(f"{name}: the Returns block starts within {MAX_OFFSET} lines of the def",
           k is not None and k <= MAX_OFFSET, k)
-    last = max((i for i, l_ in enumerate(blk) if re.match(r'^ {6}"', l_) or re.match(r"^ {7}", l_)), default=0)
+    # v2.7.3: any entry line (quoted keys, columns, attrs[...], res/tab), its continuations and the Example line
+    last = max((i for i, l_ in enumerate(blk) if re.match(r"^ {6}\S", l_) or re.match(r"^ {7}", l_)
+                or l_.startswith("    Example (r = the result): ")), default=0)
     check(f"{name}: every entry of the block ends within {MAX_END} lines of the def (grep -A30 shows all of it)",
           k is not None and k + last <= MAX_END, k is not None and k + last)
     return blk
@@ -153,7 +172,11 @@ def states_check():
 ENTRIES = {}
 
 
+ENTRIES_BLK = {}
+
+
 def ent_of(name, blk):
+    ENTRIES_BLK[name] = blk
     ENTRIES[name] = entries(blk)
     return ENTRIES[name]
 
@@ -162,6 +185,36 @@ def sub_check(name, ent, key, actual, word="keys", alternatives=False):
     ls = lists(ent.get(key, ""), word)
     ok = (list(actual) in ls) if alternatives else (len(ls) >= 1 and ls[0] == list(actual))
     check(f"{name}: {key!r} {word} as documented", ok, (ls, list(actual)))
+
+
+# ============================================================ v2.7.3: helpers for DataFrame and tuple results
+def df_check(name, blk, res, case=""):
+    """columns [...] of the block equal the DataFrame's columns; attrs["…"] entries are its attrs, all and only."""
+    txt = " ".join(l_.strip() for l_ in blk)
+    cols = lists(txt, "columns")
+    check(f"{name}{case}: the block's columns [...] are the DataFrame's columns, in order",
+          bool(cols) and cols[0] == list(res.columns), (cols[:1], list(res.columns)))
+    doc_attrs = set(re.findall(r'^ {6}attrs\["([^"]+)"\]', "\n".join(blk), flags=re.M))
+    check(f"{name}{case}: the attrs the block names are the result's attrs, all and only",
+          doc_attrs == set(res.attrs), (sorted(doc_attrs), sorted(res.attrs)))
+
+
+EXAMPLES = {}        # name -> number of example expressions run
+
+
+def example_check(name, blk, r, case=""):
+    """Each expression of the block's "Example (r = the result): …" line runs on the result r."""
+    line = [l_ for l_ in blk if l_.strip().startswith("Example (r = the result): ")]
+    exprs = [e_.strip().rstrip(".") for e_ in line[0].split(": ", 1)[1].split("; ")] if line else []
+    bad = []
+    for e_ in exprs:
+        try:
+            eval(e_, {"r": r, "np": np, "pd": pd})   # noqa: S307  (the text the agent would copy)
+        except Exception as x_:                      # noqa: BLE001
+            bad.append((e_, repr(x_)))
+    check(f"{name}{case}: the block has an Example line and each of its {len(exprs)} expressions runs on a real result",
+          len(line) == 1 and exprs and not bad, (line, bad))
+    EXAMPLES[name] = len(exprs)
 
 
 os.chdir(tempfile.mkdtemp())
@@ -410,6 +463,11 @@ try:
     msg = ""
 except ValueError as e_:
     msg = str(e_)
+# v2.7.3: the attrs the block names are the table's, and the Example line runs
+doc_attrs = set(re.findall(r'^ {6}attrs\["([^"]+)"\]', "\n".join(blk), flags=re.M))
+check("evaluate: the attrs the block names are the table's attrs, all and only (v2.7.3)", doc_attrs == set(ev.attrs),
+      (doc_attrs, set(ev.attrs)))
+example_check("evaluate", blk, ev)
 check("evaluate: a direction other than 'level' or 'return' is refused (it only dropped MAPE_% before)",
       "direction must be 'level' or 'return'" in msg and 'direction is "level" (default) or "return"' in txt, msg)
 
@@ -422,6 +480,529 @@ for meth in ("aci", "rolling", "split"):
     sub_check(f"conformal_intervals ({meth})", ent, "used", ci["used"].keys())
     sub_check(f"conformal_intervals ({meth})", ent, "guarantee", ci["guarantee"].keys())
     check(f"conformal_intervals ({meth}): the table is indexed like actual", ci["table"].index.equals(act.index))
+
+# ============================================================ 6. v2.7.3: diagnostics
+rng3 = np.random.default_rng(73)
+T3 = 160
+xa = rng3.normal(size=T3).cumsum()
+ts3 = pd.DataFrame({"y1": xa + rng3.normal(scale=0.5, size=T3), "y2": xa + rng3.normal(scale=0.5, size=T3)},
+                   index=pd.date_range("2000-01-31", periods=T3, freq="ME"))
+st_ = pd.DataFrame({"s1": rng3.normal(size=T3), "s2": rng3.normal(size=T3)}, index=ts3.index)   # two I(0) series
+
+blk = head_check("stationarity", dg.stationarity)
+r_ = dg.stationarity(ts3["y1"], show=False)
+df_check("stationarity", blk, r_)
+example_check("stationarity", blk, r_)
+check("stationarity: 4 rows with index 0-3 in the documented order of Transform and Deterministics",
+      list(r_.index) == [0, 1, 2, 3] and list(zip(r_["Transform"], r_["Deterministics"])) ==
+      [("level", "constant"), ("level", "constant+trend"), ("1st difference", "constant"),
+       ("1st difference", "constant+trend")], list(zip(r_["Transform"], r_["Deterministics"])))
+r_w = dg.stationarity(ts3["y1"], show=False, alpha=0.2)
+check("stationarity: attrs['warnings'] is a list of str, empty with alpha 0.05 and not empty with alpha 0.2, as the "
+      "block says", r_.attrs["warnings"] == [] and r_w.attrs["warnings"] and all(isinstance(w_, str) for w_ in
+      r_w.attrs["warnings"]) and "empty unless alpha is outside [0.01, 0.10]" in " ".join(blk))
+check("stationarity: suggested_order starts with I(0), I(1) or undetermined, as the block says",
+      any(r_.attrs["suggested_order"].startswith(a_) for a_ in ("I(0)", "I(1)", "undetermined")),
+      r_.attrs["suggested_order"])
+
+blk = head_check("stationarity_many", dg.stationarity_many)
+r_ = dg.stationarity_many(ts3, show=False)
+df_check("stationarity_many", blk, r_)
+example_check("stationarity_many", blk, r_)
+check("stationarity_many: one row per column in order, index 0..k-1, Suggested order = stationarity's attrs",
+      list(r_["Series"]) == ["y1", "y2"] and list(r_.index) == [0, 1]
+      and r_.loc[0, "Suggested order"] == dg.stationarity(ts3["y1"], show=False).attrs["suggested_order"])
+
+blk = head_check("cointegration", dg.cointegration)
+ent = ent_of("cointegration", blk)
+for case, dat in ((" (cointegrated random walks)", ts3), (" (two I(0) series)", st_)):
+    r_ = dg.cointegration(dat, show=False)
+    keys_check("cointegration", blk, r_, case)
+    sub_check("cointegration" + case, ent, "engle_granger", r_["engle_granger"].keys())
+    sub_check("cointegration" + case, ent, "johansen", r_["johansen"].columns, "columns")
+    example_check("cointegration", blk, r_, case)
+check("cointegration: johansen_note seen None and as text (full rank with det_order=0)",
+      {"none", "value"} <= SEEN[("cointegration", "johansen_note")], SEEN[("cointegration", "johansen_note")])
+
+blk = head_check("chow", dg.chow)
+ent_of("chow", blk)
+xx = pd.DataFrame({"x": rng3.normal(size=T3)}, index=ts3.index)
+yy = 1 + 0.5 * xx["x"] + rng3.normal(size=T3)
+r_ = dg.chow(yy, xx, ts3.index[80], show=False)
+keys_check("chow", blk, r_)
+example_check("chow", blk, r_)
+check("chow: n1 + n2 is the sample and n1 the rows before point", r_["n1"] == 80 and r_["n1"] + r_["n2"] == T3)
+
+blk = head_check("diebold_mariano", dg.diebold_mariano)
+ent_of("diebold_mariano", blk)
+e1, e2 = rng3.normal(size=100), rng3.normal(size=100)
+r_ = dg.diebold_mariano(e1, e2, show=False)
+keys_check("diebold_mariano", blk, r_)
+example_check("diebold_mariano", blk, r_)
+r0 = dg.diebold_mariano(e1, e1, show=False)
+check("diebold_mariano: identical losses give p NaN with show=False, as the block says", np.isnan(r0["p"])
+      and "NaN when not computed" in ent_of("diebold_mariano", blk)["p"])
+
+# panel: Grunfeld-like with an effect correlated with x
+from linearmodels.panel import PanelOLS, RandomEffects  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+N3, Tp = 12, 10
+ids = np.repeat(np.arange(N3), Tp)
+tt = np.tile(np.arange(Tp), N3)
+a_i = rng3.normal(size=N3)[ids]
+xp = a_i + rng3.normal(size=N3 * Tp)
+pan = pd.DataFrame({"firm": ids, "year": tt, "x": xp, "z": rng3.normal(size=N3 * Tp)})
+pan["y"] = 1 + 0.5 * pan.x + 0.3 * pan.z + a_i + rng3.normal(size=N3 * Tp)
+pi = pan.set_index(["firm", "year"])
+fe = PanelOLS.from_formula("y ~ 1 + x + z + EntityEffects", pi).fit(cov_type="unadjusted")
+re_ = RandomEffects.from_formula("y ~ 1 + x + z", pi).fit(cov_type="unadjusted")
+fe_rob = PanelOLS.from_formula("y ~ 1 + x + z + EntityEffects", pi).fit(cov_type="robust")
+
+blk = head_check("hausman", dg.hausman)
+ent_of("hausman", blk)
+for case, a_, b_ in ((" (unadjusted)", fe, re_), (" (robust FE)", fe_rob, re_),
+                     (" (objects without _cov_type)", SimpleNamespace(params=fe.params, cov=fe.cov),
+                      SimpleNamespace(params=re_.params, cov=re_.cov)),
+                     (" (V_FE = V_RE)", SimpleNamespace(params=fe.params, cov=fe.cov),
+                      SimpleNamespace(params=re_.params, cov=fe.cov))):
+    r_ = dg.hausman(a_, b_, show=False)
+    keys_check("hausman", blk, r_, case)
+    example_check("hausman", blk, r_, case)
+    if case == " (V_FE = V_RE)":
+        check("hausman (V_FE = V_RE): df 0, statistic and p NaN, as the block says",
+              r_["df"] == 0 and np.isnan(r_["statistic"]) and np.isnan(r_["p"]), r_)
+check("hausman: classical_cov seen True, False and None",
+      {True, False, None} == {dg.hausman(fe, re_, show=False)["classical_cov"],
+                              dg.hausman(fe_rob, re_, show=False)["classical_cov"],
+                              dg.hausman(SimpleNamespace(params=fe.params, cov=fe.cov),
+                                         SimpleNamespace(params=re_.params, cov=re_.cov), show=False)["classical_cov"]})
+
+blk = head_check("panel_bp_lm", dg.panel_bp_lm)
+ent_of("panel_bp_lm", blk)
+pooled = sm.OLS(pan.y, sm.add_constant(pan[["x", "z"]])).fit()
+res_p = pd.Series(pooled.resid.to_numpy(), index=pi.index)
+r_ = dg.panel_bp_lm(res_p, show=False)
+keys_check("panel_bp_lm", blk, r_)
+example_check("panel_bp_lm", blk, r_)
+one = pd.Series(rng3.normal(size=N3), index=pd.MultiIndex.from_arrays([np.arange(N3), np.zeros(N3, int)]))
+r1_ = dg.panel_bp_lm(one, show=False)
+check("panel_bp_lm: LM and p finite with a panel, both NaN when every entity has one row, as the block says",
+      np.isfinite(r_["LM"]) and np.isfinite(r_["p"]) and np.isnan(r1_["LM"]) and np.isnan(r1_["p"]))
+
+blk = head_check("mundlak_test", dg.mundlak_test)
+ent_of("mundlak_test", blk)
+r_ = dg.mundlak_test(pan, "y", ["x", "z"], "firm", "year", show=False)
+keys_check("mundlak_test", blk, r_)
+example_check("mundlak_test", blk, r_)
+check("mundlak_test: df = len(x_vary), coefficients = results.params with '<x>_mean', results has .std_errors and no "
+      ".bse", r_["df"] == 2 and r_["coefficients"].equals(r_["results"].params)
+      and {"x_mean", "z_mean"} <= set(r_["coefficients"].index) and hasattr(r_["results"], "std_errors")
+      and not hasattr(r_["results"], "bse"))
+
+# ============================================================ 7. v2.7.3: estimation
+pan["g"] = pan.firm
+blk = head_check("wild_cluster_bootstrap", est.wild_cluster_bootstrap)
+ent_of("wild_cluster_bootstrap", blk)
+for case, kw in ((" (ci)", dict(ci=True, ci_points=11)), (" (ci=False)", dict(ci=False)),
+                 (" (Rademacher with G = 5)", dict(ci=False, weights="rademacher"))):
+    dat = pan[pan.g < 5] if "G = 5" in case else pan        # 2^5 = 32 distinct draws < 2B: the warning
+    r_ = est.wild_cluster_bootstrap(dat, "y ~ x + z", "x", "g", B=99, **kw)
+    keys_check("wild_cluster_bootstrap", blk, r_, case)
+    example_check("wild_cluster_bootstrap", blk, r_, case)
+    if case == " (ci=False)":
+        check("wild_cluster_bootstrap (ci=False): ci_low and ci_high NaN, as the block says",
+              np.isnan(r_["ci_low"]) and np.isnan(r_["ci_high"]))
+    if case == " (ci)":
+        check("wild_cluster_bootstrap (ci): a finite CI around the estimate, n_clusters 12, the key 'p_cr1_t_G-1'",
+              r_["ci_low"] < r_["estimate"] < r_["ci_high"] and r_["n_clusters"] == 12 and "p_cr1_t_G-1" in r_)
+    if "Rademacher" in case:
+        check("wild_cluster_bootstrap: warnings is a list of str, not empty with Rademacher and G = 5",
+              r_["warnings"] and all(isinstance(w_, str) for w_ in r_["warnings"]), r_["warnings"])
+
+blk = head_check("bootstrap", est.bootstrap)
+ent = ent_of("bootstrap", blk)
+import statsmodels.formula.api as smf  # noqa: E402
+for case, fn, kw in ((" (one number, rows)", lambda d_: smf.ols("y ~ x", d_).fit().params["x"], {}),
+                     (" (a Series, clusters)", lambda d_: smf.ols("y ~ x + z", d_).fit().params, {"cluster": "g"})):
+    r_ = est.bootstrap(fn, pan, B=49, **kw)
+    keys_check("bootstrap", blk, r_, case)
+    sub_check("bootstrap" + case, ent, "table", r_["table"].columns, "columns")
+    if case == " (one number, rows)":
+        example_check("bootstrap", blk, r_, case)
+        check("bootstrap: one number gives a row named 'stat0'; draws has B_effective rows; method 'pairs bootstrap'",
+              list(r_["table"].index) == ["stat0"] and r_["draws"].shape == (r_["B_effective"], 1)
+              and r_["method"] == "pairs bootstrap")
+    else:
+        check("bootstrap: a Series keeps its labels as rows; method 'cluster bootstrap'; a warning with 12 clusters",
+              list(r_["table"].index) == ["Intercept", "x", "z"] and r_["method"] == "cluster bootstrap"
+              and r_["warnings"] and all(isinstance(w_, str) for w_ in r_["warnings"]))
+
+# ============================================================ 8. v2.7.3: ts_univariate and multivariate
+blk = head_check("adf_bootstrap", tu.adf_bootstrap)
+ent = ent_of("adf_bootstrap", blk)
+for case, kw in ((" (lags by AIC)", {}), (" (lags given)", {"lags": 2})):
+    r_ = tu.adf_bootstrap(ts3["y1"], B=49, show=False, **kw)
+    keys_check("adf_bootstrap", blk, r_, case)
+    sub_check("adf_bootstrap" + case, ent, "bootstrap_critical_values", r_["bootstrap_critical_values"].keys())
+    sub_check("adf_bootstrap" + case, ent, "asymptotic_critical_values", r_["asymptotic_critical_values"].keys())
+    example_check("adf_bootstrap", blk, r_, case)
+    check(f"adf_bootstrap{case}: lag_rule is the rule or 'given'",
+          r_["lag_rule"] == ("given" if "lags" in kw else "aic") and r_["verdict"].endswith(" at 5%"), r_["lag_rule"])
+
+blk = head_check("sup_wald", tu.sup_wald)
+ent = ent_of("sup_wald", blk)
+yb = pd.Series(np.r_[rng3.normal(size=80), 2 + rng3.normal(size=80)], index=ts3.index)
+for case, kw in ((" (mean)", {}), (" (with X)", {"X": xx})):
+    r_ = tu.sup_wald(yb, B=49, show=False, **kw)
+    keys_check("sup_wald", blk, r_, case)
+    sub_check("sup_wald" + case, ent, "cusum", r_["cusum"].keys())
+    sub_check("sup_wald" + case, ent, "bootstrap_critical_values", r_["bootstrap_critical_values"].keys())
+    example_check("sup_wald", blk, r_, case)
+    check(f"sup_wald{case}: F_path indexed like y; recursive_coefficients columns 'const' then X's names; break_date "
+          "is a label of y", r_["F_path"].index.equals(yb.index) and list(r_["recursive_coefficients"].columns)
+          == ["const"] + (list(xx.columns) if "X" in kw else []) and r_["break_date"] in yb.index
+          and yb.index[r_["break_position"]] == r_["break_date"])
+
+blk = head_check("johansen_trace", mv.johansen_trace)
+ent = ent_of("johansen_trace", blk)
+for lev, col in ((0.05, "crit 95% (simulated)"), (0.10, "crit 90% (simulated)")):
+    r_ = mv.johansen_trace(ts3, level=lev, reps=49, show=False)
+    keys_check("johansen_trace", blk, r_, f" (level {lev})")
+    cols_doc = [c_.replace("<1-level>", f"{1 - lev:.0%}") for c_ in lists(ent["table"], "columns")[0]]
+    check(f"johansen_trace (level {lev}): the table's columns, the critical-value one named {col!r} as the block says",
+          list(r_["table"].columns) == cols_doc and col in r_["table"].columns and f'"{col}"' in ent["table"],
+          list(r_["table"].columns))
+    example_check("johansen_trace", blk, r_, f" (level {lev})")
+
+blk = head_check("vecm_fit", mv.vecm_fit)
+ent = ent_of("vecm_fit", blk)
+for rank in (0, 1, 2):
+    r_ = mv.vecm_fit(ts3, k_ar_diff=1, rank=rank, reps=49, show=False)
+    keys_check("vecm_fit", blk, r_, f" (rank {rank})")
+    check(f"vecm_fit (rank {rank}): {'five keys with message' if rank in (0, 2) else 'no message'}, as the block says",
+          (len(r_) == 5 and "message" in r_) if rank in (0, 2) else ("message" not in r_ and len(r_) == 17), list(r_))
+    if rank == 1:
+        b_ = r_["beta"]
+        check("vecm_fit (rank 1): beta indexed by df's names with columns ['ect1'], first entry 1; alpha, se_alpha, "
+              "p_alpha with the same index and columns",
+              list(b_.index) == ["y1", "y2"] and list(b_.columns) == ["ect1"] and abs(b_.iloc[0, 0] - 1) < 1e-12
+              and all(r_[k_].index.equals(b_.index) and r_[k_].columns.equals(b_.columns)
+                      for k_ in ("alpha", "se_alpha", "p_alpha")), b_)
+        sub_check("vecm_fit (rank 1)", ent, "adjustment", r_["adjustment"].columns, "columns")
+        sub_check("vecm_fit (rank 1)", ent, "weak_exogeneity", r_["weak_exogeneity"].columns, "columns")
+        check("vecm_fit (rank 1): trace_test is johansen_trace's table, the critical-value column as named",
+              "crit 95% (simulated)" in r_["trace_test"].columns)
+        example_check("vecm_fit", blk, r_, " (rank 1)")
+
+# ============================================================ 8b. v2.7.3 review r1-A: states and values of the blocks
+from scipy import stats as _st  # noqa: E402
+from statsmodels.tsa.stattools import adfuller  # noqa: E402
+
+# A1: y with a NaN at the start (y.diff()): F_path and break_position refer to y without its NaN ends
+yd = pd.Series(np.r_[rng3.normal(size=80), 2 + rng3.normal(size=80)], index=ts3.index).cumsum().diff()
+r_ = tu.sup_wald(yd, B=19, show=False)
+nn_ = len(yd.dropna())
+lo_, hi_ = int(np.floor(0.15 * nn_)), int(np.ceil(0.85 * nn_)) - 1
+inside = np.zeros(nn_, bool)
+inside[lo_:hi_ + 1] = True
+check("sup_wald (y.diff()): F_path indexed like y without its NaN start, break_position its position there, F_path NaN "
+      "exactly outside the trimmed window (review r1-A A1, M9)",
+      r_["F_path"].index.equals(yd.dropna().index) and r_["F_path"].index[r_["break_position"]] == r_["break_date"]
+      and r_["F_path"].isna().to_numpy().tolist() == (~inside).tolist(), (len(r_["F_path"]), r_["break_position"]))
+# A3: X that already has a constant (a full set of dummies): no "const" column, and the warning
+Xd_ = pd.get_dummies(pd.Series(np.arange(T3) % 4, index=ts3.index), prefix="q").astype(float)
+r_ = tu.sup_wald(yb, X=Xd_, B=19, show=False)
+check("sup_wald, X with a constant (dummies): recursive_coefficients has only X's names, and the warning says so",
+      list(r_["recursive_coefficients"].columns) == list(Xd_.columns)
+      and any("already contains a constant" in w_ for w_ in r_["warnings"])
+      and "only X's names when X already contains a constant" in ENTRIES["sup_wald"]["recursive_coefficients"])
+check("sup_wald: the block says break_position is a position in F_path's index (not in y)",
+      "its position in F_path's index" in ENTRIES["sup_wald"]["break_position"])
+r_ = est.bootstrap(lambda d_: d_["x"].mean(), pan.rename(columns={"g": 0}), B=19, cluster=0)
+check("bootstrap: a cluster column named 0 gives a cluster bootstrap (review r1-A A13)",
+      r_["method"] == "cluster bootstrap", r_["method"])
+
+# A2: a constant, non-zero loss difference: NaN, never "significant"
+r_, out_ = None, None
+buf = io.StringIO()
+with redirect_stdout(buf):
+    r_ = dg.diebold_mariano(np.full(50, 2.0), np.full(50, 1.0))
+check("diebold_mariano, constant non-zero loss difference: DM_HLN and p NaN, the text says constant, not significant "
+      "(review r1-A A2)", np.isnan(r_["p"]) and np.isnan(r_["DM_HLN"]) and "constant" in buf.getvalue()
+      and "significant" not in buf.getvalue(), (r_, buf.getvalue()))
+# the sign and mean_loss_diff from their definition (A7 M8, M21)
+e_bad, e_good = 3 * rng3.normal(size=200), rng3.normal(size=200)
+r_ = dg.diebold_mariano(e_bad, e_good, show=False)
+check("diebold_mariano: model 1 clearly worse gives a positive statistic (the block: negative = model 1 better), and "
+      "mean_loss_diff = mean(e1² − e2²)", r_["DM_HLN"] > 0 and abs(r_["mean_loss_diff"] - np.mean(e_bad ** 2 - e_good ** 2))
+      < 1e-10 * np.mean(e_bad ** 2), r_)
+
+# A4: vecm_fit refuses a rank outside 0..k; three series: rank 2 normalised on the first two
+try:
+    mv.vecm_fit(ts3, k_ar_diff=1, rank=3, reps=19, show=False)
+    raised = False
+except ValueError:
+    raised = True
+check("vecm_fit: rank 3 with 2 series is refused (review r1-A A4)", raised)
+ts3c = ts3.assign(y3=ts3.y1 + rng3.normal(scale=0.5, size=T3))
+r_ = mv.vecm_fit(ts3c, k_ar_diff=1, rank=2, reps=19, show=False)
+keys_check("vecm_fit", ENTRIES_BLK["vecm_fit"], r_, " (three series, rank 2)")
+check("vecm_fit (three series, rank 2): beta columns ['ect1', 'ect2'], its first 2 × 2 block the identity",
+      list(r_["beta"].columns) == ["ect1", "ect2"] and np.allclose(r_["beta"].iloc[:2, :2].to_numpy(), np.eye(2)), r_["beta"])
+
+# A5 and A6: hausman valid False (V_FE − V_RE negative definite) and df from the rank
+ns_ = lambda p_, c_: SimpleNamespace(params=p_, cov=c_)   # noqa: E731
+r_ = dg.hausman(ns_(fe.params, fe.cov), ns_(re_.params, re_.cov * 0 + fe.cov.to_numpy() * 2), show=False)
+check("hausman, V_FE − V_RE not positive semidefinite: valid False, a negative statistic, p 1.0, 'Not interpretable' "
+      "(review r1-A A5)", r_["valid"] is False and r_["statistic"] < 0 and r_["p"] == 1.0
+      and r_["conclusion"].startswith("Not interpretable") and "can be negative" in ENTRIES["hausman"]["statistic"], r_)
+cm_ = [c_ for c_ in fe.params.index if c_ in re_.params.index and c_.lower() not in ("const", "intercept")]
+v_ = 0.5 * np.sqrt(np.diag(fe.cov.loc[cm_, cm_]))
+cre = fe.cov.copy()
+cre.loc[cm_, cm_] = fe.cov.loc[cm_, cm_].to_numpy() - np.outer(v_, v_) * [[1, 0], [0, 0]]
+r_ = dg.hausman(ns_(fe.params, fe.cov), ns_(re_.params, cre), show=False)
+check("hausman: V_FE − V_RE of rank 1 gives df 1 (the rank, not the number of coefficients; A7 M22)", r_["df"] == 1, r_)
+
+# A6: cointegration lag_sensitive True (seed 8 from the search: AR(0.9) deviations, 120 periods)
+rs8 = np.random.default_rng(8)
+x8 = rs8.normal(size=120).cumsum()
+u8 = np.zeros(120)
+for t_ in range(1, 120):
+    u8[t_] = 0.9 * u8[t_ - 1] + rs8.normal()
+r_ = dg.cointegration(pd.DataFrame({"a": x8 + u8, "b": x8}), show=False)
+check("cointegration: lag_sensitive True when AIC and BIC disagree at 5%, and the conclusion says Inconclusive",
+      r_["engle_granger"]["lag_sensitive"] is True and r_["engle_granger"]["conclusion"].startswith("Inconclusive")
+      and (r_["engle_granger"]["p"] < 0.05) != (r_["engle_granger"]["p_bic"] < 0.05), r_["engle_granger"])
+
+# A6/A7: johansen_trace rank = first r0 not rejected; drift_used 0.0 unless "co"
+for det in ("ci", "co"):
+    r_ = mv.johansen_trace(ts3, deterministic=det, reps=19, show=False)
+    first = next((i_ for i_, rej in enumerate(r_["table"]["reject"]) if not rej), len(r_["table"]))
+    check(f"johansen_trace ({det}): rank is the first r0 not rejected; drift_used {'> 0' if det == 'co' else '0.0'}",
+          r_["rank"] == first and ((r_["drift_used"] > 0) if det == "co" else (r_["drift_used"] == 0.0)), r_["drift_used"])
+
+# A6: mundlak_test balanced False
+r_ = dg.mundlak_test(pan.drop(index=[0, 1, 2]), "y", ["x", "z"], "firm", "year", show=False)
+check("mundlak_test: balanced False with an unbalanced panel", r_["balanced"] is False)
+
+# A6/A7: bootstrap with failed replications; percentile limits from the draws
+calls = {"n": 0}
+
+
+def flaky(d_):
+    calls["n"] += 1
+    if calls["n"] > 1 and calls["n"] % 3 == 0:
+        raise RuntimeError("fails")
+    return d_["x"].mean()
+
+
+r_ = est.bootstrap(flaky, pan, B=60, alpha=0.1)
+check("bootstrap: failed replications dropped (B_effective < B, draws finite), a warning, ci_low/high the percentile "
+      "limits of the draws", r_["B_effective"] == 40 and np.isfinite(r_["draws"]).all() and r_["warnings"]
+      and abs(r_["table"]["ci_low"].iloc[0] - np.quantile(r_["draws"][:, 0], 0.05)) < 1e-12
+      and abs(r_["table"]["ci_high"].iloc[0] - np.quantile(r_["draws"][:, 0], 0.95)) < 1e-12, r_["B_effective"])
+
+# A7: wild_cluster_bootstrap's t uses null, and p_cr1_t_G-1 is the t(G − 1) p
+r_ = est.wild_cluster_bootstrap(pan, "y ~ x + z", "x", "g", null=0.1, B=99, ci=False)
+check("wild_cluster_bootstrap, null 0.1: t = (estimate − null)/se; p_cr1_t_G-1 = 2·t(G − 1).sf(|t|)",
+      abs(r_["t"] - (r_["estimate"] - 0.1) / r_["se"]) < 1e-12
+      and abs(r_["p_cr1_t_G-1"] - 2 * _st.t.sf(abs(r_["t"]), r_["n_clusters"] - 1)) < 1e-12, r_)
+
+# A7: panel_bp_lm p = chi2(1).sf(LM); stationarity's alpha attr and the 0.10 edge; adf p_asymptotic from adfuller
+r_ = dg.panel_bp_lm(res_p, show=False)
+check("panel_bp_lm: p is the chi²(1) tail of LM", abs(r_["p"] - _st.chi2.sf(r_["LM"], 1)) < 1e-12)
+check("stationarity: attrs['alpha'] is the level passed (0.2)", r_w.attrs["alpha"] == 0.2)
+check("stationarity: no warning at alpha 0.10 (inside [0.01, 0.10]), a warning just above",
+      dg.stationarity(ts3["y1"], show=False, alpha=0.10).attrs["warnings"] == []
+      and dg.stationarity(ts3["y1"], show=False, alpha=0.1001).attrs["warnings"] != [])
+r_ = tu.adf_bootstrap(ts3["y1"], lags=2, B=19, show=False)
+check("adf_bootstrap: p_asymptotic is adfuller's with the same lags and trend",
+      abs(r_["p_asymptotic"] - adfuller(ts3["y1"].to_numpy(), maxlag=2, regression="c", autolag=None)[1]) < 1e-12)
+y_i2 = pd.Series(np.random.default_rng(5).normal(size=100).cumsum().cumsum())   # seed 5 from the search: I(2)
+r_ = tu.adf_bootstrap(y_i2, B=19, show=False)
+check("adf_bootstrap: an I(2) series gives the warning about the AR on the differences (a non-empty list of str)",
+      r_["warnings"] and all(isinstance(w_, str) for w_ in r_["warnings"]), r_["warnings"])
+
+# A12: stationarity_many with no column keeps its columns
+check("stationarity_many: an empty frame gives the two columns and no row",
+      list(dg.stationarity_many(ts3.iloc[:, :0], show=False).columns) == ["Series", "Suggested order"])
+
+# ============================================================ 9. v2.7.3: survival
+n4 = 150
+sd = pd.DataFrame({"id": np.arange(n4), "x": rng3.normal(size=n4), "grp": rng3.integers(0, 2, n4),
+                   "reg": rng3.integers(0, 6, n4)})
+sd["t"] = np.ceil(rng3.exponential(np.exp(-0.5 * sd.x) * 8)).clip(1, 20)
+sd["e"] = (rng3.uniform(size=n4) < 0.7).astype(int)
+
+blk = head_check("cox", sv.cox)
+txt = " ".join(l_.strip() for l_ in blk)
+for case, kw in ((" (robust)", {}), (" (cluster)", {"cluster": "reg"}), (" (model-based)", {"robust": False})):
+    r_ = sv.cox(sd, "x + C(grp)", "t", "e", show=False, **kw)
+    check(f"cox{case}: a tuple (res, tab); tab's columns as documented; res.hr_table is tab; tab indexed by the "
+          "design's names", isinstance(r_, tuple) and len(r_) == 2 and list(r_[1].columns) == lists(txt, "columns")[0]
+          and r_[0].hr_table is r_[1] and list(r_[1].index) == ["C(grp)[T.1]", "x"]
+          and "res, tab = cox(" in txt, (type(r_), list(r_[1].index)))
+    example_check("cox", blk, r_, case)
+check("cox: HR = exp(coef), as the block says", np.allclose(r_[1]["HR"], np.exp(r_[1]["coef"])))
+
+blk = head_check("ph_test", sv.ph_test)
+res_c, tab_c = sv.cox(sd, "x + C(grp)", "t", "e", show=False)
+buf = io.StringIO()
+with redirect_stdout(buf):
+    r_ = sv.ph_test(res_c, sd, "t", "e", show=False)
+check("ph_test (D4): show=False prints nothing", buf.getvalue() == "", buf.getvalue()[:200])
+buf = io.StringIO()
+with redirect_stdout(buf):
+    r2_ = sv.ph_test(res_c, sd, "t", "e")
+check("ph_test: the default still prints the table, with the same numbers",
+      "Proportional-hazards check" in buf.getvalue() and r2_.equals(r_))
+df_check("ph_test", blk, r_)
+example_check("ph_test", blk, r_)
+check("ph_test: index named 'covariate' with cox's tab names", r_.index.name == "covariate"
+      and list(r_.index) == list(tab_c.index) and 'index named "covariate"' in " ".join(blk))
+
+blk = head_check("person_period", sv.person_period)
+r_ = sv.person_period(sd, "id", "t", "e")
+check("person_period: columns id, period, y, then df's other columns except duration and event, index 0..N-1",
+      list(r_.columns) == ["id", "period", "y", "x", "grp", "reg"] and r_.index.equals(pd.RangeIndex(len(r_)))
+      and re.findall(r'"([^"]+)"', " ".join(
+          l_ for i_, l_ in enumerate(blk) if l_.startswith("      columns:") or (l_.startswith(" " * 14) and any(
+              b_.startswith("      columns:") for b_ in blk[:i_])))) == ["period", "y"],
+      list(r_.columns))   # mutation r0: '"y"' anywhere in the block matched the Example line
+check("person_period: y is 1 only in the last period of an event spell; period runs 1..ceil(duration)",
+      r_["y"].sum() == sd["e"].sum() and r_.groupby("id")["period"].max().equals(sd.set_index("id")["t"].astype(int)))
+example_check("person_period", blk, r_)
+
+blk = head_check("kaplan_meier", sv.kaplan_meier)
+ent = ent_of("kaplan_meier", blk)
+for case, kw in ((" (overall)", {}), (" (by group, times)", {"group": "grp", "times": [3, 6]})):
+    r_ = sv.kaplan_meier(sd, "t", "e", show=False, **kw)
+    keys_check("kaplan_meier", blk, r_, case)
+    base_cols = lists(ent["summary"], "columns")[0]
+    extra = [f"S({t_})" for t_ in kw.get("times", [])]
+    check(f"kaplan_meier{case}: summary's columns as documented (+ S(<t>) per time), index named 'group', curves "
+          "keyed like it with the documented columns",
+          list(r_["summary"].columns) == base_cols + extra and r_["summary"].index.name == "group"
+          and list(r_["curves"]) == list(r_["summary"].index)
+          and all(list(c_.columns) == lists(ent["curves"], "columns")[0] and c_.index.name == "Time"
+                  for c_ in r_["curves"].values()), list(r_["summary"].columns))
+    example_check("kaplan_meier", blk, r_, case)
+check("kaplan_meier (overall): the index is 'all'", list(sv.kaplan_meier(sd, "t", "e", show=False)["summary"].index)
+      == ["all"])
+late = pd.DataFrame({"t": np.arange(1, 41, dtype=float), "e": [1] * 5 + [0] * 35})
+rk = sv.kaplan_meier(late, "t", "e", show=False)["summary"]
+check("kaplan_meier: median and its CI NaN when the curve does not reach 0.5, as the block says",
+      rk[["median_survival", "median_ci_low", "median_ci_high"]].isna().all(axis=None)
+      and "is NaN when the curve does not reach 0.5" in ent["summary"])   # mutation r1: "NaN" alone matched the CI
+
+blk = head_check("logrank", sv.logrank)
+ent_of("logrank", blk)
+r_ = sv.logrank(sd, "t", "e", "grp")
+keys_check("logrank", blk, r_)
+example_check("logrank", blk, r_)
+check("logrank: df = groups − 1", r_["df"] == 1)
+
+# ============================================================ 10. v2.7.3: forecasting (PT and forecast_metrics)
+blk = head_check("pesaran_timmermann", fc.pesaran_timmermann)
+ent_of("pesaran_timmermann", blk)
+a5, f5 = rng3.normal(size=120), rng3.normal(size=120)
+r_ = fc.pesaran_timmermann(a5, f5)
+keys_check("pesaran_timmermann", blk, r_)
+example_check("pesaran_timmermann", blk, r_)
+rs_ = fc.pesaran_timmermann(a5[:8], f5[:8])
+check("pesaran_timmermann: with n < 10 every value but n is NaN, as the block says",
+      rs_["n"] == 8 and all(np.isnan(v_) for k_, v_ in rs_.items() if k_ != "n")
+      and "With n < 10 every value but n is NaN" in " ".join(blk))
+
+blk = head_check("forecast_metrics", fc.forecast_metrics)
+ent_of("forecast_metrics", blk)
+lv = pd.Series(50 + rng3.normal(size=100).cumsum())
+for case, a_, f_, kw in ((" (level)", lv, lv.shift(1).bfill(), {}),
+                         (" (level, naive, MASE, last_actual)", lv, lv.shift(1).bfill() + 0.1,
+                          {"naive": lv.shift(1).bfill(), "insample_scale": 1.0, "last_actual": lv.shift(1).bfill()}),
+                         (" (return)", pd.Series(a5), pd.Series(f5), {"direction": "return"}),
+                         (" (level with a zero actual)", lv.where(lv.index != 5, 0.0), lv.shift(1).bfill(), {})):
+    r_ = fc.forecast_metrics(a_, f_, **kw)
+    keys_check("forecast_metrics", blk, r_, case)
+    example_check("forecast_metrics", blk, r_, case)
+
+# ============================================================ 11. v2.7.3: rule T (decision D2)
+def _public_functions(base=None):
+    """{"module.function" or "module.Class.method": offset of its block's Returns line from the def, or None}, from the
+    source (AST, no import). Review r1-B B8: methods of public classes, async defs, defs inside a module-level if/try,
+    and modules in subfolders count too; N3: the marker is "(v<major>.<minor>", any version."""
+    out = {}
+    base = base or ROOT / "econometrics" / "scripts"
+
+    def defs(body):
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                yield node
+            elif isinstance(node, (ast.If, ast.Try, ast.With)):
+                for part in ("body", "orelse", "finalbody", "handlers"):
+                    for sub in getattr(node, part, []) or []:
+                        yield from defs(sub.body if isinstance(sub, ast.ExceptHandler) else [sub])
+
+    def offset(node, lines_):
+        body = lines_[node.lineno - 1:node.end_lineno]
+        return next((i for i, l_ in enumerate(body)
+                     if l_.strip().startswith("Returns") and re.search(r"\(v\d+\.\d+", l_)), None)
+
+    for f_ in sorted(base.rglob("*.py")):
+        rel = f_.relative_to(base).with_suffix("")
+        if any(p_.startswith("_") for p_ in rel.parts):
+            continue
+        src = f_.read_text(encoding="utf-8")
+        lines_ = src.splitlines()
+        mod = ".".join(rel.parts)
+        def walk(body, prefix):   # review r2 R7: methods inside an if of the class body, nested classes
+            for node in defs(body):
+                if node.name.startswith("_"):
+                    continue
+                if isinstance(node, ast.ClassDef):
+                    walk(node.body, f"{prefix}.{node.name}")
+                else:
+                    out[f"{prefix}.{node.name}"] = offset(node, lines_)
+
+        walk(ast.parse(src).body, mod)
+    return out
+
+
+PENDING = ROOT / "tests" / "returns_block_pending.txt"
+pending = [l_.strip() for l_ in PENDING.read_text(encoding="utf-8").splitlines()
+           if l_.strip() and not l_.startswith("#")]
+pub = _public_functions()
+with_block = {k_ for k_, v_ in pub.items() if v_ is not None and v_ <= MAX_OFFSET}
+# review r3 Q6: the traversal itself, on a synthetic module (a method inside an if of a class body, a nested class,
+# an async def, a def inside a module-level if, a module in a subfolder; private names left out)
+_syn = Path(tempfile.mkdtemp())
+(_syn / "sub").mkdir()
+(_syn / "mod.py").write_text(
+    "import sys\nclass A:\n    if sys:\n        def in_if(self):\n            pass\n    class B:\n"
+    "        def nested(self):\n            pass\n    def _private(self):\n        pass\n"
+    "async def coro():\n    pass\nif sys:\n    def cond():\n        pass\n"
+    "def with_block():\n    \"\"\"x\n\n    Returns a dict (v3.0: keys exact):\n    \"\"\"\n", encoding="utf-8")
+(_syn / "sub" / "deep.py").write_text("def deep():\n    pass\n", encoding="utf-8")
+_got = _public_functions(_syn)
+check("rule T: the traversal finds methods inside an if of a class, nested classes, async defs, defs inside an if and "
+      "modules in subfolders, and reads any version in the marker (review r3 Q6)",
+      _got == {"mod.A.in_if": None, "mod.A.B.nested": None, "mod.coro": None, "mod.cond": None,
+               "mod.with_block": 3, "sub.deep.deep": None}, _got)
+check("rule T: the pending list has no repeated names and is sorted", pending == sorted(set(pending)), pending[:5])
+check("rule T: every public function without a Returns block within 12 lines of its def is in "
+      "tests/returns_block_pending.txt (a new public function needs a block)",
+      set(pub) - with_block <= set(pending), sorted(set(pub) - with_block - set(pending)))
+check("rule T: no function with a block is still in the pending list (the list only shrinks: remove it)",
+      not (with_block & set(pending)), sorted(with_block & set(pending)))
+check("rule T: every name in the pending list is a public function that exists",
+      set(pending) <= set(pub), sorted(set(pending) - set(pub)))
+check("rule T: a block marked '(v<version>' further than 12 lines from its def does not count",
+      all(v_ is None or v_ <= MAX_OFFSET for v_ in pub.values()),
+      {k_: v_ for k_, v_ in pub.items() if v_ is not None and v_ > MAX_OFFSET})
+check(f"rule T: the 21 functions of v2.7.3 and the 13 of v2.7.2 have a block ({len(with_block)} of {len(pub)} public "
+      "functions)", {"diagnostics.stationarity", "multivariate.vecm_fit",
+                     "survival.cox", "forecasting.forecast_metrics", "estimation.bootstrap",
+                     "diagnostics.iv_report"} <= with_block and len(with_block) >= 34, len(with_block))   # a count that grows: >=
 
 states_check()
 print(f"\n{sum(results)}/{len(results)} checks passed")

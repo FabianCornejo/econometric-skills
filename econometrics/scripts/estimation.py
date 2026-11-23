@@ -330,6 +330,17 @@ def bootstrap(stat_fn, df: pd.DataFrame, B: int = 999, cluster: str | None = Non
               alpha: float = ALPHA) -> dict:
     """Pairs bootstrap (resample rows) or cluster bootstrap (resample whole clusters).
 
+    Returns a dict (v2.7.3: keys exact):
+      "method"         str, "pairs bootstrap" or "cluster bootstrap"
+      "table"          DataFrame, one row per statistic (the Series' labels, else "stat0", "stat1", …), columns
+                       ["estimate", "se", "ci_low", "ci_high", "ci_low_normal", "ci_high_normal", "bias"]; ci_low/high
+                       are percentile limits
+      "draws"          array (B_effective × number of statistics), the replications that gave finite values
+      "B_effective"    int, replications kept (failed or non-finite ones are dropped)
+      "n"              int, rows of df
+      "warnings"       list of str (many failed replications; fewer than 30 clusters)
+    Example (r = the result): r["table"]["se"].iloc[0]; r["table"]["ci_low"]
+
     stat_fn(df) -> float, array or Series (e.g. lambda d: smf.ols(...).fit().params["x"]).
     Returns the estimate on the original data, the bootstrap SE, percentile and normal CIs.
     Resample at the level of independence: rows for i.i.d. data, clusters otherwise. Not valid
@@ -370,7 +381,8 @@ def bootstrap(stat_fn, df: pd.DataFrame, B: int = 999, cluster: str | None = Non
         warn.append(f"{failed} of {B} bootstrap replications failed: the statistic is unstable")
     if cluster is not None and len(keys) < 30:
         warn.append(f"only {len(keys)} clusters: the cluster bootstrap is unreliable, use wild_cluster_bootstrap")
-    return {"method": "cluster bootstrap" if cluster else "pairs bootstrap", "table": tab, "draws": D,
+    # v2.7.3 (review r1-A A13): "if cluster" called cluster=0 a pairs bootstrap
+    return {"method": "cluster bootstrap" if cluster is not None else "pairs bootstrap", "table": tab, "draws": D,
             "B_effective": len(draws), "n": len(df), "warnings": warn}
 
 
@@ -381,6 +393,22 @@ def wild_cluster_bootstrap(df: pd.DataFrame, formula: str, coef: str, cluster: s
                            B: int = 9999, weights: str = "auto", seed: int = 0, alpha: float = ALPHA,
                            ci: bool = True, ci_points: int = 81) -> dict:
     """Restricted wild cluster bootstrap-t (WCR) for one OLS coefficient.
+
+    Returns a dict (v2.7.3: keys exact):
+      "estimand"       str, the coefficient's name (coef)
+      "method"         str, "wild cluster bootstrap-t (restricted, <weights>)", the weights used ("rademacher" or
+                       "webb", never "auto")
+      "estimate", "se"  float, OLS coefficient and its CR1 standard error
+      "t"              float, (estimate − null) / se
+      "p"              float, WCR bootstrap p-value of H0: coefficient = null
+      "ci_low", "ci_high"  float, the CI by test inversion; NaN with ci=False (or when no point of the grid is
+                       accepted)
+      "p_cr1_t_G-1"    float, the analytic CR1 p with t(G − 1), for comparison (note the hyphen in the name)
+      "null"           float, as passed
+      "n", "n_clusters", "B"  int
+      "warnings"       list of str (Rademacher weights with few clusters); a CI at the grid edge is a Python
+                       warning instead
+    Example (r = the result): r["p"]; r["ci_low"], r["ci_high"]; r["p_cr1_t_G-1"]
 
     With few clusters (G below ~30-40, or very unequal cluster sizes) the usual clustered SEs
     over-reject; WCR keeps the test size close to nominal even with G ~ 6-10 (Cameron, Gelbach &

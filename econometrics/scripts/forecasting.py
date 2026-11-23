@@ -264,10 +264,22 @@ def benchmarks(y: pd.Series, start: int | float = 0.8, h: int = 1,
 
 
 def pesaran_timmermann(actual, forecast) -> dict:
-    """Pesaran-Timmermann (1992) test. H0: forecast signs are independent of actual signs."""
+    """Pesaran-Timmermann (1992) test. H0: forecast signs are independent of actual signs.
+
+    Returns a dict (v2.7.3: keys exact):
+      "hit_rate"       float, share of signs predicted right (rows where actual or forecast is 0 or NaN are left out)
+      "hit_rate_under_H0"  float, the share expected by chance
+      "PT"             float, the statistic
+      "p_one_sided"    float, H1: better than chance (it treats the rows as independent: anticonservative with
+                       overlapping horizons)
+      "n"              int, rows used
+    With n < 10 every value but n is NaN (e.g. a forecast that never predicts a change); PT and p_one_sided are
+    also NaN when the forecast (or actual) always has the same sign ("always up"): there is nothing to test.
+    Example (r = the result): r["p_one_sided"]; r["hit_rate"]
+    """
     a = np.sign(np.asarray(actual, float))
     f = np.sign(np.asarray(forecast, float))
-    m = (a != 0) & (f != 0)
+    m = np.isfinite(a) & np.isfinite(f) & (a != 0) & (f != 0)   # v2.7.3 (review r1-B B7): a NaN counted as a sign
     a, f = a[m] > 0, f[m] > 0
     n = len(a)
     if n < 10:                       # e.g. a naive forecast never predicts a change
@@ -287,6 +299,17 @@ def pesaran_timmermann(actual, forecast) -> dict:
 def forecast_metrics(actual, forecast, naive=None, insample_scale: float | None = None,
                      direction: str = "level", last_actual=None) -> dict:
     """Accuracy metrics.
+
+    Returns a dict (v2.7.3: keys exact):
+      "RMSE", "MAE", "bias(mean error)"  float (bias = mean of actual − forecast)
+      "MAPE_%"         float, only with direction="level" and no actual equal to 0
+      "Theil_U(RMSE/RMSE_naive)"  float, only with naive=
+      "MASE"           float, only with insample_scale= (non-zero)
+      "directional_accuracy", "PT_p_value"  float, only with direction="return" or last_actual=
+                       (pesaran_timmermann's hit_rate and p_one_sided)
+    An inf or NaN (an infinite input, a squared error that overflows) comes back without a word; evaluate() says
+    which (v2.7.3: in tab.attrs["warnings"]).
+    Example (r = the result): r["RMSE"]; r["MAE"]
 
     direction='level'  : directional accuracy of the predicted CHANGE vs the actual change;
                          needs last_actual (value at the origin) — e.g. naive forecast for h=1.
@@ -330,9 +353,17 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
     "DM_vs_<benchmark>", "DM_p"], in this order, "MAPE_%" only with direction="level" and no actual equal to 0;
     "directional_accuracy" and "PT_p_value" only with direction="return" or with last_actual=; the two DM columns
     only with two or more forecasts (NaN in the benchmark's row). Theil's U is relative to the benchmark whatever
-    its name. direction is "level" (default) or "return". Example: tab.loc["model", "DM_p"]."""
+    its name. direction is "level" (default) or "return". Example: tab.loc["model", "DM_p"].
+      attrs["warnings"]  list of str (v2.7.3), "<model>: <cause>" for each inf or NaN of a row and each DM test not
+                         computed (infinite input, squared errors that overflow, a constant loss difference, too few
+                         rows, a perfect benchmark for Theil's U, a direction test without enough signs); empty when
+                         there is none; filled with show=False and with one forecast too; show prints them
+    Example (r = the result): r.loc[r.index[0], "RMSE"]; r.attrs["warnings"]
+    """
     from diagnostics import diebold_mariano
     df = pd.concat({"actual": actual, **forecasts}, axis=1).dropna()
+    if df.empty:   # v2.7.3 (review r1-B B2): an "overflow" warning (one forecast) or ZeroDivisionError (two) before
+        raise ValueError("no row where actual and every forecast are all present: align their indexes (dates) first")
     if last_actual is not None:
         last_actual = last_actual.reindex(df.index)
     benchmark = benchmark or list(forecasts)[0]
@@ -346,32 +377,67 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
             m["DM_p"] = dm["p"]
         rows[k] = m
     tab = pd.DataFrame(rows).T
+    # v2.7.3 (review r2 N6 of v2.7.2): the cause of every inf or NaN in the table and of a DM test not computed, per
+    # model, also with show=False and with one forecast (before, it was printed only in the DM lines of show=True)
+    from diagnostics import _dm_why
+    inf_in = {c: bool(np.isinf(df[c].to_numpy(dtype=float)).any()) for c in df.columns}
+    a_ = df["actual"].to_numpy(dtype=float)
+    warns = []
+    for k in forecasts:
+        mine = []
+        if inf_in["actual"] or inf_in[k]:
+            src = "actual" if inf_in["actual"] else "the forecast"
+            mine.append(f"{k}: {src} has infinite values (e.g. a percentage change from zero), so its RMSE, MAE and "
+                        "bias are not usable; drop or fix those rows first")
+        elif not np.isfinite(float(tab.loc[k, "RMSE"])):
+            mine.append(f"{k}: the squared errors overflow (errors above ~1e154 in absolute value), so its RMSE is "
+                        "inf; rescale the series (e.g. to thousands) first")
+        elif k != benchmark and not np.isfinite(float(tab.loc[k, "DM_p"])):
+            if inf_in[benchmark] or not np.isfinite(float(tab.loc[benchmark, "RMSE"])):
+                mine.append(f"{k}: DM test against {benchmark} not computed: see the warning on {benchmark}"
+                            + (" (Theil's U, relative to it, is not usable either)"
+                               if "Theil_U(RMSE/RMSE_naive)" in tab.columns else ""))
+            else:
+                # review r1-B B1: the reason of diebold_mariano itself (constant difference, too few rows, h > 1)
+                why = _dm_why((a_ - df[k].to_numpy(dtype=float)) ** 2,
+                              (a_ - df[benchmark].to_numpy(dtype=float)) ** 2, h)
+                mine.append(f"{k}: DM test not computed (no positive variance of the loss difference with "
+                            f"{benchmark}): {why}; compare the RMSE column")
+        if not mine or mine[0].startswith(f"{k}: DM test"):
+            # review r1-B B3: every other inf or NaN of the row is named too
+            other = [c for c in tab.columns if c not in ("DM_vs_" + benchmark, "DM_p")
+                     and not np.isfinite(float(tab.loc[k, c]))]
+            if "Theil_U(RMSE/RMSE_naive)" in other and float(tab.loc[benchmark, "RMSE"]) == 0:
+                mine.append(f"{k}: Theil's U is inf (NaN for a model that is also perfect) because the benchmark "
+                            f"{benchmark} has no error in any row (its RMSE is 0)")
+                other.remove("Theil_U(RMSE/RMSE_naive)")
+            pt = [c for c in other if c in ("directional_accuracy", "PT_p_value")]
+            if pt:
+                # r2 R9b; r3 Q2: last_actual is used (and can be missing) only with direction="level"
+                miss = int(last_actual.isna().sum()) if last_actual is not None and direction == "level" else 0
+                mine.append(f"{k}: {' and '.join(pt)} NaN: the direction test needs at least 10 rows where actual and "
+                            "the forecast are not zero, and some variation in the forecast's sign"
+                            + (f"; last_actual is missing on {miss} of the {len(df)} rows" if miss else ""))
+            rest = [c for c in other if c not in pt]
+            if rest:
+                mine.append(f"{k}: {', '.join(rest)} not finite"
+                            + (" (MAPE divides by actual: an actual value very close to 0)" if "MAPE_%" in rest else ""))
+        warns += mine
+    tab.attrs["warnings"] = warns
     if show:
-        has_inf = bool(np.isinf(df.to_numpy(dtype=float)).any())
         print(f"\nOut-of-sample evaluation ({len(df)} forecasts, benchmark = {benchmark})")
         print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
         for k in forecasts:
             if k == benchmark:
                 continue
             p = tab.loc[k, "DM_p"]
-            if not np.isfinite(p) and has_inf:
-                # v2.7.2 (review r2 S2): dropna() keeps ±inf (pct_change of a zero); rescaling does not fix those
-                print(f"  {k}: DM test not computed: actual or a forecast has infinite values (e.g. a percentage "
-                      "change from zero); drop or fix those rows first")
-                continue
-            if not np.isfinite(p) and not np.isfinite(tab.loc[[k, benchmark], "RMSE"].astype(float)).all():
-                # v2.7.2 (review r1-B B3): with |error| above ~1.3e154 the squared loss overflows, and the reason below
-                # ("identical forecasts") was false
-                print(f"  {k}: DM test not computed: the squared errors overflow (errors above ~1e154 in absolute "
-                      "value); rescale the series (e.g. to thousands) first")
-                continue
-            if not np.isfinite(p):
-                print(f"  {k}: DM test not computed (the loss difference with {benchmark} has no positive "
-                      "variance, e.g. identical forecasts); compare the RMSE column")
-                continue
-            better = tab.loc[k, "RMSE"] < tab.loc[benchmark, "RMSE"]
-            print(f"  {k}: " + ("significantly " if p < ALPHA else "not significantly ")
-                  + ("more" if better else "less") + f" accurate than {benchmark} (DM p = {p:.3f})")
+            if np.isfinite(p):
+                better = tab.loc[k, "RMSE"] < tab.loc[benchmark, "RMSE"]
+                print(f"  {k}: " + ("significantly " if p < ALPHA else "not significantly ")
+                      + ("more" if better else "less") + f" accurate than {benchmark} (DM p = {p:.3f})")
+        # v2.7.3: every warning, the DM ones included (one text for the table and the printout)
+        for w in warns:
+            print("  Warning: " + w)
     return tab
 
 
@@ -671,8 +737,10 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
                     f"{n_empty} empty" if n_inf else
                     f"{n_empty} of the {int(evaluated.sum())} interval(s) computed ({T} with an actual) are empty")
         # review r2 R7: with empty intervals only, the advice is about gamma (they need a level pushed past 0)
+        # v2.7.3 (v2.7.2 validation): the action was applied to one model only; it now says it is per model
         act_txt = ("report those rows as 'no informative interval', not as an interval, and give the coverage of the "
-                   "finite intervals next to the total" if n_inf else
+                   "finite intervals next to the total for these intervals, and do the same for every other model whose "
+                   "intervals you report" if n_inf else
                    "report those rows as sure misses, not as intervals; they appear only when gamma is large enough to "
                    "push the level past 0 after a run of covered targets: a smaller gamma makes them rarer")
         warns.append(_finding("notice", head_txt

@@ -30,7 +30,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 
 ## Summary
 
-293 public functions: level A 98, level B 143, level C 20, level D 32.
+293 public functions: level A 98, level B 143, level C 22, level D 30.
 
 | module | A | B | C | D |
 |---|---|---|---|---|
@@ -39,11 +39,11 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `dag` | 1 | 7 | 0 | 0 |
 | `data_prep` | 0 | 7 | 1 | 3 |
 | `dependence` | 0 | 5 | 1 | 5 |
-| `diagnostics` | 15 | 1 | 0 | 5 |
+| `diagnostics` | 15 | 1 | 1 | 4 |
 | `discrete_choice` | 2 | 0 | 0 | 0 |
 | `estimation` | 4 | 2 | 0 | 0 |
 | `finance_empirics` | 9 | 4 | 1 | 0 |
-| `forecasting` | 1 | 7 | 1 | 1 |
+| `forecasting` | 1 | 7 | 2 | 0 |
 | `hte` | 0 | 10 | 0 | 1 |
 | `inference` | 15 | 0 | 0 | 0 |
 | `linear_models` | 1 | 11 | 0 | 0 |
@@ -180,7 +180,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `diagnostics.compare_standard_errors` | D | — | — | — | — |  |
 | `diagnostics.comparison_table` | D | — | — | — | — |  |
 | `diagnostics.stationarity` | B | simulated AR(0.9), random walk and white noise; Selic series | verdict at each alpha (exact) | — | test_v2472.py: stationarity |  |
-| `diagnostics.stationarity_many` | D | — | — | — | — |  |
+| `diagnostics.stationarity_many` | C | — | — | — | test_api_docs.py: stationarity_many | v2.7.3: the columns, one row per series in order, and "Suggested order" equal to stationarity's attrs; no value of its own |
 | `diagnostics.cointegration` | A | the basic Engle-Granger test (Δû on û₋₁) and Johansen's reduced-rank regression, written in the test, on the data of Wooldridge (2000, 1st ed., §18.4 and Table 18.4, p. 587-588, INTQRT); statsmodels coint with autolag aic and bic | 1e-10 relative (hand computations); 1e-12 against coint | not measured (closed form in the test) | test_diagnostics.py: W18.4 cointegration: BIC picks no lags; test_diagnostics.py: cointegration known truth | known truth (bands fixed before running): 'Cointegrated' in 92.5% of 200 cointegrated samples (≥ 80%) and 5.5% of 200 independent walks (≤ 10%). v2.6.11: AIC and BIC lags, 'Inconclusive' when they disagree; full rank with det_order=0 not read as I(0) (the 'ci' case is v2.6.12) |
 | `diagnostics.endogeneity_test` | A | Wooldridge, Introductory Econometrics, 1st ed. (2000), Example 15.7, p. 483 (Durbin-Wu-Hausman t = 1.67); F from two sums of squared residuals and statsmodels' f_test, computed in the tests | 0.005 on t = 1.67 (half the last printed digit); 1e-6 to 1e-8 relative against the SSR F (1e-3 where the data carry 1e-11 of signal) | 0.0011 of 0.005 | test_textbook_replication.py: W15.7 Durbin-Wu-Hausman; test_v268.py: endogeneity_test, exactly identified; test_v269.py: HC3: first-stage F = statsmodels F test on the original columns; test_v269.py: HC0: the Durbin-Wu-Hausman F = linearmodels' robust Wooldridge regression test; test_v2612.py: leverage 1, nonrobust; test_v2613.py: offset 0: F of three instruments | v2.6.12: perfect first stage (F = inf, test NaN) and jointly degenerate endogenous regressors (test NaN); leverage 1 from the instruments with HC0-HC3 (NaN and the rows named), rows fitted exactly by W left out; HC0-HC2 warned with leverage ≥ 0.5 or fewer than 30 residual df (thresholds from simulations in the development repository); rank tolerance eps·s_max·max(100, √n) with the offset floor in W, Z and x; repeated names raise ValueError. v2.6.13: the offset floor is per column among the instruments (z3 = 1e12 + z no longer merges two other instruments; an offset in an exogenous regressor still applies to every instrument, a known limit); HC0 warned with an average leverage k/n ≥ 0.19 |
 | `diagnostics.overid_test` | A | Wooldridge, Introductory Econometrics, Example 15.8 (nR² = .378, p = .539) | 0.0006 (looser than half the last printed digit, 0.0005) | 0.00036 of 0.0006 | test_textbook_replication.py: W15.8 overidentification | edition not stated in the test; nR² also equal to n·R² of the auxiliary regression (1e-9, test_show_text.py); tolerance looser than the v2.6.7 rule |
@@ -241,7 +241,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `forecasting.rolling_var` | B | simulated VAR(1) | lag 1 chosen most often; target dates exact | — | test_financial_modules.py: rolling_var picks lag 1 mostly |  |
 | `forecasting.benchmarks` | B | simulated ARMA data | ARMA RMSE below the naive one | — | test_financial_modules.py: ARMA beats naive on ARMA data |  |
 | `forecasting.pesaran_timmermann` | B | simulated forecasts with direction skill | one-sided p < 0.01 | — | test_financial_modules.py: Pesaran-Timmermann detects direction skill |  |
-| `forecasting.forecast_metrics` | D | — | — | — | — | exercised through evaluate |
+| `forecasting.forecast_metrics` | C | — | — | — | test_api_docs.py: <name><case>: the documented keys are the result's keys, all and only; test_v273.py: evaluate | v2.7.3: the keys with each option; evaluate's rows equal its values (the same code, not a reference) |
 | `forecasting.evaluate` | B | simulated forecasts with known accuracy ranking | DM p < 0.01 for the better model | — | test_financial_modules.py: ARIMAX with lagged x wins and DM significant; test_show_text.py: evaluate |  |
 | `forecasting.conformal_intervals` | A | MAPIE 1.6.0 SplitConformalRegressor (half-widths fixed in the test); the conformal quantile by counting; ACI by an explicit loop; exact coverage ceil((m+1)(1−α))/(m+1) under i.i.d. errors; the Gibbs-Candès long-run bound | relative 1e-12 (1e-11 with scipy 1.14) | 2.2e-16 (relative) of 1e-12 | test_forecasting.py: split, alpha <alpha>: half-width equal to MAPIE SplitConformalRegressor; test_forecasting.py: aci: intervals equal to an explicit loop over time; test_forecasting.py: split, m = <m>: coverage | v2.7.0; coverage under dependence measured, not guaranteed (docstring) |
 

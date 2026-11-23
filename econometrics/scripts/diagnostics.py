@@ -312,6 +312,15 @@ def influence(res, top: int = 10, show: bool = True) -> pd.DataFrame:
 def chow(y, X, point, show: bool = True) -> dict:
     """Chow test for a break at a known point.
 
+    Returns a dict (v2.7.3: keys exact):
+      "F"              float, classical F with (k, n1 + n2 - 2k) df, k = columns of X plus a constant (X's columns
+                       alone when X already has one)
+      "p"              float, its p-value
+      "robust_wald"    float, HC3 Wald test that the regime interactions are zero (heteroskedasticity-robust)
+      "robust_p"       float, its p-value (the one the printed verdict uses)
+      "n1", "n2"       int, rows before `point` and from `point` on, after dropping rows with missing values
+    Example (r = the result): r["robust_p"]; r["F"]
+
     y: Series; X: DataFrame (no constant; it is added). point: index label where the
     second regime starts. The classical F is sensitive to heteroskedasticity, so a robust
     version (interactions with a regime dummy + HC3 Wald) is also reported.
@@ -407,6 +416,17 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
                  alpha: float = ALPHA) -> pd.DataFrame:
     """ADF, KPSS and DF-GLS with constant and with trend, in levels and first difference.
 
+    Returns a DataFrame (v2.7.3: columns exact), 4 rows with index 0-3 in this order: level/constant,
+    level/constant+trend, 1st difference/constant, 1st difference/constant+trend.
+      columns ["Series", "Transform", "Deterministics", "ADF", "p ADF", "lags", "DF-GLS", "p DF-GLS", "KPSS",
+               "p KPSS", "Verdict"]; "Transform" is "level" or "1st difference", "Deterministics" "constant" or
+               "constant+trend"; "lags" are the ADF lags
+      attrs["suggested_order"]  str, the summary ("I(0)", "I(1)", or a sentence starting with one of them,
+                                or "undetermined — …")
+      attrs["alpha"]            float, the level used
+      attrs["warnings"]         list of str, empty unless alpha is outside [0.01, 0.10]
+    Example (r = the result): r.attrs["suggested_order"]; r.loc[0, "p ADF"]; r["Verdict"].iloc[2]
+
     The verdict uses DF-GLS (more power) + KPSS (opposite null), both at level alpha (v2.4.7.2; default 0.05).
     The KPSS p-value is interpolated from a table bounded at [0.01, 0.10]: values at the bounds mean '≤0.01' or
     '≥0.10', so the KPSS decision is only exact for alpha in [0.01, 0.10]; outside that range a warning is
@@ -457,11 +477,18 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
 
 
 def stationarity_many(df: pd.DataFrame, show: bool = True, alpha: float = ALPHA) -> pd.DataFrame:
+    """stationarity() on each column of df; with show=True it prints each table and then the summary.
+
+    Returns a DataFrame (v2.7.3: columns exact), one row per column of df in its order, index 0..k-1 (not the names):
+      columns ["Series", "Suggested order"]; "Suggested order" is stationarity()'s attrs["suggested_order"]
+    The full table and the warnings of each series are not kept: call stationarity(df[c]) for one series' p-values.
+    Example (r = the result): r.set_index("Series")["Suggested order"]
+    """
     summary = []
     for c in df.columns:
         t = stationarity(df[c], c, show=show, alpha=alpha)
         summary.append({"Series": c, "Suggested order": t.attrs["suggested_order"]})
-    out = pd.DataFrame(summary)
+    out = pd.DataFrame(summary, columns=["Series", "Suggested order"])   # v2.7.3: the columns also with no column
     if show:
         print("\nSummary:\n" + out.to_string(index=False))
     return out
@@ -494,6 +521,16 @@ def _engle_granger(y, xs, trend: str, autolag: str) -> dict:
 
 def cointegration(df: pd.DataFrame, k_ar_diff: int = 1, det_order: int = 0, show: bool = True) -> dict:
     """Engle-Granger (1st column as dependent) and Johansen (trace and max-eigenvalue, 5%).
+
+    Returns a dict (v2.7.3: keys exact):
+      "engle_granger"  dict, keys ["statistic", "p", "conclusion", "lags_aic", "statistic_bic", "p_bic", "lags_bic",
+                       "lag_sensitive"]; statistic/p are the run with residual-ADF lags by AIC; lags_* None
+                       when the lag cannot be read back; lag_sensitive True when AIC and BIC disagree at 5%
+      "johansen"       DataFrame, one row per rank, columns ["H0: rank ≤", "Trace", "5% CV trace", "Reject (trace)",
+                       "Max eigen", "5% CV max", "Reject (max)"]
+      "rank_trace", "rank_max_eigen"  int, the rank each Johansen test selects (k = number of columns: full rank)
+      "johansen_note"  str when the rank is full (do not read it as I(0) with det_order=0), else None
+    Example (r = the result): r["engle_granger"]["p"]; r["rank_trace"]
 
     det_order: -1 no deterministics, 0 constant, 1 linear trend.
     k_ar_diff: lags in differences (choose with vecm.select_order).
@@ -1635,6 +1672,17 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
 def hausman(fe_res, re_res, show: bool = True) -> dict:
     """Classical Hausman test FE vs RE (linearmodels). Fit both with cov_type="unadjusted".
 
+    Returns a dict (v2.7.3: keys exact):
+      "statistic"      float, NaN when V_FE − V_RE is zero; it can be negative when V_FE − V_RE is not positive
+                       semidefinite, and then "p" is 1.0, not a p-value (read "conclusion")
+      "df"             int, rank of V_FE − V_RE (0: not computed)
+      "p"              float, NaN when df is 0
+      "valid"          bool, False when V_FE − V_RE is not positive semidefinite
+      "classical_cov"  True when both fits used the unadjusted covariance, False when not (the result is then
+                       not interpretable), None when linearmodels does not say which covariance was used
+      "conclusion"     str
+    Example (r = the result): r["p"]; r["conclusion"]
+
     df = rank of V_FE − V_RE (v2.6.12): eigenvalues λ of D⁻¹(V_FE − V_RE)D⁻¹, D = √diag(V_FE), with |λ| ≤ 1e-8 times
     the largest eigenvalue of D⁻¹V_FE D⁻¹ count as zero, so the cut does not depend on units; the statistic uses the
     generalized inverse over the others. When V_FE − V_RE is zero the result is "Not computed"."""
@@ -1689,6 +1737,11 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
 def panel_bp_lm(resid_pooled: pd.Series, show: bool = True) -> dict:
     """Breusch-Pagan LM (Stata's xttest0): H0 = variance of the individual effect is zero (pooled OK).
 
+    Returns a dict (v2.7.3: keys exact):
+      "LM"             float, NaN when not defined (no entity with two or more rows, or all residuals zero)
+      "p"              float, chi²(1) p-value; NaN with LM
+    Example (r = the result): r["p"]
+
     resid_pooled: pooled OLS residuals with a (entity, time) MultiIndex. Balanced or unbalanced: the statistic
     is Baltagi and Li's (1990) n²/(2(ΣT_i² − n))·[e'De/e'e − 1]², D block-diagonal with T_i×T_i blocks of ones,
     n = ΣT_i, which is NT/(2(T−1))·[…]² when every T_i = T (v2.6.11: the mean T was used before, which over-rejects
@@ -1722,6 +1775,15 @@ def mundlak_test(df: pd.DataFrame, y: str, x_vary: list[str], entity: str, time:
                  x_const: list[str] | None = None, time_effects: bool = True, show: bool = True) -> dict:
     """Mundlak / correlated random effects (CRE) test: FE vs RE robust to heteroskedasticity and
     within-unit correlation (clustered by entity) — preferable to the classical Hausman test.
+
+    Returns a dict (v2.7.3: keys exact):
+      "statistic"      float, clustered Wald χ² that the unit means are jointly zero
+      "p"              float
+      "df"             int, number of unit means (len(x_vary))
+      "results"        linearmodels RandomEffects result: .params, .std_errors, .pvalues (no .bse)
+      "coefficients"   Series, the CRE coefficients (= results.params); the means are named "<x>_mean"
+      "balanced"       bool
+    Example (r = the result): r["p"]; r["coefficients"].filter(like="_mean")
 
     Estimates RE of y on x_vary, x_const, unit means of x_vary (and time dummies), then a clustered
     Wald test that the means are jointly zero. Rejection ⇒ the unit effect is correlated with x
@@ -1914,15 +1976,66 @@ def tobit(y, X, lower_limit: float | None = 0.0, upper_limit: float | None = Non
 # =============================================================================
 # Forecasting
 # =============================================================================
+def _dm_reference(l1: np.ndarray, l2: np.ndarray) -> float:
+    """The loss difference in the row with the smallest losses: the most precise value of a constant difference
+    (review r3 Q1: _dm_why printed the mean, 0.15 for a difference of 0.3 with losses up to 1e20)."""
+    return float((l1 - l2)[np.argmin(np.maximum(np.abs(l1), np.abs(l2)))])
+
+
+def _dm_constant(l1: np.ndarray, l2: np.ndarray) -> bool:
+    """v2.7.3 (review r1-B B10, r2 R1): the loss difference is constant up to rounding: every d_i within 64·eps of its
+    own row's scale, max(l1_i, l2_i, |c|), of c, the difference in the row with the smallest losses. Exactly constant differences (identical losses, or
+    one always the other plus c) and those that differ only by rounding (5.5e16 and p = 0 before) have no variance
+    to test. The scale is per row (r2 R1: the largest loss of the sample let one huge loss common to both models
+    call a varying difference constant)."""
+    d = l1 - l2
+    if len(d) == 0 or not np.isfinite(d).all():
+        return False
+    row = np.maximum(np.abs(l1), np.abs(l2))
+    c = _dm_reference(l1, l2)
+    scale = np.maximum(row, abs(c))
+    return bool(np.all(np.abs(d - c) <= 64 * np.finfo(float).eps * scale))
+
+
+def _dm_why(l1: np.ndarray, l2: np.ndarray, h: int) -> str:
+    """Why the Diebold-Mariano test of losses l1, l2 is not computed (v2.7.3: one text for diebold_mariano and
+    evaluate, review r1-B B1)."""
+    d = l1 - l2
+    T = len(d)
+    if not np.isfinite(d).all():
+        # v2.7.2 (review r1-B B3): the loss can overflow with a finite error (squared loss above ~1.3e154)
+        return (f"{int((~np.isfinite(d)).sum())} missing or infinite loss value(s): a missing or infinite forecast "
+                "error (align and drop them first), or a loss that overflows (errors above ~1e154 with the squared "
+                "loss: rescale the series)")
+    if T < 2:
+        return f"only {T} period(s) in common: the test needs at least two"
+    if _dm_constant(l1, l2):
+        c = _dm_reference(l1, l2)
+        return ("the loss difference is constant (identical losses): there is nothing to test" if np.all(d == 0)
+                else "the loss difference is constant (one model's loss is always the other's plus "
+                     f"{c:.4g}, up to rounding): it has no variance, so there is no test; compare the losses directly")
+    return (f"the long-run variance of the loss difference is not positive (h = {h}, {T} periods); use a longer "
+            "sample" + (" or h = 1" if h > 1 else ""))
+
+
 def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> dict:
     """Diebold-Mariano test with the Harvey-Leybourne-Newbold small-sample correction.
+
+    Returns a dict (v2.7.3: keys exact):
+      "DM_HLN"         float, the HLN-corrected statistic (negative: model 1 more accurate); NaN when p is NaN
+      "p"              float, two-sided, t(T − 1); NaN when not computed (a missing or infinite loss, a loss
+                       difference that is constant up to rounding, fewer than 2 periods, or a long-run variance that is
+                       not positive): the reason is printed when show=True
+      "mean_loss_diff" float, mean of |e1|^power − |e2|^power (inf or NaN when a loss is)
+    Example (r = the result): r["p"]; r["DM_HLN"]
 
     e1, e2: forecast errors (actual − forecast) of models 1 and 2 over the same period;
     h: horizon; power 2 = squared loss, 1 = absolute loss.
     Negative statistic ⇒ model 1 more accurate.
     """
     e1, e2 = np.asarray(e1, float), np.asarray(e2, float)
-    d = np.abs(e1) ** power - np.abs(e2) ** power
+    l1, l2 = np.abs(e1) ** power, np.abs(e2) ** power
+    d = l1 - l2
     T = len(d)
     # v2.7.2 (review r2 S1): the statistic does not depend on the scale of d, but its variance is a sum of d², which
     # overflowed from errors of ~1e77 (squared loss) and gave DM = 0, p = 1 with no word; d is divided by its largest
@@ -1933,24 +2046,16 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
     dbar_s = ds.mean()
     gamma = [np.sum((ds[k:] - dbar_s) * (ds[:T - k] - dbar_s)) / T for k in range(h)]
     var_d = (gamma[0] + 2 * sum(gamma[1:])) / T
-    dm = dbar_s / np.sqrt(var_d)
+    # v2.7.3 (review r1-A A2): a constant, non-zero loss difference has variance 0 and gave DM = inf, p = 0 and
+    # "significant difference"; the test is not defined there (NaN), as with identical losses
+    dm = dbar_s / np.sqrt(var_d) if var_d > 0 and not _dm_constant(l1, l2) else np.nan
     dbar = dbar_s * sc
     hln = dm * np.sqrt((T + 1 - 2 * h + h * (h - 1) / T) / T)
     p = 2 * (1 - stats.t.cdf(abs(hln), T - 1))
     if show:
         better = "model 1" if dbar < 0 else "model 2"
         if not np.isfinite(p):
-            if not np.isfinite(d).all():
-                # v2.7.2 (review r1-B B3): the loss can overflow with a finite error (squared loss above ~1.3e154)
-                why = (f"{int((~np.isfinite(d)).sum())} missing or infinite loss value(s): a missing or infinite "
-                       "forecast error (align and drop them first), or a loss that overflows (errors above ~1e154 with "
-                       "the squared loss: rescale the series)")
-            elif np.ptp(d) == 0:
-                why = "the loss difference is constant (identical losses): there is nothing to test"
-            else:
-                why = (f"the long-run variance of the loss difference is not positive (h = {h}, {T} periods); "
-                       "use a longer sample" + (" or h = 1" if h > 1 else ""))
-            print(f"\nDiebold-Mariano (HLN): not computed: {why}.")
+            print(f"\nDiebold-Mariano (HLN): not computed: {_dm_why(l1, l2, h)}.")
         else:
             print(f"\nDiebold-Mariano (HLN): {hln:.3f}, p = {p:.4f} → "
                   + (f"significant difference, {better} more accurate" if p < ALPHA else "no significant difference"))

@@ -314,6 +314,21 @@ def adf_bootstrap(y, trend: str = "c", lags: int | None = None, lag_rule: str = 
                   alpha: float = ALPHA, show: bool = True) -> dict:
     """Augmented Dickey-Fuller test of H0: unit root, with a sieve-bootstrap p-value.
 
+    Returns a dict (v2.7.3: keys exact):
+      "estimand"       str, "ADF τ (H0: unit root)"
+      "statistic"      float, the ADF τ
+      "p_bootstrap"    float, the p-value to report
+      "p_asymptotic"   float, MacKinnon's, for comparison
+      "lags"           int, lags of the ADF regression
+      "lag_rule"       str, the rule that chose them, or "given" when lags= was passed
+      "trend"          str, "n", "c" or "ct"
+      "n", "B"         int
+      "bootstrap_critical_values", "asymptotic_critical_values"  dict, keys ["1%", "5%", "10%"]
+      "verdict"        str, ends with " at <alpha as a whole percent>" (" at 5%")
+      "warnings"       list of str (an AR on the differences that is not stationary)
+      "method"         str
+    Example (r = the result): r["p_bootstrap"]; r["bootstrap_critical_values"]["5%"]
+
     The statistic is the usual t of γ in Δy_t = [c (+ δt)] + γ y_{t−1} + Σ φ_i Δy_{t−i} + e_t (lags by the
     AIC over a common sample unless given; lag_rule 't16', 'maic' or 'bic' as in adf_lags). Bootstrap under H0 (Park 2003; Chang-Park 2003): fit an AR(p) to Δy, resample
     its centred residuals, rebuild Δy* and y* = cumulated, recompute the statistic B times; p = share of
@@ -535,6 +550,28 @@ def _break_verdict(p_sup: float, p_cusum: float, alpha: float, date) -> str:
 def sup_wald(y, X=None, trim: float = 0.15, B: int = 499, ar_max: int = 4, seed: int = 0, alpha: float = ALPHA,
              show: bool = True) -> dict:
     """Test for one break at an unknown date in y = Xβ + u (X = constant only: a break in the mean).
+
+    Returns a dict (v2.7.3: keys exact):
+      "estimand"       str, "sup-F (H0: no break)"
+      "statistic"      float, the sup-F
+      "p_bootstrap"    float, its p-value
+      "break_date"     the index label of the maximum (meaningless without evidence of a break)
+      "break_position" int, its position in F_path's index, which is y's without leading and trailing NaN (y.diff()
+                       starts with one: there it is one less than the position in y)
+      "F_path"         Series, the Chow F at each date, indexed like y without its leading and trailing NaN (NaN
+                       outside the trimmed window)
+      "cusum"          dict, keys ["statistic", "p", "scale", "statistic_iid", "p_iid"] (OLS-CUSUM with the long-run
+                       SD; the _iid pair is the classical one)
+      "recursive_coefficients"  DataFrame indexed by date, one column per coefficient: "const", then X's names
+                       (only X's names when X already contains a constant)
+      "sieve_ar_order" int
+      "trim"           float, as passed
+      "n", "B"         int
+      "bootstrap_critical_values"  dict, keys ["10%", "5%", "1%"]
+      "verdict"        str
+      "warnings"       list of str (unit root, date at the edge of the window, X already has a constant)
+      "method"         str
+    Example (r = the result): r["p_bootstrap"]; r["break_date"]; r["cusum"]["p"]
 
     Andrews (1993) sup-F: the Chow F for a change in all coefficients at each date in the middle 1 − 2·trim of
     the sample; its maximum has a non-standard distribution, so the p-value comes from a sieve bootstrap under
