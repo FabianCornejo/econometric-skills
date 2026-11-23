@@ -313,11 +313,12 @@ def chow(y, X, point, show: bool = True) -> dict:
     """Chow test for a break at a known point.
 
     Returns a dict (v2.7.3: keys exact):
-      "F"              float, classical F with (k, n1 + n2 - 2k) df, k = columns of X plus the constant
+      "F"              float, classical F with (k, n1 + n2 - 2k) df, k = columns of X plus a constant (X's columns
+                       alone when X already has one)
       "p"              float, its p-value
       "robust_wald"    float, HC3 Wald test that the regime interactions are zero (heteroskedasticity-robust)
       "robust_p"       float, its p-value (the one the printed verdict uses)
-      "n1", "n2"       int, rows before `point` and from `point` on
+      "n1", "n2"       int, rows before `point` and from `point` on, after dropping rows with missing values
     Example (r = the result): r["robust_p"]; r["F"]
 
     y: Series; X: DataFrame (no constant; it is added). point: index label where the
@@ -480,14 +481,14 @@ def stationarity_many(df: pd.DataFrame, show: bool = True, alpha: float = ALPHA)
 
     Returns a DataFrame (v2.7.3: columns exact), one row per column of df in its order, index 0..k-1 (not the names):
       columns ["Series", "Suggested order"]; "Suggested order" is stationarity()'s attrs["suggested_order"]
-    The full table of each series is not kept: call stationarity(df[c]) for one series' p-values.
+    The full table and the warnings of each series are not kept: call stationarity(df[c]) for one series' p-values.
     Example (r = the result): r.set_index("Series")["Suggested order"]
     """
     summary = []
     for c in df.columns:
         t = stationarity(df[c], c, show=show, alpha=alpha)
         summary.append({"Series": c, "Suggested order": t.attrs["suggested_order"]})
-    out = pd.DataFrame(summary)
+    out = pd.DataFrame(summary, columns=["Series", "Suggested order"])   # v2.7.3: the columns also with no column
     if show:
         print("\nSummary:\n" + out.to_string(index=False))
     return out
@@ -1672,7 +1673,8 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
     """Classical Hausman test FE vs RE (linearmodels). Fit both with cov_type="unadjusted".
 
     Returns a dict (v2.7.3: keys exact):
-      "statistic"      float, NaN when V_FE − V_RE is zero
+      "statistic"      float, NaN when V_FE − V_RE is zero; it can be negative when V_FE − V_RE is not positive
+                       semidefinite, and then "p" is 1.0, not a p-value (read "conclusion")
       "df"             int, rank of V_FE − V_RE (0: not computed)
       "p"              float, NaN when df is 0
       "valid"          bool, False when V_FE − V_RE is not positive semidefinite
@@ -1978,10 +1980,10 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
     """Diebold-Mariano test with the Harvey-Leybourne-Newbold small-sample correction.
 
     Returns a dict (v2.7.3: keys exact):
-      "DM_HLN"         float, the HLN-corrected statistic (negative: model 1 more accurate)
+      "DM_HLN"         float, the HLN-corrected statistic (negative: model 1 more accurate); NaN when p is NaN
       "p"              float, two-sided, t(T − 1); NaN when not computed (a missing or infinite loss, identical
                        losses, or a long-run variance that is not positive): the reason is printed when show=True
-      "mean_loss_diff" float, mean of |e1|^power − |e2|^power
+      "mean_loss_diff" float, mean of |e1|^power − |e2|^power (inf or NaN when a loss is)
     Example (r = the result): r["p"]; r["DM_HLN"]
 
     e1, e2: forecast errors (actual − forecast) of models 1 and 2 over the same period;
@@ -2000,7 +2002,9 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
     dbar_s = ds.mean()
     gamma = [np.sum((ds[k:] - dbar_s) * (ds[:T - k] - dbar_s)) / T for k in range(h)]
     var_d = (gamma[0] + 2 * sum(gamma[1:])) / T
-    dm = dbar_s / np.sqrt(var_d)
+    # v2.7.3 (review r1-A A2): a constant, non-zero loss difference has variance 0 and gave DM = inf, p = 0 and
+    # "significant difference"; the test is not defined there (NaN), as with identical losses
+    dm = dbar_s / np.sqrt(var_d) if var_d > 0 else np.nan
     dbar = dbar_s * sc
     hln = dm * np.sqrt((T + 1 - 2 * h + h * (h - 1) / T) / T)
     p = 2 * (1 - stats.t.cdf(abs(hln), T - 1))
@@ -2013,7 +2017,9 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
                        "forecast error (align and drop them first), or a loss that overflows (errors above ~1e154 with "
                        "the squared loss: rescale the series)")
             elif np.ptp(d) == 0:
-                why = "the loss difference is constant (identical losses): there is nothing to test"
+                why = ("the loss difference is constant (identical losses): there is nothing to test" if d[0] == 0
+                       else "the loss difference is constant (one model's loss is always the other's plus "
+                            f"{dbar:.4g}): it has no variance, so there is no test; compare the losses directly")
             else:
                 why = (f"the long-run variance of the loss difference is not positive (h = {h}, {T} periods); "
                        "use a longer sample" + (" or h = 1" if h > 1 else ""))

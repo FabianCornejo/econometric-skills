@@ -324,7 +324,7 @@ def adf_bootstrap(y, trend: str = "c", lags: int | None = None, lag_rule: str = 
       "trend"          str, "n", "c" or "ct"
       "n", "B"         int
       "bootstrap_critical_values", "asymptotic_critical_values"  dict, keys ["1%", "5%", "10%"]
-      "verdict"        str, ends with " at <alpha>"
+      "verdict"        str, ends with " at <alpha as a whole percent>" (" at 5%")
       "warnings"       list of str (an AR on the differences that is not stationary)
       "method"         str
     Example (r = the result): r["p_bootstrap"]; r["bootstrap_critical_values"]["5%"]
@@ -556,11 +556,14 @@ def sup_wald(y, X=None, trim: float = 0.15, B: int = 499, ar_max: int = 4, seed:
       "statistic"      float, the sup-F
       "p_bootstrap"    float, its p-value
       "break_date"     the index label of the maximum (meaningless without evidence of a break)
-      "break_position" int, its position in y
-      "F_path"         Series indexed like y, the Chow F at each date (NaN outside the trimmed window)
+      "break_position" int, its position in F_path's index, which is y's without leading and trailing NaN (y.diff()
+                       starts with one: there it is one less than the position in y)
+      "F_path"         Series, the Chow F at each date, indexed like y without its leading and trailing NaN (NaN
+                       outside the trimmed window)
       "cusum"          dict, keys ["statistic", "p", "scale", "statistic_iid", "p_iid"] (OLS-CUSUM with the long-run
                        SD; the _iid pair is the classical one)
-      "recursive_coefficients"  DataFrame indexed by date, one column per coefficient ("const", then X's names)
+      "recursive_coefficients"  DataFrame indexed by date, one column per coefficient: "const", then X's names
+                       (only X's names when X already contains a constant)
       "sieve_ar_order" int
       "trim"           float, as passed
       "n", "B"         int

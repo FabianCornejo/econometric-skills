@@ -651,7 +651,7 @@ def johansen_trace(df, k_ar_diff: int = 1, deterministic: str = "ci", level: flo
     Returns a dict (v2.7.3: keys exact):
       "table"          DataFrame, one row per r0 = 0..k-1, columns ["r0", "eigenvalue", "trace",
                        "crit <1-level> (simulated)", "reject"]: the critical-value column's name depends on level,
-                       "crit 95% (simulated)" with the default 0.05, "crit 90% (simulated)" with 0.10
+                       rounded to a whole percent: "crit 95% (simulated)" with 0.05, "crit 90% (simulated)" with 0.10
       "rank"           int, the first r0 not rejected (k when all are)
       "deterministic"  str, as passed
       "k_ar_diff", "reps"  int, as passed
@@ -745,6 +745,8 @@ def vecm_fit(df, k_ar_diff: int | None = None, rank: int | None = None, determin
     jt = johansen_trace(d, k_ar_diff=k_ar_diff, deterministic=deterministic, level=alpha, reps=reps, seed=seed,
                         show=False)
     trace = jt["table"]
+    if rank is not None and not 0 <= int(rank) <= k:
+        raise ValueError(f"rank must be between 0 and the number of series ({k}); got {rank}")   # v2.7.3 (r1-A A4)
     r = int(jt["rank"]) if rank is None else int(rank)
     out = {"k_ar_diff": k_ar_diff, "rank": r, "trace_test": trace, "deterministic": deterministic}
     if r == 0 or r == k:

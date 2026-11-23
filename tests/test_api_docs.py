@@ -172,7 +172,11 @@ def states_check():
 ENTRIES = {}
 
 
+ENTRIES_BLK = {}
+
+
 def ent_of(name, blk):
+    ENTRIES_BLK[name] = blk
     ENTRIES[name] = entries(blk)
     return ENTRIES[name]
 
@@ -689,6 +693,134 @@ for rank in (0, 1, 2):
         check("vecm_fit (rank 1): trace_test is johansen_trace's table, the critical-value column as named",
               "crit 95% (simulated)" in r_["trace_test"].columns)
         example_check("vecm_fit", blk, r_, " (rank 1)")
+
+# ============================================================ 8b. v2.7.3 review r1-A: states and values of the blocks
+from scipy import stats as _st  # noqa: E402
+from statsmodels.tsa.stattools import adfuller  # noqa: E402
+
+# A1: y with a NaN at the start (y.diff()): F_path and break_position refer to y without its NaN ends
+yd = pd.Series(np.r_[rng3.normal(size=80), 2 + rng3.normal(size=80)], index=ts3.index).cumsum().diff()
+r_ = tu.sup_wald(yd, B=19, show=False)
+nn_ = len(yd.dropna())
+lo_, hi_ = int(np.floor(0.15 * nn_)), int(np.ceil(0.85 * nn_)) - 1
+inside = np.zeros(nn_, bool)
+inside[lo_:hi_ + 1] = True
+check("sup_wald (y.diff()): F_path indexed like y without its NaN start, break_position its position there, F_path NaN "
+      "exactly outside the trimmed window (review r1-A A1, M9)",
+      r_["F_path"].index.equals(yd.dropna().index) and r_["F_path"].index[r_["break_position"]] == r_["break_date"]
+      and r_["F_path"].isna().to_numpy().tolist() == (~inside).tolist(), (len(r_["F_path"]), r_["break_position"]))
+# A3: X that already has a constant (a full set of dummies): no "const" column, and the warning
+Xd_ = pd.get_dummies(pd.Series(np.arange(T3) % 4, index=ts3.index), prefix="q").astype(float)
+r_ = tu.sup_wald(yb, X=Xd_, B=19, show=False)
+check("sup_wald, X with a constant (dummies): recursive_coefficients has only X's names, and the warning says so",
+      list(r_["recursive_coefficients"].columns) == list(Xd_.columns)
+      and any("already contains a constant" in w_ for w_ in r_["warnings"])
+      and "only X's names when X already contains a constant" in ENTRIES["sup_wald"]["recursive_coefficients"])
+
+# A2: a constant, non-zero loss difference: NaN, never "significant"
+r_, out_ = None, None
+buf = io.StringIO()
+with redirect_stdout(buf):
+    r_ = dg.diebold_mariano(np.full(50, 2.0), np.full(50, 1.0))
+check("diebold_mariano, constant non-zero loss difference: DM_HLN and p NaN, the text says constant, not significant "
+      "(review r1-A A2)", np.isnan(r_["p"]) and np.isnan(r_["DM_HLN"]) and "constant" in buf.getvalue()
+      and "significant" not in buf.getvalue(), (r_, buf.getvalue()))
+# the sign and mean_loss_diff from their definition (A7 M8, M21)
+e_bad, e_good = 3 * rng3.normal(size=200), rng3.normal(size=200)
+r_ = dg.diebold_mariano(e_bad, e_good, show=False)
+check("diebold_mariano: model 1 clearly worse gives a positive statistic (the block: negative = model 1 better), and "
+      "mean_loss_diff = mean(e1² − e2²)", r_["DM_HLN"] > 0 and abs(r_["mean_loss_diff"] - np.mean(e_bad ** 2 - e_good ** 2))
+      < 1e-10 * np.mean(e_bad ** 2), r_)
+
+# A4: vecm_fit refuses a rank outside 0..k; three series: rank 2 normalised on the first two
+try:
+    mv.vecm_fit(ts3, k_ar_diff=1, rank=3, reps=19, show=False)
+    raised = False
+except ValueError:
+    raised = True
+check("vecm_fit: rank 3 with 2 series is refused (review r1-A A4)", raised)
+ts3c = ts3.assign(y3=ts3.y1 + rng3.normal(scale=0.5, size=T3))
+r_ = mv.vecm_fit(ts3c, k_ar_diff=1, rank=2, reps=19, show=False)
+keys_check("vecm_fit", ENTRIES_BLK["vecm_fit"], r_, " (three series, rank 2)")
+check("vecm_fit (three series, rank 2): beta columns ['ect1', 'ect2'], its first 2 × 2 block the identity",
+      list(r_["beta"].columns) == ["ect1", "ect2"] and np.allclose(r_["beta"].iloc[:2, :2].to_numpy(), np.eye(2)), r_["beta"])
+
+# A5 and A6: hausman valid False (V_FE − V_RE negative definite) and df from the rank
+ns_ = lambda p_, c_: SimpleNamespace(params=p_, cov=c_)   # noqa: E731
+r_ = dg.hausman(ns_(fe.params, fe.cov), ns_(re_.params, re_.cov * 0 + fe.cov.to_numpy() * 2), show=False)
+check("hausman, V_FE − V_RE not positive semidefinite: valid False, a negative statistic, p 1.0, 'Not interpretable' "
+      "(review r1-A A5)", r_["valid"] is False and r_["statistic"] < 0 and r_["p"] == 1.0
+      and r_["conclusion"].startswith("Not interpretable") and "can be negative" in ENTRIES["hausman"]["statistic"], r_)
+cm_ = [c_ for c_ in fe.params.index if c_ in re_.params.index and c_.lower() not in ("const", "intercept")]
+v_ = 0.5 * np.sqrt(np.diag(fe.cov.loc[cm_, cm_]))
+cre = fe.cov.copy()
+cre.loc[cm_, cm_] = fe.cov.loc[cm_, cm_].to_numpy() - np.outer(v_, v_) * [[1, 0], [0, 0]]
+r_ = dg.hausman(ns_(fe.params, fe.cov), ns_(re_.params, cre), show=False)
+check("hausman: V_FE − V_RE of rank 1 gives df 1 (the rank, not the number of coefficients; A7 M22)", r_["df"] == 1, r_)
+
+# A6: cointegration lag_sensitive True (seed 8 from the search: AR(0.9) deviations, 120 periods)
+rs8 = np.random.default_rng(8)
+x8 = rs8.normal(size=120).cumsum()
+u8 = np.zeros(120)
+for t_ in range(1, 120):
+    u8[t_] = 0.9 * u8[t_ - 1] + rs8.normal()
+r_ = dg.cointegration(pd.DataFrame({"a": x8 + u8, "b": x8}), show=False)
+check("cointegration: lag_sensitive True when AIC and BIC disagree at 5%, and the conclusion says Inconclusive",
+      r_["engle_granger"]["lag_sensitive"] is True and r_["engle_granger"]["conclusion"].startswith("Inconclusive")
+      and (r_["engle_granger"]["p"] < 0.05) != (r_["engle_granger"]["p_bic"] < 0.05), r_["engle_granger"])
+
+# A6/A7: johansen_trace rank = first r0 not rejected; drift_used 0.0 unless "co"
+for det in ("ci", "co"):
+    r_ = mv.johansen_trace(ts3, deterministic=det, reps=19, show=False)
+    first = next((i_ for i_, rej in enumerate(r_["table"]["reject"]) if not rej), len(r_["table"]))
+    check(f"johansen_trace ({det}): rank is the first r0 not rejected; drift_used {'> 0' if det == 'co' else '0.0'}",
+          r_["rank"] == first and ((r_["drift_used"] > 0) if det == "co" else (r_["drift_used"] == 0.0)), r_["drift_used"])
+
+# A6: mundlak_test balanced False
+r_ = dg.mundlak_test(pan.drop(index=[0, 1, 2]), "y", ["x", "z"], "firm", "year", show=False)
+check("mundlak_test: balanced False with an unbalanced panel", r_["balanced"] is False)
+
+# A6/A7: bootstrap with failed replications; percentile limits from the draws
+calls = {"n": 0}
+
+
+def flaky(d_):
+    calls["n"] += 1
+    if calls["n"] > 1 and calls["n"] % 3 == 0:
+        raise RuntimeError("fails")
+    return d_["x"].mean()
+
+
+r_ = est.bootstrap(flaky, pan, B=60, alpha=0.1)
+check("bootstrap: failed replications dropped (B_effective < B, draws finite), a warning, ci_low/high the percentile "
+      "limits of the draws", r_["B_effective"] == 40 and np.isfinite(r_["draws"]).all() and r_["warnings"]
+      and abs(r_["table"]["ci_low"].iloc[0] - np.quantile(r_["draws"][:, 0], 0.05)) < 1e-12
+      and abs(r_["table"]["ci_high"].iloc[0] - np.quantile(r_["draws"][:, 0], 0.95)) < 1e-12, r_["B_effective"])
+
+# A7: wild_cluster_bootstrap's t uses null, and p_cr1_t_G-1 is the t(G − 1) p
+r_ = est.wild_cluster_bootstrap(pan, "y ~ x + z", "x", "g", null=0.1, B=99, ci=False)
+check("wild_cluster_bootstrap, null 0.1: t = (estimate − null)/se; p_cr1_t_G-1 = 2·t(G − 1).sf(|t|)",
+      abs(r_["t"] - (r_["estimate"] - 0.1) / r_["se"]) < 1e-12
+      and abs(r_["p_cr1_t_G-1"] - 2 * _st.t.sf(abs(r_["t"]), r_["n_clusters"] - 1)) < 1e-12, r_)
+
+# A7: panel_bp_lm p = chi2(1).sf(LM); stationarity's alpha attr and the 0.10 edge; adf p_asymptotic from adfuller
+r_ = dg.panel_bp_lm(res_p, show=False)
+check("panel_bp_lm: p is the chi²(1) tail of LM", abs(r_["p"] - _st.chi2.sf(r_["LM"], 1)) < 1e-12)
+check("stationarity: attrs['alpha'] is the level passed (0.2)", r_w.attrs["alpha"] == 0.2)
+check("stationarity: no warning at alpha 0.10 (inside [0.01, 0.10]), a warning just above",
+      dg.stationarity(ts3["y1"], show=False, alpha=0.10).attrs["warnings"] == []
+      and dg.stationarity(ts3["y1"], show=False, alpha=0.1001).attrs["warnings"] != [])
+r_ = tu.adf_bootstrap(ts3["y1"], lags=2, B=19, show=False)
+check("adf_bootstrap: p_asymptotic is adfuller's with the same lags and trend",
+      abs(r_["p_asymptotic"] - adfuller(ts3["y1"].to_numpy(), maxlag=2, regression="c", autolag=None)[1]) < 1e-12)
+y_i2 = pd.Series(np.random.default_rng(5).normal(size=100).cumsum().cumsum())   # seed 5 from the search: I(2)
+r_ = tu.adf_bootstrap(y_i2, B=19, show=False)
+check("adf_bootstrap: an I(2) series gives the warning about the AR on the differences (a non-empty list of str)",
+      r_["warnings"] and all(isinstance(w_, str) for w_ in r_["warnings"]), r_["warnings"])
+
+# A12: stationarity_many with no column keeps its columns
+check("stationarity_many: an empty frame gives the two columns and no row",
+      list(dg.stationarity_many(ts3.iloc[:, :0], show=False).columns) == ["Series", "Suggested order"])
 
 # ============================================================ 9. v2.7.3: survival
 n4 = 150

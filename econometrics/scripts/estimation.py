@@ -339,7 +339,7 @@ def bootstrap(stat_fn, df: pd.DataFrame, B: int = 999, cluster: str | None = Non
       "B_effective"    int, replications kept (failed or non-finite ones are dropped)
       "n"              int, rows of df
       "warnings"       list of str (many failed replications; fewer than 30 clusters)
-    Example (r = the result): r["table"].loc["stat0", "se"]; r["table"]["ci_low"]
+    Example (r = the result): r["table"]["se"].iloc[0]; r["table"]["ci_low"]
 
     stat_fn(df) -> float, array or Series (e.g. lambda d: smf.ols(...).fit().params["x"]).
     Returns the estimate on the original data, the bootstrap SE, percentile and normal CIs.
@@ -381,7 +381,8 @@ def bootstrap(stat_fn, df: pd.DataFrame, B: int = 999, cluster: str | None = Non
         warn.append(f"{failed} of {B} bootstrap replications failed: the statistic is unstable")
     if cluster is not None and len(keys) < 30:
         warn.append(f"only {len(keys)} clusters: the cluster bootstrap is unreliable, use wild_cluster_bootstrap")
-    return {"method": "cluster bootstrap" if cluster else "pairs bootstrap", "table": tab, "draws": D,
+    # v2.7.3 (review r1-A A13): "if cluster" called cluster=0 a pairs bootstrap
+    return {"method": "cluster bootstrap" if cluster is not None else "pairs bootstrap", "table": tab, "draws": D,
             "B_effective": len(draws), "n": len(df), "warnings": warn}
 
 
@@ -395,7 +396,8 @@ def wild_cluster_bootstrap(df: pd.DataFrame, formula: str, coef: str, cluster: s
 
     Returns a dict (v2.7.3: keys exact):
       "estimand"       str, the coefficient's name (coef)
-      "method"         str, "wild cluster bootstrap-t (restricted, <weights>)"
+      "method"         str, "wild cluster bootstrap-t (restricted, <weights>)", the weights used ("rademacher" or
+                       "webb", never "auto")
       "estimate", "se"  float, OLS coefficient and its CR1 standard error
       "t"              float, (estimate − null) / se
       "p"              float, WCR bootstrap p-value of H0: coefficient = null
