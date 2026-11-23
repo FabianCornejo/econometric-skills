@@ -219,7 +219,7 @@ Structural form: B Y_t = A₀ + A₁Y_{t−1} + … + u_t, with uncorrelated str
 
 Example of a justified recursive identification (fuel market): gasoline price (most exogenous, set by policy) → sugar price → ethanol quantity → ethanol price (most endogenous).
 
-General limitations: VAR shocks may reflect omitted variables; Lucas critique — IRFs hold within the same policy regime; breaks and time-varying parameters call for subsamples or TVP-VARs.
+General limitations: VAR shocks may reflect omitted variables (an omitted driver can create or hide Granger causality, and measurement error or filtered and revised data create spurious lead-lag: `interpretation-rules.md`, rules of v2.7.4); Lucas critique — IRFs hold within the same policy regime; breaks and time-varying parameters call for subsamples or TVP-VARs.
 
 ## 10. Bayesian VAR and data-rich VARs
 

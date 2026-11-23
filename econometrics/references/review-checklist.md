@@ -35,6 +35,7 @@ Every check you request names the function of this skill that runs it (`estimati
 **Inference**
 - [ ] SEs robust to heteroskedasticity; clustered at the level where the regressor of interest varies; number of clusters reported; wild bootstrap with few clusters? With few **treated** clusters (a policy adopted by a handful of states), also randomization inference (`causal.randomization_inference`): the wild bootstrap itself becomes unreliable when treated clusters are very few.
 - [ ] Time series: HAC SEs, stationarity, spurious regression (R² > DW)? Prais-Winsten or Cochrane-Orcutt with a lagged y (inconsistent)?
+- [ ] VAR/SVAR: is a Granger result or an IRF read as causal when a driver of the system was left out (the subset VAR has infinite order, and Granger causality can appear or vanish), or when the series carry measurement error or are seasonally adjusted, filtered or revised (spurious lead-lag, near-singular systems)? (`interpretation-rules.md`, v2.7.4.)
 - [ ] A restriction F test computed from R² of models with different dependent variables? (`specification.linear_restriction_test`.)
 - [ ] Binary outcome: logit or probit coefficients read as changes in probability? Accuracy at a 0.5 cutoff reported without the base rate? (`discrete_choice.binary_effects`.)
 - [ ] Multiple testing: how many outcomes, subgroups, specifications were tried?
