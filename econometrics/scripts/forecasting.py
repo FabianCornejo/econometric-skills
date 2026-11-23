@@ -413,7 +413,8 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
                 other.remove("Theil_U(RMSE/RMSE_naive)")
             pt = [c for c in other if c in ("directional_accuracy", "PT_p_value")]
             if pt:
-                miss = int(last_actual.isna().sum()) if last_actual is not None else 0   # r2 R9b
+                # r2 R9b; r3 Q2: last_actual is used (and can be missing) only with direction="level"
+                miss = int(last_actual.isna().sum()) if last_actual is not None and direction == "level" else 0
                 mine.append(f"{k}: {' and '.join(pt)} NaN: the direction test needs at least 10 rows where actual and "
                             "the forecast are not zero, and some variation in the forecast's sign"
                             + (f"; last_actual is missing on {miss} of the {len(df)} rows" if miss else ""))
@@ -421,10 +422,6 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
             if rest:
                 mine.append(f"{k}: {', '.join(rest)} not finite"
                             + (" (MAPE divides by actual: an actual value very close to 0)" if "MAPE_%" in rest else ""))
-        # r2 R9a: with an inf benchmark, the other models' Theil's U is 0 (finite and misleading); said once per model
-        if (not mine and k != benchmark and "Theil_U(RMSE/RMSE_naive)" in tab.columns
-                and not np.isfinite(float(tab.loc[benchmark, "RMSE"]))):
-            mine.append(f"{k}: Theil's U is not usable (the benchmark {benchmark}'s RMSE is not finite)")
         warns += mine
     tab.attrs["warnings"] = warns
     if show:

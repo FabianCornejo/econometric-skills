@@ -927,12 +927,12 @@ for case, a_, f_, kw in ((" (level)", lv, lv.shift(1).bfill(), {}),
     example_check("forecast_metrics", blk, r_, case)
 
 # ============================================================ 11. v2.7.3: rule T (decision D2)
-def _public_functions():
+def _public_functions(base=None):
     """{"module.function" or "module.Class.method": offset of its block's Returns line from the def, or None}, from the
     source (AST, no import). Review r1-B B8: methods of public classes, async defs, defs inside a module-level if/try,
     and modules in subfolders count too; N3: the marker is "(v<major>.<minor>", any version."""
     out = {}
-    base = ROOT / "econometrics" / "scripts"
+    base = base or ROOT / "econometrics" / "scripts"
 
     def defs(body):
         for node in body:
@@ -973,6 +973,21 @@ pending = [l_.strip() for l_ in PENDING.read_text(encoding="utf-8").splitlines()
            if l_.strip() and not l_.startswith("#")]
 pub = _public_functions()
 with_block = {k_ for k_, v_ in pub.items() if v_ is not None and v_ <= MAX_OFFSET}
+# review r3 Q6: the traversal itself, on a synthetic module (a method inside an if of a class body, a nested class,
+# an async def, a def inside a module-level if, a module in a subfolder; private names left out)
+_syn = Path(tempfile.mkdtemp())
+(_syn / "sub").mkdir()
+(_syn / "mod.py").write_text(
+    "import sys\nclass A:\n    if sys:\n        def in_if(self):\n            pass\n    class B:\n"
+    "        def nested(self):\n            pass\n    def _private(self):\n        pass\n"
+    "async def coro():\n    pass\nif sys:\n    def cond():\n        pass\n"
+    "def with_block():\n    \"\"\"x\n\n    Returns a dict (v3.0: keys exact):\n    \"\"\"\n", encoding="utf-8")
+(_syn / "sub" / "deep.py").write_text("def deep():\n    pass\n", encoding="utf-8")
+_got = _public_functions(_syn)
+check("rule T: the traversal finds methods inside an if of a class, nested classes, async defs, defs inside an if and "
+      "modules in subfolders, and reads any version in the marker (review r3 Q6)",
+      _got == {"mod.A.in_if": None, "mod.A.B.nested": None, "mod.coro": None, "mod.cond": None,
+               "mod.with_block": 3, "sub.deep.deep": None}, _got)
 check("rule T: the pending list has no repeated names and is sorted", pending == sorted(set(pending)), pending[:5])
 check("rule T: every public function without a Returns block within 12 lines of its def is in "
       "tests/returns_block_pending.txt (a new public function needs a block)",

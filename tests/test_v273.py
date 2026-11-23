@@ -300,7 +300,8 @@ for hi in (1e5, 1e8, 1e10):
           np.isnan(dg.diebold_mariano(np.sqrt(e2m ** 2 + 0.3), e2m, show=False)["p"]))
 for bad_df, why in ((pp_df.rename(columns={"id": "y"}), "an id named y"),
                     (pp_df.assign(t=[1.0, -2.0, 3.0]), "a negative duration"),
-                    (pp_df.assign(t=[1.0, np.nan, 3.0]), "a missing duration")):
+                    (pp_df.assign(t=[1.0, np.nan, 3.0]), "a missing duration"),
+                    (pp_df.assign(t=[1.0, np.inf, 3.0]), "an infinite duration")):
     idc = "y" if why == "an id named y" else "id"
     try:
         sv.person_period(bad_df, idc, "t", "e")
@@ -308,7 +309,7 @@ for bad_df, why in ((pp_df.rename(columns={"id": "y"}), "an id named y"),
     except ValueError as x_:
         msg_ = str(x_)
     check(f"person_period: {why} raises its own ValueError (review r2 R5, R6)",
-          ("rename them first" in msg_) if why == "an id named y" else ("missing or negative" in msg_), msg_)
+          ("rename them first" in msg_) if why == "an id named y" else ("missing, infinite or negative" in msg_), msg_)
 import multivariate as mv  # noqa: E402
 ts7 = pd.DataFrame(rng7.normal(size=(120, 2)).cumsum(axis=0), columns=["a", "b"])
 try:
@@ -329,6 +330,19 @@ la.iloc[:55] = np.nan
 t_, o_, w_ = evw(ret.cumsum(), {"m": ret.cumsum().shift(1).bfill()}, last_actual=la, show=False)
 check("evaluate: a direction test without enough rows because last_actual is missing says so (review r2 R9b)",
       any("last_actual is missing on 55 of the 60 rows" in x_ for x_ in w_), w_)
+# review r3 Q2: with direction="return" last_actual is not used, so it is not blamed
+fz = pd.Series(np.where(np.arange(60) % 7 == 0, rng7.normal(size=60), 0.0))     # mostly zero forecasts
+t_, o_, w_ = evw(ret, {"m": fz}, direction="return", last_actual=la, show=False)
+check("evaluate, direction='return': a direction test NaN does not blame last_actual, which that mode ignores (r3 Q2)",
+      any("direction test" in x_ for x_ in w_) and not any("last_actual" in x_ for x_ in w_), w_)
+# review r3 Q1: the constant printed is the difference itself, not the mean of rounding-garbled rows
+for hi in (1e8, 1e10):
+    e2m = np.r_[1e-3 * rng7.normal(size=100), hi * rng7.normal(size=100)]
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        dg.diebold_mariano(np.sqrt(e2m ** 2 + 0.3), e2m)
+    check(f"diebold_mariano: with losses up to {hi ** 2:g} the text says 'plus 0.3' (the mean gave 0.15; r3 Q1)",
+          "always the other's plus 0.3," in buf.getvalue(), buf.getvalue())
 
 # ============================================================ 4. version, CHANGELOG, counts (no "be the last version")
 import json  # noqa: E402

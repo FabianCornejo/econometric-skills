@@ -259,7 +259,7 @@ def person_period(df: pd.DataFrame, id: str, duration: str, event: str, interval
       columns: the id column (named as id), then "period" (1, 2, …, ceil(duration / interval), at least 1) and "y" (1
               only in the last period of a spell that ended in the event, else 0), then every other column of df
               except duration and event (already merged on id: no need to merge df again)
-    A repeated id, a column (the id included) already named "period" or "y", or a missing or negative duration
+    A repeated id, a column (the id included) already named "period" or "y", or a missing, infinite or negative duration
     raises ValueError (v2.7.3).
     Example (r = the result): r["y"].sum(); r["period"].max()
 
@@ -275,8 +275,8 @@ def person_period(df: pd.DataFrame, id: str, duration: str, event: str, interval
     if clash:
         raise ValueError(f"df already has column(s) {clash}: rename them first (person_period adds 'period' and 'y')")
     durs = df[duration].astype(float)
-    if durs.isna().any() or (durs < 0).any():      # r2 R6: a negative duration got y = 1 in period 1; NaN a TypeError
-        raise ValueError(f"{duration!r} has missing or negative values: fix or drop those rows first")
+    if not np.isfinite(durs).all() or (durs < 0).any():   # r2 R6, r3 Q5: negative, NaN or inf
+        raise ValueError(f"{duration!r} has missing, infinite or negative values: fix or drop those rows first")
     rows = []
     for uid, dur, ev in zip(df[id].tolist(), df[duration].astype(float).tolist(), df[event].tolist()):
         last = max(int(np.ceil(dur / interval)), 1)

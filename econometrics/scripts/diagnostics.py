@@ -1976,6 +1976,12 @@ def tobit(y, X, lower_limit: float | None = 0.0, upper_limit: float | None = Non
 # =============================================================================
 # Forecasting
 # =============================================================================
+def _dm_reference(l1: np.ndarray, l2: np.ndarray) -> float:
+    """The loss difference in the row with the smallest losses: the most precise value of a constant difference
+    (review r3 Q1: _dm_why printed the mean, 0.15 for a difference of 0.3 with losses up to 1e20)."""
+    return float((l1 - l2)[np.argmin(np.maximum(np.abs(l1), np.abs(l2)))])
+
+
 def _dm_constant(l1: np.ndarray, l2: np.ndarray) -> bool:
     """v2.7.3 (review r1-B B10, r2 R1): the loss difference is constant up to rounding: every d_i within 64·eps of its
     own row's scale, max(l1_i, l2_i, |c|), of c, the difference in the row with the smallest losses. Exactly constant differences (identical losses, or
@@ -1986,7 +1992,7 @@ def _dm_constant(l1: np.ndarray, l2: np.ndarray) -> bool:
     if len(d) == 0 or not np.isfinite(d).all():
         return False
     row = np.maximum(np.abs(l1), np.abs(l2))
-    c = float(d[np.argmin(row)])          # the row with the smallest losses has the most precise difference
+    c = _dm_reference(l1, l2)
     scale = np.maximum(row, abs(c))
     return bool(np.all(np.abs(d - c) <= 64 * np.finfo(float).eps * scale))
 
@@ -2004,7 +2010,7 @@ def _dm_why(l1: np.ndarray, l2: np.ndarray, h: int) -> str:
     if T < 2:
         return f"only {T} period(s) in common: the test needs at least two"
     if _dm_constant(l1, l2):
-        c = float(np.mean(d))
+        c = _dm_reference(l1, l2)
         return ("the loss difference is constant (identical losses): there is nothing to test" if np.all(d == 0)
                 else "the loss difference is constant (one model's loss is always the other's plus "
                      f"{c:.4g}, up to rounding): it has no variance, so there is no test; compare the losses directly")
