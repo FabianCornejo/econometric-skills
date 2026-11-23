@@ -134,5 +134,28 @@ check("ph_test: show=False prints nothing; the default prints the table as befor
       out_q == "" and "Proportional-hazards check (Schoenfeld residuals vs time)" in out_d and r_q.equals(r_d),
       (out_q[:80], out_d[:80]))
 
+# ============================================================ 4. version, CHANGELOG, counts (no "be the last version")
+import json  # noqa: E402
+import re  # noqa: E402
+import reporting  # noqa: E402
+ver = reporting.SKILL_VERSION
+mk = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+cl = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+top = re.search(r"^## v(\S+) ", cl, re.M)
+check("version at least 2.7.3, the same in SKILL_VERSION, the marketplace and the top of the CHANGELOG",
+      tuple(int(x_) for x_ in ver.split(".")) >= (2, 7, 3) and mk["plugins"][0]["version"] == ver and top
+      and top.group(1) == ver, (ver, mk["plugins"][0]["version"], top and top.group(1)))
+i_ = cl.find("\n## v2.7.3 — ")
+sec = cl[i_:cl.index("\n## v2.7.2 — ")] if i_ >= 0 else ""
+for word in ("Returns", "wild_cluster_bootstrap", "vecm_fit", "cox", "ph_test", "show=False", "attrs[\"warnings\"]",
+             "every other model", "returns_block_pending.txt", "test_v272"):
+    check(f"CHANGELOG v2.7.3 mentions {word!r}", word in sec)
+readme = (ROOT / "README.md").read_text(encoding="utf-8")
+m_r = re.search(r"\*\*(\d[\d,]*) checks\*\*", readme)
+m_m = re.search(r"(\d[\d,]*) tested checks", mk["plugins"][0]["description"])
+check("README and marketplace give the same count of checks",
+      m_r and m_m and int(m_r.group(1).replace(",", "")) == int(m_m.group(1).replace(",", "")),
+      (m_r and m_r.group(1), m_m and m_m.group(1)))
+
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

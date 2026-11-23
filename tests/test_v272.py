@@ -206,9 +206,12 @@ ver = reporting.SKILL_VERSION
 mk = json.loads(read(".claude-plugin/marketplace.json"))
 cl = read("CHANGELOG.md")
 top = re.search(r"^## v(\S+) ", cl, re.M)
-check("version 2.7.2 in SKILL_VERSION, the marketplace and the top of the CHANGELOG",
-      ver == "2.7.2" and mk["plugins"][0]["version"] == "2.7.2" and top and top.group(1) == "2.7.2",
-      (ver, mk["plugins"][0]["version"], top and top.group(1)))
+# v2.7.3: "be the last version" broke in the next release (lesson of v2.6.8); at least 2.7.2, the three equal, and the
+# v2.7.2 section found by its title
+vt = tuple(int(x_) for x_ in ver.split("."))
+check("version at least 2.7.2, the same in SKILL_VERSION, the marketplace and the top of the CHANGELOG; the v2.7.2 "
+      "section exists", vt >= (2, 7, 2) and mk["plugins"][0]["version"] == ver and top and top.group(1) == ver
+      and "\n## v2.7.2 — " in cl, (ver, mk["plugins"][0]["version"], top and top.group(1)))
 sec = cl[cl.index("## v2.7.2"):cl.index("## v2.7.1")]
 for word in ("Returns", "test_api_docs", "iv_report", "1e150", "0.5", "groupby", "note", "direction", "diebold_mariano"):
     check(f"CHANGELOG v2.7.2 mentions {word!r}", word in sec)
