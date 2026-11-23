@@ -32,8 +32,9 @@ def kaplan_meier(df: pd.DataFrame, duration: str, event: str, group: str | None 
     Returns a dict (v2.7.3: keys exact):
       "summary"        DataFrame, index named "group" (the group's values, or "all" without group), columns
                        ["n", "events", "censored_share", "median_survival", "median_ci_low", "median_ci_high"],
-                       then one column "S(<t>)" per value in times (e.g. "S(12)"); the median and its CI are NaN
-                       when the curve does not reach 0.5, and the CI's upper limit can be inf
+                       then one column "S(<t>)" per value in times, labelled as given ("S(12)", "S(12.0)"); the median
+                       is NaN when the curve does not reach 0.5, and each CI limit can be NaN or inf on its own;
+                       rows with a missing group are left out
       "curves"         dict keyed like the summary's index, each a DataFrame indexed by "Time" with columns
                        ["Surv prob", "Surv prob SE", "num at risk", "num events"]
     Example (r = the result): r["summary"]["median_survival"]; r["curves"][r["summary"].index[0]]["Surv prob"]
@@ -255,17 +256,27 @@ def person_period(df: pd.DataFrame, id: str, duration: str, event: str, interval
     """Expand spells to one row per unit and period at risk (discrete-time hazard).
 
     Returns a DataFrame (v2.7.3: columns exact), one row per unit and period at risk, index 0..N-1:
-      columns: the id column (named as id), then "period" (1, 2, …, ceil(duration / interval)) and "y" (1 only in
-              the last period of a spell that ended in the event, else 0), then every other column of df except
-              duration and event (already merged on id: no need to merge df again)
+      columns: the id column (named as id), then "period" (1, 2, …, ceil(duration / interval), at least 1) and "y" (1
+              only in the last period of a spell that ended in the event, else 0), then every other column of df
+              except duration and event (already merged on id: no need to merge df again)
+    A repeated id, or a column already named "period" or "y", raises ValueError (v2.7.3).
     Example (r = the result): r["y"].sum(); r["period"].max()
 
     Then estimate e.g. smf.logit("y ~ C(period) + x", pp) or a cloglog GLM; time-varying
     covariates can be merged on (id, period)."""
+    # v2.7.3 (review r1-B B5, B6, N5): a repeated id multiplied the rows in the merge and counted events twice; a
+    # duration of 0 lost its event (y = 0 in period 1); iterrows turned an integer id into a float; columns already
+    # named "period" or "y" came back as period_x/period_y
+    if df[id].duplicated().any():
+        raise ValueError(f"{id!r} has repeated values: person_period expects one row (one spell) per unit; give each "
+                         "spell its own id")
+    clash = [c for c in ("period", "y") if c in df.columns and c not in (id, duration, event)]
+    if clash:
+        raise ValueError(f"df already has column(s) {clash}: rename them first (person_period adds 'period' and 'y')")
     rows = []
-    for _, r in df.iterrows():
-        k = int(np.ceil(r[duration] / interval))
-        for p in range(1, max(k, 1) + 1):
-            rows.append({id: r[id], "period": p, "y": int(r[event] == 1 and p == k)})
-    pp = pd.DataFrame(rows)
+    for uid, dur, ev in zip(df[id].tolist(), df[duration].astype(float).tolist(), df[event].tolist()):
+        last = max(int(np.ceil(dur / interval)), 1)
+        for p in range(1, last + 1):
+            rows.append({id: uid, "period": p, "y": int(ev == 1 and p == last)})
+    pp = pd.DataFrame(rows, columns=[id, "period", "y"])
     return pp.merge(df.drop(columns=[duration, event]), on=id, how="left")

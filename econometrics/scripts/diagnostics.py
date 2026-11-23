@@ -1976,13 +1976,46 @@ def tobit(y, X, lower_limit: float | None = 0.0, upper_limit: float | None = Non
 # =============================================================================
 # Forecasting
 # =============================================================================
+def _dm_constant(l1: np.ndarray, l2: np.ndarray) -> bool:
+    """v2.7.3 (review r1-B B10): the loss difference is constant up to the rounding of the losses (its range at most
+    64·eps of the largest loss). Exactly constant differences (identical losses, or one always the other plus c) and
+    those that differ only by rounding (5.5e16 and p = 0 before) have no variance to test."""
+    d = l1 - l2
+    if len(d) == 0 or not np.isfinite(d).all():
+        return False
+    top = float(np.max(np.abs(np.r_[l1, l2])))
+    return bool(np.ptp(d) <= 64 * np.finfo(float).eps * top)
+
+
+def _dm_why(l1: np.ndarray, l2: np.ndarray, h: int) -> str:
+    """Why the Diebold-Mariano test of losses l1, l2 is not computed (v2.7.3: one text for diebold_mariano and
+    evaluate, review r1-B B1)."""
+    d = l1 - l2
+    T = len(d)
+    if not np.isfinite(d).all():
+        # v2.7.2 (review r1-B B3): the loss can overflow with a finite error (squared loss above ~1.3e154)
+        return (f"{int((~np.isfinite(d)).sum())} missing or infinite loss value(s): a missing or infinite forecast "
+                "error (align and drop them first), or a loss that overflows (errors above ~1e154 with the squared "
+                "loss: rescale the series)")
+    if T < 2:
+        return f"only {T} period(s) in common: the test needs at least two"
+    if _dm_constant(l1, l2):
+        c = float(np.mean(d))
+        return ("the loss difference is constant (identical losses): there is nothing to test" if np.all(d == 0)
+                else "the loss difference is constant (one model's loss is always the other's plus "
+                     f"{c:.4g}, up to rounding): it has no variance, so there is no test; compare the losses directly")
+    return (f"the long-run variance of the loss difference is not positive (h = {h}, {T} periods); use a longer "
+            "sample" + (" or h = 1" if h > 1 else ""))
+
+
 def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> dict:
     """Diebold-Mariano test with the Harvey-Leybourne-Newbold small-sample correction.
 
     Returns a dict (v2.7.3: keys exact):
       "DM_HLN"         float, the HLN-corrected statistic (negative: model 1 more accurate); NaN when p is NaN
-      "p"              float, two-sided, t(T − 1); NaN when not computed (a missing or infinite loss, identical
-                       losses, or a long-run variance that is not positive): the reason is printed when show=True
+      "p"              float, two-sided, t(T − 1); NaN when not computed (a missing or infinite loss, a loss
+                       difference that is constant up to rounding, fewer than 2 periods, or a long-run variance that is
+                       not positive): the reason is printed when show=True
       "mean_loss_diff" float, mean of |e1|^power − |e2|^power (inf or NaN when a loss is)
     Example (r = the result): r["p"]; r["DM_HLN"]
 
@@ -1991,7 +2024,8 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
     Negative statistic ⇒ model 1 more accurate.
     """
     e1, e2 = np.asarray(e1, float), np.asarray(e2, float)
-    d = np.abs(e1) ** power - np.abs(e2) ** power
+    l1, l2 = np.abs(e1) ** power, np.abs(e2) ** power
+    d = l1 - l2
     T = len(d)
     # v2.7.2 (review r2 S1): the statistic does not depend on the scale of d, but its variance is a sum of d², which
     # overflowed from errors of ~1e77 (squared loss) and gave DM = 0, p = 1 with no word; d is divided by its largest
@@ -2004,26 +2038,14 @@ def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> di
     var_d = (gamma[0] + 2 * sum(gamma[1:])) / T
     # v2.7.3 (review r1-A A2): a constant, non-zero loss difference has variance 0 and gave DM = inf, p = 0 and
     # "significant difference"; the test is not defined there (NaN), as with identical losses
-    dm = dbar_s / np.sqrt(var_d) if var_d > 0 else np.nan
+    dm = dbar_s / np.sqrt(var_d) if var_d > 0 and not _dm_constant(l1, l2) else np.nan
     dbar = dbar_s * sc
     hln = dm * np.sqrt((T + 1 - 2 * h + h * (h - 1) / T) / T)
     p = 2 * (1 - stats.t.cdf(abs(hln), T - 1))
     if show:
         better = "model 1" if dbar < 0 else "model 2"
         if not np.isfinite(p):
-            if not np.isfinite(d).all():
-                # v2.7.2 (review r1-B B3): the loss can overflow with a finite error (squared loss above ~1.3e154)
-                why = (f"{int((~np.isfinite(d)).sum())} missing or infinite loss value(s): a missing or infinite "
-                       "forecast error (align and drop them first), or a loss that overflows (errors above ~1e154 with "
-                       "the squared loss: rescale the series)")
-            elif np.ptp(d) == 0:
-                why = ("the loss difference is constant (identical losses): there is nothing to test" if d[0] == 0
-                       else "the loss difference is constant (one model's loss is always the other's plus "
-                            f"{dbar:.4g}): it has no variance, so there is no test; compare the losses directly")
-            else:
-                why = (f"the long-run variance of the loss difference is not positive (h = {h}, {T} periods); "
-                       "use a longer sample" + (" or h = 1" if h > 1 else ""))
-            print(f"\nDiebold-Mariano (HLN): not computed: {why}.")
+            print(f"\nDiebold-Mariano (HLN): not computed: {_dm_why(l1, l2, h)}.")
         else:
             print(f"\nDiebold-Mariano (HLN): {hln:.3f}, p = {p:.4f} → "
                   + (f"significant difference, {better} more accurate" if p < ALPHA else "no significant difference"))

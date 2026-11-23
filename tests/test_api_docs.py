@@ -860,7 +860,9 @@ blk = head_check("person_period", sv.person_period)
 r_ = sv.person_period(sd, "id", "t", "e")
 check("person_period: columns id, period, y, then df's other columns except duration and event, index 0..N-1",
       list(r_.columns) == ["id", "period", "y", "x", "grp", "reg"] and r_.index.equals(pd.RangeIndex(len(r_)))
-      and re.findall(r'"([^"]+)"', " ".join(blk).split("columns:")[1].split("Example")[0]) == ["period", "y"],
+      and re.findall(r'"([^"]+)"', " ".join(
+          l_ for i_, l_ in enumerate(blk) if l_.startswith("      columns:") or (l_.startswith(" " * 14) and any(
+              b_.startswith("      columns:") for b_ in blk[:i_])))) == ["period", "y"],
       list(r_.columns))   # mutation r0: '"y"' anywhere in the block matched the Example line
 check("person_period: y is 1 only in the last period of an event spell; period runs 1..ceil(duration)",
       r_["y"].sum() == sd["e"].sum() and r_.groupby("id")["period"].max().equals(sd.set_index("id")["t"].astype(int)))
@@ -921,18 +923,42 @@ for case, a_, f_, kw in ((" (level)", lv, lv.shift(1).bfill(), {}),
 
 # ============================================================ 11. v2.7.3: rule T (decision D2)
 def _public_functions():
-    """{"module.function": offset of its block's Returns line from the def, or None} from the source (AST, no import)."""
+    """{"module.function" or "module.Class.method": offset of its block's Returns line from the def, or None}, from the
+    source (AST, no import). Review r1-B B8: methods of public classes, async defs, defs inside a module-level if/try,
+    and modules in subfolders count too; N3: the marker is "(v<major>.<minor>", any version."""
     out = {}
-    for f_ in sorted((ROOT / "econometrics" / "scripts").glob("*.py")):
-        if f_.name.startswith("_"):
+    base = ROOT / "econometrics" / "scripts"
+
+    def defs(body):
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                yield node
+            elif isinstance(node, (ast.If, ast.Try, ast.With)):
+                for part in ("body", "orelse", "finalbody", "handlers"):
+                    for sub in getattr(node, part, []) or []:
+                        yield from defs(sub.body if isinstance(sub, ast.ExceptHandler) else [sub])
+
+    def offset(node, lines_):
+        body = lines_[node.lineno - 1:node.end_lineno]
+        return next((i for i, l_ in enumerate(body)
+                     if l_.strip().startswith("Returns") and re.search(r"\(v\d+\.\d+", l_)), None)
+
+    for f_ in sorted(base.rglob("*.py")):
+        rel = f_.relative_to(base).with_suffix("")
+        if any(p_.startswith("_") for p_ in rel.parts):
             continue
         src = f_.read_text(encoding="utf-8")
         lines_ = src.splitlines()
-        for node in ast.parse(src).body:
-            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
-                body = lines_[node.lineno - 1:node.end_lineno]
-                k_ = next((i for i, l_ in enumerate(body) if l_.strip().startswith("Returns") and "(v2.7." in l_), None)
-                out[f"{f_.stem}.{node.name}"] = k_
+        mod = ".".join(rel.parts)
+        for node in defs(ast.parse(src).body):
+            if node.name.startswith("_"):
+                continue
+            if isinstance(node, ast.ClassDef):
+                for m_ in node.body:
+                    if isinstance(m_, (ast.FunctionDef, ast.AsyncFunctionDef)) and not m_.name.startswith("_"):
+                        out[f"{mod}.{node.name}.{m_.name}"] = offset(m_, lines_)
+            else:
+                out[f"{mod}.{node.name}"] = offset(node, lines_)
     return out
 
 
@@ -949,7 +975,7 @@ check("rule T: no function with a block is still in the pending list (the list o
       not (with_block & set(pending)), sorted(with_block & set(pending)))
 check("rule T: every name in the pending list is a public function that exists",
       set(pending) <= set(pub), sorted(set(pending) - set(pub)))
-check("rule T: a block marked '(v2.7.' further than 12 lines from its def does not count",
+check("rule T: a block marked '(v<version>' further than 12 lines from its def does not count",
       all(v_ is None or v_ <= MAX_OFFSET for v_ in pub.values()),
       {k_: v_ for k_, v_ in pub.items() if v_ is not None and v_ > MAX_OFFSET})
 check(f"rule T: the 21 functions of v2.7.3 and the 13 of v2.7.2 have a block ({len(with_block)} of {len(pub)} public "

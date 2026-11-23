@@ -134,6 +134,131 @@ check("ph_test: show=False prints nothing; the default prints the table as befor
       out_q == "" and "Proportional-hazards check (Schoenfeld residuals vs time)" in out_d and r_q.equals(r_d),
       (out_q[:80], out_d[:80]))
 
+# ============================================================ 5. review r1-B: evaluate, diebold_mariano, survival, PT
+import diagnostics as dg  # noqa: E402
+
+def evw(act_, fs_, **kw):
+    t_, o_ = run(fc.evaluate, act_, fs_, **kw)
+    return t_, o_, t_.attrs["warnings"]
+
+
+def all_named(t_, w_):
+    """Every inf or NaN outside the DM columns, and every DM NaN outside the benchmark's row, has a warning on its model."""
+    for k_ in t_.index:
+        cols = [c_ for c_ in t_.columns if not c_.startswith("DM")]
+        bad = [c_ for c_ in cols if not np.isfinite(float(t_.loc[k_, c_]))]
+        dm_bad = "DM_p" in t_.columns and k_ != t_.index[0] and not np.isfinite(float(t_.loc[k_, "DM_p"]))
+        if (bad or dm_bad) and not any(x_.startswith(f"{k_}: ") for x_ in w_):
+            return False
+    return True
+
+
+a0 = pd.Series(np.arange(40.0))
+t_, o_, w_ = evw(a0, {"b": a0 + 1.0, "m": a0 - 2.0})
+check("evaluate (B1): a constant, non-zero loss difference -> 'constant', no 'identical' claim, no DM verdict",
+      np.isnan(t_.loc["m", "DM_p"]) and any("loss difference is constant" in x_ and "identical" not in x_ for x_ in w_)
+      and "accurate than" not in o_ and all_named(t_, w_), (w_, o_[-300:]))
+rng5 = np.random.default_rng(55)
+e2_ = rng5.normal(size=200)
+e1_ = np.sqrt(e2_ ** 2 + 0.3)                     # loss 1 = loss 2 + 0.3 up to rounding
+r_ = dg.diebold_mariano(e1_, e2_, show=False)
+check("diebold_mariano (B10): a loss difference constant up to rounding gives NaN (it gave 5.5e16 and p = 0)",
+      np.isnan(r_["p"]) and np.isnan(r_["DM_HLN"]), r_)
+e1g = np.sqrt(e2_ ** 2 + 0.3 * (1 + 1e-9 * rng5.normal(size=200)))
+r_ = dg.diebold_mariano(e1g, e2_, show=False)
+check("diebold_mariano: a genuine variation of 1e-9 (relative) is still tested (the other side of the cut)",
+      np.isfinite(r_["p"]), r_)
+alt = 1 + 0.5 * (-1.0) ** np.arange(60) + 1e-3 * rng5.normal(size=60)    # loss differences alternate: LRV < 0 at h = 2
+aa = pd.Series(np.zeros(60))
+t_, o_, w_ = evw(aa, {"b": pd.Series(np.ones(60)), "m": pd.Series(np.sqrt(alt))}, h=2)
+check("evaluate (B1): a long-run variance that is not positive (h = 2) is named as such, not 'identical forecasts'",
+      np.isnan(t_.loc["m", "DM_p"]) and any("long-run variance" in x_ and "(h = 2" in x_ for x_ in w_)
+      and not any("identical" in x_ for x_ in w_), w_)
+t_, o_, w_ = evw(pd.Series([1.0]), {"b": pd.Series([1.5]), "m": pd.Series([0.2])})
+check("evaluate (B1): one common row -> 'only 1 period(s) in common'", any("only 1 period(s)" in x_ for x_ in w_), w_)
+try:
+    fc.evaluate(pd.Series([1.0, 2.0], index=[0, 1]), {"b": pd.Series([1.0, 2.0], index=[5, 6])}, show=False)
+    msg_ = ""
+except ValueError as x_:
+    msg_ = str(x_)
+check("evaluate (B2): no common row is refused with the reason (not an 'overflow' warning)", "no row where" in msg_, msg_)
+t_, o_, w_ = evw(a, {"perfect": a.copy(), "m": fa}, show=False)
+check("evaluate (B3): a perfect benchmark makes Theil's U inf, and the warning says why",
+      np.isinf(t_.loc["m", "Theil_U(RMSE/RMSE_naive)"]) and any("Theil's U is inf because the benchmark perfect" in x_
+                                                                  for x_ in w_) and all_named(t_, w_), w_)
+up = pd.Series(np.abs(rng5.normal(size=80)) + 0.1)
+t_, o_, w_ = evw(pd.Series(rng5.normal(size=80)), {"b": up, "m": up + 0.1}, direction="return", show=False)
+check("evaluate: a forecast that is always up gives PT_p_value NaN, and a warning names the direction test",
+      np.isnan(t_.loc["b", "PT_p_value"]) and any(x_.startswith("b: ") and "direction test" in x_ for x_ in w_)
+      and all_named(t_, w_), w_)
+f_inf = fb.copy()
+f_inf.iloc[4] = np.inf
+t_, o_, w_ = evw(a, {"a": fa, "b": f_inf}, show=False)
+check("evaluate: an inf in one forecast only is attributed to 'the forecast', not to actual",
+      any(x_.startswith("b: the forecast has infinite values") for x_ in w_)
+      and not any(x_.startswith("a: ") and "infinite" in x_ for x_ in w_), w_)
+for case, act_, fs, _w in cases:
+    t_, o_, w_ = evw(act_, fs, show=False)
+    check(f"evaluate ({case}): every inf or NaN of the table has a warning on its model", all_named(t_, w_), w_)
+# the numbers from their definitions (review r1-B B9: the check above compared with the implementation)
+check("evaluate: RMSE, MAE and bias of a row from their definitions (bias = mean of actual − forecast)",
+      abs(tab_c.loc["b", "RMSE"] - np.sqrt(np.mean((a - fb) ** 2))) < 1e-12
+      and abs(tab_c.loc["b", "MAE"] - np.mean(np.abs(a - fb))) < 1e-12
+      and abs(tab_c.loc["b", "bias(mean error)"] - np.mean(a - fb)) < 1e-12)
+check("forecast_metrics: bias is actual − forecast (a forecast 1 too low gives +1)",
+      abs(fc.forecast_metrics(a, a - 1.0)["bias(mean error)"] - 1.0) < 1e-12)
+
+# pesaran_timmermann (B7)
+a7_ = rng5.normal(size=100)
+f7_ = a7_ + rng5.normal(size=100)
+a7n = a7_.copy()
+a7n[:5] = np.nan
+a7z = a7_.copy()
+a7z[5:9] = 0.0
+check("pesaran_timmermann: NaN and zero rows are left out of n", fc.pesaran_timmermann(a7n, f7_)["n"] == 95
+      and fc.pesaran_timmermann(a7z, f7_)["n"] == 96)
+r_ = fc.pesaran_timmermann(a7_, np.abs(f7_) + 0.1)
+check("pesaran_timmermann: a forecast that is always up gives PT and p NaN with a finite hit rate, as the block says",
+      np.isnan(r_["PT"]) and np.isnan(r_["p_one_sided"]) and np.isfinite(r_["hit_rate"]) and r_["n"] == 100
+      and '("always up")' in fc.pesaran_timmermann.__doc__, r_)
+
+# person_period (B5, B6, N5)
+pp_df = pd.DataFrame({"id": [1, 2, 3], "t": [0.0, 3.0, 4.5], "e": [1, 0, 1], "x": [0.1, 0.2, 0.3]})
+r_ = sv.person_period(pp_df, "id", "t", "e", interval=2.0)
+check("person_period: duration 0 keeps its event in period 1; interval 2 gives ceil(t/2) periods; the event in the last "
+      "period; the id keeps its integer type (B6, N5)",
+      r_.groupby("id")["period"].max().tolist() == [1, 2, 3] and r_.groupby("id")["y"].sum().tolist() == [1, 0, 1]
+      and r_.loc[r_.id == 3, "y"].tolist() == [0, 0, 1] and pd.api.types.is_integer_dtype(r_["id"]), r_)
+for bad_df, why in ((pd.concat([pp_df, pp_df.iloc[:1]]), "repeated id"), (pp_df.assign(y=1.0), "a column named y")):
+    try:
+        sv.person_period(bad_df, "id", "t", "e")
+        ok_ = False
+    except ValueError:
+        ok_ = True
+    check(f"person_period: {why} raises ValueError (B5: the rows were multiplied, events counted twice)", ok_)
+
+# kaplan_meier S(t) by hand, logrank and ph_test thresholds, cox model-based SE (B4, B9)
+km_df = pd.DataFrame({"t": [2.0, 3, 3, 5, 6, 8, 8, 9, 11, 12], "e": [1, 1, 0, 1, 1, 0, 1, 1, 0, 1]})
+s_hand = 1.0
+for tt_ in sorted(km_df.loc[km_df.e == 1, "t"].unique()):
+    if tt_ <= 7:
+        s_hand *= 1 - ((km_df.t == tt_) & (km_df.e == 1)).sum() / (km_df.t >= tt_).sum()
+kmr = sv.kaplan_meier(km_df, "t", "e", times=[7], show=False)
+check("kaplan_meier: S(7) equals the product-limit estimate computed by hand",
+      abs(kmr["summary"].loc["all", "S(7)"] - s_hand) < 1e-12, (kmr["summary"].loc["all", "S(7)"], s_hand))
+rng6 = np.random.default_rng(6)
+grp_df = pd.DataFrame({"g": np.repeat([0, 1], 60)})
+grp_df["t"] = np.ceil(rng6.exponential(np.where(grp_df.g == 1, 3.0, 9.0)))
+grp_df["e"] = 1
+lr_ = sv.logrank(grp_df, "t", "e", "g")
+check("logrank: the conclusion follows p at 5%", (lr_["p"] < 0.05) == (lr_["conclusion"] == "survival differs across groups"))
+check("ph_test: PH_violated_5% is p < 0.05 on every row", (r_q["PH_violated_5%"] == (r_q["p"] < 0.05)).all())
+import statsmodels.formula.api as smf  # noqa: E402
+res_m, tab_m = sv.cox(sd, "x", "t", "e", robust=False, show=False)
+ref_m = smf.phreg("t ~ x", sd, status=sd["e"].astype(int), ties="efron").fit()
+check("cox (robust=False): se is the model-based SE of statsmodels' phreg (fitted directly)",
+      abs(tab_m.loc["x", "se"] - float(np.asarray(ref_m.bse)[0])) < 1e-10, (tab_m.loc["x", "se"], ref_m.bse))
+
 # ============================================================ 4. version, CHANGELOG, counts (no "be the last version")
 import json  # noqa: E402
 import re  # noqa: E402

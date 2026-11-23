@@ -1,7 +1,7 @@
-# Rule T (v2.7.3, decision D2 of the user): public functions of econometrics/scripts that do not yet have a
-# "Returns … (v2.7.…" block within 12 lines of their def. Frozen: this list only shrinks. A new public function
-# needs a block (tests/test_api_docs.py fails otherwise); when a function gets one, remove its line here.
-# One "module.function" per line, sorted.
+# Rule T (v2.7.3, decision D2 of the user): public functions of econometrics/scripts (and public methods of public
+# classes, as module.Class.method) that do not yet have a "Returns … (v<major>.<minor>…" block within 12 lines of
+# their def. Frozen: this list only shrinks. A new public function needs a block (tests/test_api_docs.py fails
+# otherwise); when a function gets one, remove its line here. One name per line, sorted.
 backtest.bootstrap_sharpe_ci
 backtest.buy_and_hold
 backtest.compare
@@ -41,6 +41,14 @@ causal.select_bandwidth
 causal.synth
 causal.twfe_covariate_diagnostic
 causal.twfe_weights
+dag.DAG.ancestors
+dag.DAG.children
+dag.DAG.descendants
+dag.DAG.observed
+dag.DAG.parents
+dag.DAG.remove_outgoing
+dag.DAG.to_mermaid
+dag.DAG.topological_order
 dag.adjustment_report
 dag.adjustment_sets
 dag.classify_controls
