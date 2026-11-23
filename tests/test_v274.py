@@ -96,5 +96,23 @@ check("review-var-omitted: the case has the skill-fired grader of the other revi
       (CASE / "graders" / "skill-fired.md").read_text(encoding="utf-8")
       == (CASE.parent / "review-null-result" / "graders" / "skill-fired.md").read_text(encoding="utf-8"))
 
+
+# ------------------------------------------------------------------ version and CHANGELOG (found by title, not "the top")
+import reporting  # noqa: E402
+cl = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+heads = re.findall(r"^## v(\d+(?:\.\d+)+) — ", cl, re.M)
+check("CHANGELOG has a v2.7.4 entry, right before v2.7.3's", "2.7.4" in heads and "2.7.3" in heads
+      and heads.index("2.7.4") + 1 == heads.index("2.7.3"), heads[:4])
+e274 = cl.split("## v2.7.4 — ", 1)[1].split("\n## v", 1)[0] if "## v2.7.4 — " in cl else ""
+check("the v2.7.4 entry names each changed function and the two rules",
+      all(w in e274 for w in ("logrank", "cox", "ph_test", "wild_cluster_bootstrap", "stationarity_many",
+                              "classify_controls", "2500", "iv_report", "_has_intercept", "review-var-omitted",
+                              "interpretation-rules.md")))
+mk = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+vers = {p_.get("version") for p_ in mk.get("plugins", [])}
+v_ok = tuple(int(x) for x in reporting.SKILL_VERSION.split(".")) >= (2, 7, 4)   # a version that grows: >=
+check("SKILL_VERSION is 2.7.4 or later and equals the marketplace's version", v_ok and vers == {reporting.SKILL_VERSION},
+      (reporting.SKILL_VERSION, vers))
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
