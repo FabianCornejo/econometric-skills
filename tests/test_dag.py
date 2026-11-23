@@ -152,6 +152,11 @@ check("v2.7.4 a parent already blocked by the minimal set (the confounder Age ->
 c_d = dag.classify_controls(dag.DAG(base74 + "; X -> D; D -> Tenure"), "X", "Y")
 check("v2.7.4 a parent that descends from x (X -> D -> Tenure) is not a collider parent",
       c_d.loc["Tenure", "role"] == "mediator (x -> v -> y)", c_d.loc["Tenure", "role"])
+c_dy = dag.classify_controls(dag.DAG(base74 + "; X -> D; D -> Tenure; D -> Y"), "X", "Y")
+check("v2.7.4 a parent that descends from x and also causes y (X -> D -> Tenure, D -> Y) is itself a mediator: not "
+      "named as a collider parent (controlling it would remove part of the effect)",
+      c_dy.loc["Tenure", "role"] == "mediator (x -> v -> y)" and c_dy.loc["D", "role"] == "mediator (x -> v -> y)",
+      c_dy[["role"]].to_dict())
 c_2 = dag.classify_controls(dag.DAG(base74 + "; M -> Tenure; M -> Y; N -> Tenure; N -> Y", latent=["M"]), "X", "Y")
 check("v2.7.4 two collider parents are both named, sorted, and only the latent one is called unobserved",
       "x -> v <- M, N ->" in c_2.loc["Tenure", "role"] and "with M unobserved" in c_2.loc["Tenure", "recommendation"],
