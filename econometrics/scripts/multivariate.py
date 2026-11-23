@@ -648,6 +648,17 @@ def johansen_trace(df, k_ar_diff: int = 1, deterministic: str = "ci", level: flo
                    seed: int = 0, show: bool = True) -> dict:
     """Johansen trace test with the deterministic case stated and critical values simulated for it.
 
+    Returns a dict (v2.7.3: keys exact):
+      "table"          DataFrame, one row per r0 = 0..k-1, columns ["r0", "eigenvalue", "trace",
+                       "crit <1-level> (simulated)", "reject"]: the critical-value column's name depends on level,
+                       "crit 95% (simulated)" with the default 0.05, "crit 90% (simulated)" with 0.10
+      "rank"           int, the first r0 not rejected (k when all are)
+      "deterministic"  str, as passed
+      "k_ar_diff", "reps"  int, as passed
+      "drift_used"     float, 0.0 unless deterministic="co"
+      "method"         str
+    Example (r = the result): r["rank"]; r["table"]["trace"]; r["table"].iloc[:, 3]
+
     'ci' (default): the levels have no drift and the cointegrating relation has an intercept (most macro and
     price series in levels around a mean); 'co': the levels drift (unrestricted constant); 'li': the
     relation has a trend (constant unrestricted; statsmodels' 'coli'); 'n': no deterministic terms. Critical
@@ -690,6 +701,26 @@ def vecm_fit(df, k_ar_diff: int | None = None, rank: int | None = None, determin
              maxlags: int = 8, ic: str = "bic", alpha: float = ALPHA, reps: int = 2000, seed: int = 0,
              show: bool = True) -> dict:
     """Vector error-correction model with the checks that make alpha and beta readable.
+
+    Returns a dict (v2.7.3: keys exact); with rank 0 or k (no VECM to fit) only the first five keys:
+      "k_ar_diff", "rank"  int, lags in differences and cointegration rank (chosen, or as passed)
+      "trace_test"     DataFrame, johansen_trace's "table" (critical-value column "crit <1-alpha> (simulated)")
+      "deterministic"  str, as passed
+      "message"        str, only with rank 0 or k (what to fit instead)
+      "results"        statsmodels VECMResults, only with 0 < rank < k
+      "beta"           DataFrame, only with 0 < rank < k; index = df's column names, columns ["ect1", …, "ect<r>"],
+                       normalised on the first r variables (the first variable's beta in ect1 is 1)
+      "alpha", "se_alpha", "p_alpha"  DataFrame, only with 0 < rank < k; same index and columns as beta
+      "adjustment"     DataFrame, only with 0 < rank < k; columns ["relation", "variable", "beta", "alpha",
+                       "se_alpha", "p_alpha", "reading"]
+      "weak_exogeneity"  DataFrame, only with 0 < rank < k; columns ["variable", "wald", "df", "p", "reading"]
+      "error_correcting"  bool, only with 0 < rank < k
+      "levels_var_root_moduli"  array, only with 0 < rank < k
+      "unit_roots"     int, only with 0 < rank < k
+      "largest_other_root"  float, only with 0 < rank < k (NaN when every root is a unit root)
+      "warnings"       list of str, only with 0 < rank < k
+      "method"         str, only with 0 < rank < k
+    Example (r = the result): r["beta"].iloc[1, 0]; r["beta"].loc[r["beta"].index[1], "ect1"]; r.get("message")
 
     Lags of the differences by ic (statsmodels select_order) unless given; cointegration rank by the Johansen
     trace test at `alpha` for the deterministic case (johansen_trace) unless given (rank 0: no long-run
