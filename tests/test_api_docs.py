@@ -825,7 +825,7 @@ check("adf_bootstrap: an I(2) series gives the warning about the AR on the diffe
 
 # A12: stationarity_many with no column keeps its columns
 check("stationarity_many: an empty frame gives the two columns and no row",
-      list(dg.stationarity_many(ts3.iloc[:, :0], show=False).columns) == ["Series", "Suggested order"])
+      list(dg.stationarity_many(ts3.iloc[:, :0], show=False).columns) == ["Series", "Suggested order", "Warnings"])
 
 # ============================================================ 9. v2.7.3: survival
 n4 = 150

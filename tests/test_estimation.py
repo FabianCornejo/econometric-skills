@@ -214,5 +214,27 @@ check("test-inversion CI is coherent with the p-value for H0: beta = 0 (reject a
       all(c for c, _ in coherent), f"p-values {[p for _, p in coherent]}")
 check("Webb weights chosen automatically with 8 clusters", "webb" in w["method"] and w["n_clusters"] == 8)
 
+
+# --- v2.7.4: a missing cluster label in the wild cluster bootstrap ---------------------------------------------
+rng74 = np.random.default_rng(7402)
+G74 = 20
+w74 = pd.DataFrame({"g": np.repeat(np.arange(G74), 15).astype(float)})
+ug = rng74.normal(size=G74)
+w74["x"] = rng74.normal(size=len(w74)) + ug[w74["g"].astype(int)]
+w74["y"] = 0.3 * w74["x"] + rng74.normal(size=len(w74)) + rng74.normal(size=G74)[w74["g"].astype(int)]
+w74n = w74.copy(); w74n.loc[w74n["g"] == 0, "g"] = np.nan
+try:
+    est.wild_cluster_bootstrap(w74n, "y ~ x", "x", "g", B=199, ci=False); msg = "no error"; okr = False
+except ValueError as e_:
+    msg = str(e_); okr = "15 missing label" in msg and "'g'" in msg
+check("v2.7.4 wild_cluster_bootstrap: a missing cluster label raises (before: merged into the last cluster)", okr, msg)
+# boundary: a missing label only on rows the formula drops anyway (y missing there) is not an error, and the result is
+# the one on the complete rows
+w74d = w74n.copy(); w74d.loc[w74d["g"].isna(), "y"] = np.nan
+r_d = est.wild_cluster_bootstrap(w74d, "y ~ x", "x", "g", B=199, ci=False)
+r_c = est.wild_cluster_bootstrap(w74d.dropna(), "y ~ x", "x", "g", B=199, ci=False)
+check("v2.7.4 wild_cluster_bootstrap: a missing label on rows the formula drops is ignored (same as complete rows)",
+      r_d["n_clusters"] == 19 and r_d["n"] == 285 and abs(r_d["se"] - r_c["se"]) < 1e-14 and r_d["p"] == r_c["p"])
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

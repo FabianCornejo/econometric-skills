@@ -419,7 +419,7 @@ def wild_cluster_bootstrap(df: pd.DataFrame, formula: str, coef: str, cluster: s
        weights when G < 12, since Rademacher allows only 2^G distinct draws) and recompute t*;
     4. p = share of |t*| >= |t|.
     The confidence interval inverts the test over a grid of nulls with the same draws.
-    Report the number of clusters, not only N.
+    Report the number of clusters, not only N. A missing cluster label raises ValueError (v2.7.4).
     Caveat: what matters for a binary treatment that varies at the cluster level is the number of
     TREATED clusters. With very few treated clusters (roughly 1-5) every cluster-based method,
     WCR included, can over- or under-reject (MacKinnon & Webb 2017, 2018): add randomization
@@ -432,7 +432,12 @@ def wild_cluster_bootstrap(df: pd.DataFrame, formula: str, coef: str, cluster: s
     X = base.model.exog
     y = base.model.endog
     rows = base.model.data.row_labels
-    g_codes = pd.Series(df.loc[rows, cluster]).astype("category").cat.codes.to_numpy()
+    g_lab = pd.Series(df.loc[rows, cluster])
+    if g_lab.isna().any():
+        # v2.7.4: cat.codes gave -1 to a missing label and those rows were merged into the last cluster, silently
+        raise ValueError(f"cluster {cluster!r} has {int(g_lab.isna().sum())} missing label(s) among the rows used: "
+                         "drop those rows or fill the cluster id (a missing label is not a cluster of its own)")
+    g_codes = g_lab.astype("category").cat.codes.to_numpy()
     G = int(g_codes.max() + 1)
     n, K = X.shape
     k = names.index(coef)
