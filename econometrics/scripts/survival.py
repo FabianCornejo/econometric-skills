@@ -27,6 +27,17 @@ from scipy import stats
 
 def kaplan_meier(df: pd.DataFrame, duration: str, event: str, group: str | None = None,
                  times: list[float] | None = None, show: bool = True) -> dict:
+    """Kaplan-Meier survival curves (statsmodels SurvfuncRight), overall or by group.
+
+    Returns a dict (v2.7.3: keys exact):
+      "summary"        DataFrame, index named "group" (the group's values, or "all" without group), columns
+                       ["n", "events", "censored_share", "median_survival", "median_ci_low", "median_ci_high"],
+                       then one column "S(<t>)" per value in times (e.g. "S(12)"); the median and its CI are NaN
+                       when the curve does not reach 0.5, and the CI's upper limit can be inf
+      "curves"         dict keyed like the summary's index, each a DataFrame indexed by "Time" with columns
+                       ["Surv prob", "Surv prob SE", "num at risk", "num events"]
+    Example (r = the result): r["summary"]["median_survival"]; r["curves"][r["summary"].index[0]]["Surv prob"]
+    """
     import statsmodels.api as sm
     groups = [(None, df)] if group is None else list(df.groupby(group))
     curves, summ = {}, []
@@ -56,6 +67,15 @@ def kaplan_meier(df: pd.DataFrame, duration: str, event: str, group: str | None 
 
 
 def logrank(df: pd.DataFrame, duration: str, event: str, group: str, strata: str | None = None) -> dict:
+    """Log-rank test (statsmodels survdiff) of H0: the same survival curve in every group (within strata if given).
+
+    Returns a dict (v2.7.3: keys exact):
+      "chi2"           float
+      "df"             int, number of groups − 1
+      "p"              float
+      "conclusion"     str, read at 5%
+    Example (r = the result): r["p"]
+    """
     from statsmodels.duration.survfunc import survdiff
     chi2, p = survdiff(df[duration].astype(float), df[event].astype(int), df[group],
                        strata=None if strata is None else df[strata])
@@ -145,6 +165,15 @@ def _cox_sandwich(mod, res, groups, ties: str):
 def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "efron",
         strata: str | None = None, cluster: str | None = None, robust: bool = True, show: bool = True):
     """Cox proportional hazards. formula = right-hand side only, e.g. "age + C(sex) + C(region)".
+
+    Returns a tuple (v2.7.3): unpack it, res, tab = cox(...) (one name gets the tuple):
+      res              statsmodels PHRegResults (.params, .bse, .model, .schoenfeld_residuals); res.hr_table is tab
+      tab              DataFrame, index = the design's covariate names ("x", "C(sex)[T.m]"), columns
+                       ["coef", "HR", "HR_ci_low", "HR_ci_high", "se", "p"]; coef and se on the log-hazard scale,
+                       HR = exp(coef) with a 95% CI; se robust (default), clustered (cluster=) or model-based
+                       (robust=False)
+    Example (r = the result): r[1]["HR"]; r[1].loc[r[1].index[0], "p"]; r[0].params
+
     No intercept is estimated (the baseline hazard absorbs it), so do not add '0 +'.
     cluster: groups for a sandwich (Lin-Wei) variance; robust=True uses each row as its
     own group when no cluster is given. Returns (result, hazard-ratio table).
@@ -189,9 +218,18 @@ def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "
     return res, tab
 
 
-def ph_test(res, df: pd.DataFrame, duration: str, event: str, transform: str = "rank") -> pd.DataFrame:
-    """Proportional-hazards check in the spirit of Grambsch & Therneau (1994):
-    correlate each covariate's Schoenfeld residuals (at event times) with a function
+def ph_test(res, df: pd.DataFrame, duration: str, event: str, transform: str = "rank",
+            show: bool = True) -> pd.DataFrame:
+    """Proportional-hazards check in the spirit of Grambsch & Therneau (1994).
+
+    Returns a DataFrame (v2.7.3: columns exact), one row per covariate of res:
+      columns ["rho", "p", "PH_violated_5%"]; index named "covariate" (the names of cox's tab); "PH_violated_5%" is
+              True when p < 0.05
+    res is the first element of cox()'s tuple, and df, duration, event the ones given to cox. show=False
+    (v2.7.3) returns the table without printing it (before, it always printed).
+    Example (r = the result): r.loc[r.index[0], "p"]; r["PH_violated_5%"].any()
+
+    Correlates each covariate's Schoenfeld residuals (at event times) with a function
     of time. A significant correlation means the hazard ratio changes over time.
     Remedies: stratify on that variable, interact it with time, or split the period."""
     d = df.dropna(subset=[duration, event])
@@ -207,13 +245,21 @@ def ph_test(res, df: pd.DataFrame, duration: str, event: str, transform: str = "
         rho, p = stats.pearsonr(r[m], tt)
         rows.append({"covariate": nm, "rho": rho, "p": p, "PH_violated_5%": p < 0.05})
     tab = pd.DataFrame(rows).set_index("covariate")
-    print("\nProportional-hazards check (Schoenfeld residuals vs time)")
-    print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
+    if show:
+        print("\nProportional-hazards check (Schoenfeld residuals vs time)")
+        print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
     return tab
 
 
 def person_period(df: pd.DataFrame, id: str, duration: str, event: str, interval: float = 1.0) -> pd.DataFrame:
     """Expand spells to one row per unit and period at risk (discrete-time hazard).
+
+    Returns a DataFrame (v2.7.3: columns exact), one row per unit and period at risk, index 0..N-1:
+      columns: the id column (named as id), then "period" (1, 2, …, ceil(duration / interval)) and "y" (1 only in
+              the last period of a spell that ended in the event, else 0), then every other column of df except
+              duration and event (already merged on id: no need to merge df again)
+    Example (r = the result): r["y"].sum(); r["period"].max()
+
     Then estimate e.g. smf.logit("y ~ C(period) + x", pp) or a cloglog GLM; time-varying
     covariates can be merged on (id, period)."""
     rows = []
