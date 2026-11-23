@@ -352,7 +352,12 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
     "DM_vs_<benchmark>", "DM_p"], in this order, "MAPE_%" only with direction="level" and no actual equal to 0;
     "directional_accuracy" and "PT_p_value" only with direction="return" or with last_actual=; the two DM columns
     only with two or more forecasts (NaN in the benchmark's row). Theil's U is relative to the benchmark whatever
-    its name. direction is "level" (default) or "return". Example: tab.loc["model", "DM_p"]."""
+    its name. direction is "level" (default) or "return". Example: tab.loc["model", "DM_p"].
+      attrs["warnings"]  list of str (v2.7.3), one "<model>: <cause>" for each model with an inf metric or a DM test
+                         not computed (infinite values in the input, squared errors that overflow, a loss difference
+                         with no positive variance); empty when there is none; filled with show=False and with one
+                         forecast too
+    Example (r = the result): r.loc[r.index[0], "RMSE"]; r.attrs["warnings"]"""
     from diagnostics import diebold_mariano
     df = pd.concat({"actual": actual, **forecasts}, axis=1).dropna()
     if last_actual is not None:
@@ -368,6 +373,25 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
             m["DM_p"] = dm["p"]
         rows[k] = m
     tab = pd.DataFrame(rows).T
+    # v2.7.3 (review r2 N6 of v2.7.2): the cause of an inf metric or of a DM test not computed, per model, also with
+    # show=False and with one forecast (before, it was printed only in the DM lines of show=True)
+    inf_in = {c: bool(np.isinf(df[c].to_numpy(dtype=float)).any()) for c in df.columns}
+    warns = []
+    for k in forecasts:
+        if inf_in["actual"] or inf_in[k]:
+            src = "actual" if inf_in["actual"] else "the forecast"
+            warns.append(f"{k}: {src} has infinite values (e.g. a percentage change from zero), so its RMSE, MAE and "
+                         "bias are not usable; drop or fix those rows first")
+        elif not np.isfinite(float(tab.loc[k, "RMSE"])):
+            warns.append(f"{k}: the squared errors overflow (errors above ~1e154 in absolute value), so its RMSE is "
+                         "inf; rescale the series (e.g. to thousands) first")
+        elif k != benchmark and not np.isfinite(float(tab.loc[k, "DM_p"])):
+            if inf_in[benchmark] or not np.isfinite(float(tab.loc[benchmark, "RMSE"])):
+                warns.append(f"{k}: DM test against {benchmark} not computed: see the warning on {benchmark}")
+            else:
+                warns.append(f"{k}: DM test not computed (the loss difference with {benchmark} has no positive "
+                             "variance, e.g. identical forecasts); compare the RMSE column")
+    tab.attrs["warnings"] = warns
     if show:
         has_inf = bool(np.isinf(df.to_numpy(dtype=float)).any())
         print(f"\nOut-of-sample evaluation ({len(df)} forecasts, benchmark = {benchmark})")
@@ -394,6 +418,10 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
             better = tab.loc[k, "RMSE"] < tab.loc[benchmark, "RMSE"]
             print(f"  {k}: " + ("significantly " if p < ALPHA else "not significantly ")
                   + ("more" if better else "less") + f" accurate than {benchmark} (DM p = {p:.3f})")
+        # v2.7.3: the benchmark's own warning (and the only one with a single forecast) has no DM line above
+        for w in warns:
+            if w.startswith(f"{benchmark}: "):
+                print("  Warning: " + w)
     return tab
 
 
@@ -693,8 +721,10 @@ def conformal_intervals(actual, forecast, alpha: float = ALPHA, method: str = "a
                     f"{n_empty} empty" if n_inf else
                     f"{n_empty} of the {int(evaluated.sum())} interval(s) computed ({T} with an actual) are empty")
         # review r2 R7: with empty intervals only, the advice is about gamma (they need a level pushed past 0)
+        # v2.7.3 (v2.7.2 validation): the action was applied to one model only; it now says it is per model
         act_txt = ("report those rows as 'no informative interval', not as an interval, and give the coverage of the "
-                   "finite intervals next to the total" if n_inf else
+                   "finite intervals next to the total for these intervals, and do the same for every other model whose "
+                   "intervals you report" if n_inf else
                    "report those rows as sure misses, not as intervals; they appear only when gamma is large enough to "
                    "push the level past 0 after a run of covered targets: a smaller gamma makes them rarer")
         warns.append(_finding("notice", head_txt

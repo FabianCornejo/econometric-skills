@@ -183,6 +183,36 @@ def sub_check(name, ent, key, actual, word="keys", alternatives=False):
     check(f"{name}: {key!r} {word} as documented", ok, (ls, list(actual)))
 
 
+# ============================================================ v2.7.3: helpers for DataFrame and tuple results
+def df_check(name, blk, res, case=""):
+    """columns [...] of the block equal the DataFrame's columns; attrs["…"] entries are its attrs, all and only."""
+    txt = " ".join(l_.strip() for l_ in blk)
+    cols = lists(txt, "columns")
+    check(f"{name}{case}: the block's columns [...] are the DataFrame's columns, in order",
+          bool(cols) and cols[0] == list(res.columns), (cols[:1], list(res.columns)))
+    doc_attrs = set(re.findall(r'^ {6}attrs\["([^"]+)"\]', "\n".join(blk), flags=re.M))
+    check(f"{name}{case}: the attrs the block names are the result's attrs, all and only",
+          doc_attrs == set(res.attrs), (sorted(doc_attrs), sorted(res.attrs)))
+
+
+EXAMPLES = {}        # name -> number of example expressions run
+
+
+def example_check(name, blk, r, case=""):
+    """Each expression of the block's "Example (r = the result): …" line runs on the result r."""
+    line = [l_ for l_ in blk if l_.strip().startswith("Example (r = the result): ")]
+    exprs = [e_.strip().rstrip(".") for e_ in line[0].split(": ", 1)[1].split("; ")] if line else []
+    bad = []
+    for e_ in exprs:
+        try:
+            eval(e_, {"r": r, "np": np, "pd": pd})   # noqa: S307  (the text the agent would copy)
+        except Exception as x_:                      # noqa: BLE001
+            bad.append((e_, repr(x_)))
+    check(f"{name}{case}: the block has an Example line and each of its {len(exprs)} expressions runs on a real result",
+          len(line) == 1 and exprs and not bad, (line, bad))
+    EXAMPLES[name] = len(exprs)
+
+
 os.chdir(tempfile.mkdtemp())
 rng = np.random.default_rng(72)
 n = 300
@@ -429,6 +459,11 @@ try:
     msg = ""
 except ValueError as e_:
     msg = str(e_)
+# v2.7.3: the attrs the block names are the table's, and the Example line runs
+doc_attrs = set(re.findall(r'^ {6}attrs\["([^"]+)"\]', "\n".join(blk), flags=re.M))
+check("evaluate: the attrs the block names are the table's attrs, all and only (v2.7.3)", doc_attrs == set(ev.attrs),
+      (doc_attrs, set(ev.attrs)))
+example_check("evaluate", blk, ev)
 check("evaluate: a direction other than 'level' or 'return' is refused (it only dropped MAPE_% before)",
       "direction must be 'level' or 'return'" in msg and 'direction is "level" (default) or "return"' in txt, msg)
 
@@ -441,36 +476,6 @@ for meth in ("aci", "rolling", "split"):
     sub_check(f"conformal_intervals ({meth})", ent, "used", ci["used"].keys())
     sub_check(f"conformal_intervals ({meth})", ent, "guarantee", ci["guarantee"].keys())
     check(f"conformal_intervals ({meth}): the table is indexed like actual", ci["table"].index.equals(act.index))
-
-# ============================================================ v2.7.3: helpers for DataFrame and tuple results
-def df_check(name, blk, res, case=""):
-    """columns [...] of the block equal the DataFrame's columns; attrs["…"] entries are its attrs, all and only."""
-    txt = " ".join(l_.strip() for l_ in blk)
-    cols = lists(txt, "columns")
-    check(f"{name}{case}: the block's columns [...] are the DataFrame's columns, in order",
-          bool(cols) and cols[0] == list(res.columns), (cols[:1], list(res.columns)))
-    doc_attrs = set(re.findall(r'^ {6}attrs\["([^"]+)"\]', "\n".join(blk), flags=re.M))
-    check(f"{name}{case}: the attrs the block names are the result's attrs, all and only",
-          doc_attrs == set(res.attrs), (sorted(doc_attrs), sorted(res.attrs)))
-
-
-EXAMPLES = {}        # name -> number of example expressions run
-
-
-def example_check(name, blk, r, case=""):
-    """Each expression of the block's "Example (r = the result): …" line runs on the result r."""
-    line = [l_ for l_ in blk if l_.strip().startswith("Example (r = the result): ")]
-    exprs = [e_.strip().rstrip(".") for e_ in line[0].split(": ", 1)[1].split("; ")] if line else []
-    bad = []
-    for e_ in exprs:
-        try:
-            eval(e_, {"r": r, "np": np, "pd": pd})   # noqa: S307  (the text the agent would copy)
-        except Exception as x_:                      # noqa: BLE001
-            bad.append((e_, repr(x_)))
-    check(f"{name}{case}: the block has an Example line and each of its {len(exprs)} expressions runs on a real result",
-          len(line) == 1 and exprs and not bad, (line, bad))
-    EXAMPLES[name] = len(exprs)
-
 
 # ============================================================ 6. v2.7.3: diagnostics
 rng3 = np.random.default_rng(73)
