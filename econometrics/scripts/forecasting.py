@@ -264,7 +264,18 @@ def benchmarks(y: pd.Series, start: int | float = 0.8, h: int = 1,
 
 
 def pesaran_timmermann(actual, forecast) -> dict:
-    """Pesaran-Timmermann (1992) test. H0: forecast signs are independent of actual signs."""
+    """Pesaran-Timmermann (1992) test. H0: forecast signs are independent of actual signs.
+
+    Returns a dict (v2.7.3: keys exact):
+      "hit_rate"       float, share of signs predicted right (rows where actual or forecast is 0 are left out)
+      "hit_rate_under_H0"  float, the share expected by chance
+      "PT"             float, the statistic
+      "p_one_sided"    float, H1: better than chance (it treats the rows as independent: anticonservative with
+                       overlapping horizons)
+      "n"              int, rows used
+    With n < 10 every value but n is NaN (e.g. a forecast that never predicts a change).
+    Example (r = the result): r["p_one_sided"]; r["hit_rate"]
+    """
     a = np.sign(np.asarray(actual, float))
     f = np.sign(np.asarray(forecast, float))
     m = (a != 0) & (f != 0)
@@ -287,6 +298,17 @@ def pesaran_timmermann(actual, forecast) -> dict:
 def forecast_metrics(actual, forecast, naive=None, insample_scale: float | None = None,
                      direction: str = "level", last_actual=None) -> dict:
     """Accuracy metrics.
+
+    Returns a dict (v2.7.3: keys exact):
+      "RMSE", "MAE", "bias(mean error)"  float (bias = mean of actual − forecast)
+      "MAPE_%"         float, only with direction="level" and no actual equal to 0
+      "Theil_U(RMSE/RMSE_naive)"  float, only with naive=
+      "MASE"           float, only with insample_scale=
+      "directional_accuracy", "PT_p_value"  float, only with direction="return" or last_actual=
+                       (pesaran_timmermann's hit_rate and p_one_sided)
+    An inf or NaN (an infinite input, a squared error that overflows) comes back without a word; evaluate() says
+    which (v2.7.3: in tab.attrs["warnings"]).
+    Example (r = the result): r["RMSE"]; r["MAE"]
 
     direction='level'  : directional accuracy of the predicted CHANGE vs the actual change;
                          needs last_actual (value at the origin) — e.g. naive forecast for h=1.
