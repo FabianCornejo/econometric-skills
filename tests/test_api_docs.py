@@ -955,15 +955,16 @@ def _public_functions():
         src = f_.read_text(encoding="utf-8")
         lines_ = src.splitlines()
         mod = ".".join(rel.parts)
-        for node in defs(ast.parse(src).body):
-            if node.name.startswith("_"):
-                continue
-            if isinstance(node, ast.ClassDef):
-                for m_ in node.body:
-                    if isinstance(m_, (ast.FunctionDef, ast.AsyncFunctionDef)) and not m_.name.startswith("_"):
-                        out[f"{mod}.{node.name}.{m_.name}"] = offset(m_, lines_)
-            else:
-                out[f"{mod}.{node.name}"] = offset(node, lines_)
+        def walk(body, prefix):   # review r2 R7: methods inside an if of the class body, nested classes
+            for node in defs(body):
+                if node.name.startswith("_"):
+                    continue
+                if isinstance(node, ast.ClassDef):
+                    walk(node.body, f"{prefix}.{node.name}")
+                else:
+                    out[f"{prefix}.{node.name}"] = offset(node, lines_)
+
+        walk(ast.parse(src).body, mod)
     return out
 
 

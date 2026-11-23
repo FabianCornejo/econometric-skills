@@ -1977,14 +1977,18 @@ def tobit(y, X, lower_limit: float | None = 0.0, upper_limit: float | None = Non
 # Forecasting
 # =============================================================================
 def _dm_constant(l1: np.ndarray, l2: np.ndarray) -> bool:
-    """v2.7.3 (review r1-B B10): the loss difference is constant up to the rounding of the losses (its range at most
-    64·eps of the largest loss). Exactly constant differences (identical losses, or one always the other plus c) and
-    those that differ only by rounding (5.5e16 and p = 0 before) have no variance to test."""
+    """v2.7.3 (review r1-B B10, r2 R1): the loss difference is constant up to rounding: every d_i within 64·eps of its
+    own row's scale, max(l1_i, l2_i, |c|), of c, the difference in the row with the smallest losses. Exactly constant differences (identical losses, or
+    one always the other plus c) and those that differ only by rounding (5.5e16 and p = 0 before) have no variance
+    to test. The scale is per row (r2 R1: the largest loss of the sample let one huge loss common to both models
+    call a varying difference constant)."""
     d = l1 - l2
     if len(d) == 0 or not np.isfinite(d).all():
         return False
-    top = float(np.max(np.abs(np.r_[l1, l2])))
-    return bool(np.ptp(d) <= 64 * np.finfo(float).eps * top)
+    row = np.maximum(np.abs(l1), np.abs(l2))
+    c = float(d[np.argmin(row)])          # the row with the smallest losses has the most precise difference
+    scale = np.maximum(row, abs(c))
+    return bool(np.all(np.abs(d - c) <= 64 * np.finfo(float).eps * scale))
 
 
 def _dm_why(l1: np.ndarray, l2: np.ndarray, h: int) -> str:

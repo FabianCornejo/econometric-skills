@@ -745,8 +745,8 @@ def vecm_fit(df, k_ar_diff: int | None = None, rank: int | None = None, determin
     jt = johansen_trace(d, k_ar_diff=k_ar_diff, deterministic=deterministic, level=alpha, reps=reps, seed=seed,
                         show=False)
     trace = jt["table"]
-    if rank is not None and not 0 <= int(rank) <= k:
-        raise ValueError(f"rank must be between 0 and the number of series ({k}); got {rank}")   # v2.7.3 (r1-A A4)
+    if rank is not None and not (float(rank).is_integer() and 0 <= int(rank) <= k):   # v2.7.3 (r1-A A4, r2 R8)
+        raise ValueError(f"rank must be a whole number between 0 and the number of series ({k}); got {rank}")
     r = int(jt["rank"]) if rank is None else int(rank)
     out = {"k_ar_diff": k_ar_diff, "rank": r, "trace_test": trace, "deterministic": deterministic}
     if r == 0 or r == k:

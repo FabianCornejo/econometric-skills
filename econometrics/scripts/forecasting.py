@@ -394,7 +394,9 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
                         "inf; rescale the series (e.g. to thousands) first")
         elif k != benchmark and not np.isfinite(float(tab.loc[k, "DM_p"])):
             if inf_in[benchmark] or not np.isfinite(float(tab.loc[benchmark, "RMSE"])):
-                mine.append(f"{k}: DM test against {benchmark} not computed: see the warning on {benchmark}")
+                mine.append(f"{k}: DM test against {benchmark} not computed: see the warning on {benchmark}"
+                            + (" (Theil's U, relative to it, is not usable either)"
+                               if "Theil_U(RMSE/RMSE_naive)" in tab.columns else ""))
             else:
                 # review r1-B B1: the reason of diebold_mariano itself (constant difference, too few rows, h > 1)
                 why = _dm_why((a_ - df[k].to_numpy(dtype=float)) ** 2,
@@ -411,12 +413,18 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
                 other.remove("Theil_U(RMSE/RMSE_naive)")
             pt = [c for c in other if c in ("directional_accuracy", "PT_p_value")]
             if pt:
+                miss = int(last_actual.isna().sum()) if last_actual is not None else 0   # r2 R9b
                 mine.append(f"{k}: {' and '.join(pt)} NaN: the direction test needs at least 10 rows where actual and "
-                            "the forecast are not zero, and some variation in the forecast's sign")
+                            "the forecast are not zero, and some variation in the forecast's sign"
+                            + (f"; last_actual is missing on {miss} of the {len(df)} rows" if miss else ""))
             rest = [c for c in other if c not in pt]
             if rest:
                 mine.append(f"{k}: {', '.join(rest)} not finite"
                             + (" (MAPE divides by actual: an actual value very close to 0)" if "MAPE_%" in rest else ""))
+        # r2 R9a: with an inf benchmark, the other models' Theil's U is 0 (finite and misleading); said once per model
+        if (not mine and k != benchmark and "Theil_U(RMSE/RMSE_naive)" in tab.columns
+                and not np.isfinite(float(tab.loc[benchmark, "RMSE"]))):
+            mine.append(f"{k}: Theil's U is not usable (the benchmark {benchmark}'s RMSE is not finite)")
         warns += mine
     tab.attrs["warnings"] = warns
     if show:

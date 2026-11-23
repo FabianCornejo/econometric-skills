@@ -278,6 +278,58 @@ ref_m = smf.phreg("t ~ x", sd, status=sd["e"].astype(int), ties="efron").fit()
 check("cox (robust=False): se is the model-based SE of statsmodels' phreg (fitted directly)",
       abs(tab_m.loc["x", "se"] - float(np.asarray(ref_m.bse)[0])) < 1e-10, (tab_m.loc["x", "se"], ref_m.bse))
 
+# ============================================================ 6. review r2: the cut of diebold_mariano, person_period, vecm
+rng7 = np.random.default_rng(0)
+for sc_ in (1e-6, 1.0, 1e6):                     # losses of order 1e-12, 1 and 1e12
+    e2s = rng7.normal(size=200) * sc_
+    ps = [dg.diebold_mariano(np.sqrt(e2s ** 2 + 0.3 * sc_ ** 2 * (1 + rel * rng7.normal(size=200))), e2s,
+                             show=False)["p"] for rel in (0.0, 1e-11, 1e-14, 1e-15)]
+    check(f"diebold_mariano, losses of order {sc_ ** 2:g}: constant up to rounding (0 and 1e-15) NaN; a genuine "
+          "variation of 1e-11 and 1e-14 tested (review r2 R2: both sides of the cut)",
+          np.isnan(ps[0]) and np.isnan(ps[3]) and np.isfinite(ps[1]) and np.isfinite(ps[2]), ps)
+for big in (1e7, 1e8, 1e12):
+    e2o = rng7.normal(size=200)
+    e1o = 1.5 * rng7.normal(size=200)
+    e1o[0] = e2o[0] = big
+    r_ = dg.diebold_mariano(e1o, e2o, show=False)
+    check(f"diebold_mariano: one huge loss ({big:g}) common to both models does not make a varying difference "
+          "'constant' (review r2 R1)", np.isfinite(r_["p"]) and r_["DM_HLN"] > 0, r_)
+for hi in (1e5, 1e8, 1e10):
+    e2m = np.r_[1e-3 * rng7.normal(size=100), hi * rng7.normal(size=100)]
+    check(f"diebold_mariano: a difference constant across rows with losses up to {hi ** 2:g} is caught",
+          np.isnan(dg.diebold_mariano(np.sqrt(e2m ** 2 + 0.3), e2m, show=False)["p"]))
+for bad_df, why in ((pp_df.rename(columns={"id": "y"}), "an id named y"),
+                    (pp_df.assign(t=[1.0, -2.0, 3.0]), "a negative duration"),
+                    (pp_df.assign(t=[1.0, np.nan, 3.0]), "a missing duration")):
+    idc = "y" if why == "an id named y" else "id"
+    try:
+        sv.person_period(bad_df, idc, "t", "e")
+        msg_ = ""
+    except ValueError as x_:
+        msg_ = str(x_)
+    check(f"person_period: {why} raises its own ValueError (review r2 R5, R6)",
+          ("rename them first" in msg_) if why == "an id named y" else ("missing or negative" in msg_), msg_)
+import multivariate as mv  # noqa: E402
+ts7 = pd.DataFrame(rng7.normal(size=(120, 2)).cumsum(axis=0), columns=["a", "b"])
+try:
+    mv.vecm_fit(ts7, k_ar_diff=1, rank=1.7, reps=19, show=False)
+    msg_ = ""
+except ValueError as x_:
+    msg_ = str(x_)
+check("vecm_fit: rank 1.7 is refused, not read as 1 (review r2 R8)", "whole number" in msg_, msg_)
+f_inf_b = fa.copy()
+f_inf_b.iloc[3] = np.inf
+t_, o_, w_ = evw(a, {"bench": f_inf_b, "m": fb}, show=False)
+check("evaluate: with an inf benchmark the other model's Theil's U (0) is named not usable (review r2 R9a)",
+      any(x_.startswith("m: ") and "Theil's U" in x_ and "not usable" in x_ for x_ in w_)
+      and sum(x_.startswith("m: ") for x_ in w_) == 1, w_)
+ret = pd.Series(rng7.normal(size=60))
+la = pd.Series(rng7.normal(size=60))
+la.iloc[:55] = np.nan
+t_, o_, w_ = evw(ret.cumsum(), {"m": ret.cumsum().shift(1).bfill()}, last_actual=la, show=False)
+check("evaluate: a direction test without enough rows because last_actual is missing says so (review r2 R9b)",
+      any("last_actual is missing on 55 of the 60 rows" in x_ for x_ in w_), w_)
+
 # ============================================================ 4. version, CHANGELOG, counts (no "be the last version")
 import json  # noqa: E402
 import re  # noqa: E402
