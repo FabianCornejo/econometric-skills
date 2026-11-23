@@ -357,7 +357,8 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
                          not computed (infinite values in the input, squared errors that overflow, a loss difference
                          with no positive variance); empty when there is none; filled with show=False and with one
                          forecast too
-    Example (r = the result): r.loc[r.index[0], "RMSE"]; r.attrs["warnings"]"""
+    Example (r = the result): r.loc[r.index[0], "RMSE"]; r.attrs["warnings"]
+    """
     from diagnostics import diebold_mariano
     df = pd.concat({"actual": actual, **forecasts}, axis=1).dropna()
     if last_actual is not None:
