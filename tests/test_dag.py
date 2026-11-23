@@ -130,37 +130,46 @@ check("missing edge x -> y: warning raised and optimal set unavailable; with the
 
 
 # --- v2.7.4: a mediator that is also a collider (chat of 2026-11-18: Tenure with an unobserved parent M) ----------
+# criterion of review r1 S1; the graphs G1-G4 are the reviewer's
 base74 = "Age -> X; Age -> Y; X -> Y; X -> Tenure; Tenure -> Y"
-c_lat = dag.classify_controls(dag.DAG(base74 + "; M -> Tenure; M -> Y", latent=["M"]), "X", "Y")
-r_t = c_lat.loc["Tenure"]
-check("v2.7.4 mediator with an unobserved parent that causes y: 'mediator ... and collider', naming M",
-      r_t["role"] == "mediator (x -> v -> y) and collider (x -> v <- M -> ... -> y)", r_t["role"])
-check("v2.7.4 ... and the recommendation says the direct effect is not identified by adjusting for it",
-      r_t["recommendation"].startswith("do not control") and "M unobserved" in r_t["recommendation"]
-      and "not even the direct effect" in r_t["recommendation"], r_t["recommendation"])
-c_obs = dag.classify_controls(dag.DAG(base74 + "; M -> Tenure; M -> Y"), "X", "Y")
-r_o = c_obs.loc["Tenure"]
-check("v2.7.4 same graph with M observed: still marked, and the recommendation says to control M for the direct effect",
-      "and collider (x -> v <- M" in r_o["role"] and "control M too" in r_o["recommendation"]
-      and "unobserved" not in r_o["recommendation"], r_o.to_dict())
-c_w = dag.classify_controls(dag.DAG(base74 + "; W -> Tenure"), "X", "Y")
-check("v2.7.4 a parent of the mediator with no other path to y (W -> Tenure only) does not make it a collider",
-      c_w.loc["Tenure", "role"] == "mediator (x -> v -> y)", c_w.loc["Tenure", "role"])
-c_a = dag.classify_controls(dag.DAG(base74 + "; Age -> Tenure"), "X", "Y")
-check("v2.7.4 a parent already blocked by the minimal set (the confounder Age -> Tenure) does not make it a collider",
-      c_a.loc["Tenure", "role"] == "mediator (x -> v -> y)", c_a.loc["Tenure", "role"])
-c_d = dag.classify_controls(dag.DAG(base74 + "; X -> D; D -> Tenure"), "X", "Y")
-check("v2.7.4 a parent that descends from x (X -> D -> Tenure) is not a collider parent",
-      c_d.loc["Tenure", "role"] == "mediator (x -> v -> y)", c_d.loc["Tenure", "role"])
-c_dy = dag.classify_controls(dag.DAG(base74 + "; X -> D; D -> Tenure; D -> Y"), "X", "Y")
-check("v2.7.4 a parent that descends from x and also causes y (X -> D -> Tenure, D -> Y) is itself a mediator: not "
-      "named as a collider parent (controlling it would remove part of the effect)",
-      c_dy.loc["Tenure", "role"] == "mediator (x -> v -> y)" and c_dy.loc["D", "role"] == "mediator (x -> v -> y)",
-      c_dy[["role"]].to_dict())
-c_2 = dag.classify_controls(dag.DAG(base74 + "; M -> Tenure; M -> Y; N -> Tenure; N -> Y", latent=["M"]), "X", "Y")
-check("v2.7.4 two collider parents are both named, sorted, and only the latent one is called unobserved",
-      "x -> v <- M, N ->" in c_2.loc["Tenure", "role"] and "with M unobserved" in c_2.loc["Tenure", "recommendation"],
-      c_2.loc["Tenure"].to_dict())
+COLL = "mediator (x -> v -> y) and collider (controlling it opens x -> v <- "
+NOT_ID = "nothing observed closes it: the direct effect is not identified by adjusting for v"
+G_FORM = "no single regression works"
+
+
+def role_rec(edges, v, latent=(), x="X", y="Y"):
+    c_ = dag.classify_controls(dag.DAG(edges, latent=list(latent)), x, y)
+    return c_.loc[v, "role"], c_.loc[v, "recommendation"]
+
+
+r_, c_ = role_rec(base74 + "; M -> Tenure; M -> Y", "Tenure", ["M"])
+check("v2.7.4 latent parent M of the mediator that causes y: 'and collider', M named and marked unobserved; nothing "
+      "observed closes it", r_ == COLL + "M ... -> y)" and "M (unobserved)" in c_ and NOT_ID in c_, (r_, c_))
+r_, c_ = role_rec(base74 + "; M -> Tenure; M -> Y", "Tenure")
+check("v2.7.4 same graph with M observed: case (a), control the mediator together with M",
+      r_ == COLL + "M ... -> y)" and c_.endswith("control v together with M") and "unobserved" not in c_, (r_, c_))
+for lab_, e_ in (("W -> Tenure only", base74 + "; W -> Tenure"), ("Age -> Tenure (Age in the set)", base74 + "; Age -> Tenure"),
+                 ("X -> D -> Tenure only", base74 + "; X -> D; D -> Tenure")):
+    r_, _ = role_rec(e_, "Tenure")
+    check(f"v2.7.4 not marked when the mediator's link to y is not confounded: {lab_}", r_ == "mediator (x -> v -> y)", r_)
+r_, c_ = role_rec(base74 + "; X -> D; D -> Tenure; D -> Y", "Tenure")
+check("v2.7.4 G1, a confounder induced by the treatment (X -> D -> Tenure, D -> Y): marked through D; case (b), "
+      "g-formula, not one regression", r_ == COLL + "D ... -> y)" and G_FORM in c_ and "D closes the path" in c_, (r_, c_))
+r_, c_ = role_rec(base74 + "; X -> W; W -> Tenure; U -> W; U -> Y", "Tenure", ["U"])
+check("v2.7.4 G2 (X -> W -> Tenure, W <- U -> Y, U latent): Tenure marked through W; case (b) with W",
+      r_ == COLL + "W ... -> y)" and G_FORM in c_ and "W closes the path" in c_, (r_, c_))
+r_, c_ = role_rec(base74 + "; U -> Tenure; U -> Wo; Wo -> Y", "Tenure", ["U"])
+check("v2.7.4 G3 (U -> Tenure, U -> Wo -> Y, U latent): case (a), the observed Wo closes the path (review r1 S2: the "
+      "old text said 'not identified')", r_ == COLL + "U ... -> y)" and c_.endswith("control v together with Wo")
+      and NOT_ID not in c_, (r_, c_))
+g4 = "X -> M1; M1 -> M2; M2 -> Y; X -> Y; U -> M1; U -> Y"
+r1_, c1_ = role_rec(g4, "M1", ["U"])
+r2_, c2_ = role_rec(g4, "M2", ["U"])
+check("v2.7.4 G4, a chain of mediators with M1 <- U -> Y: M1 not identified; M2 marked through M1, case (b)",
+      r1_ == COLL + "U ... -> y)" and NOT_ID in c1_ and r2_ == COLL + "M1 ... -> y)" and G_FORM in c2_, (c1_, c2_))
+r_, c_ = role_rec(base74 + "; M -> Tenure; M -> Y; N -> Tenure; N -> Y", "Tenure", ["M"])
+check("v2.7.4 two parents (M latent, N observed): both named, sorted; N alone does not close M's path, so not identified",
+      r_ == COLL + "M, N ... -> y)" and "M (unobserved), N" in c_ and NOT_ID in c_, (r_, c_))
 # the claim itself, by simulation: linear SEM of the first graph, regression of Y on X with Age and Tenure
 rng74 = np.random.default_rng(7405)
 nn = 200_000
@@ -175,6 +184,18 @@ bias = -0.8 * (0.9 * 0.8) / (0.9 ** 2 + 1.0)
 check("v2.7.4 simulation: controlling the mediator-collider gives neither the direct effect (1) nor the total; it "
       "matches 1 + the collider bias (closed form)", abs(b_ad - (1 + bias)) < 0.01 and abs(b_ad - 1) > 0.25,
       f"{b_ad:.4f} vs {1 + bias:.4f}")
+
+# case (a) by simulation (G3): with Wo in the regression the coefficient of X is the direct effect (1); without, not
+rng74b = np.random.default_rng(7406)
+age3, u3 = rng74b.normal(size=nn), rng74b.normal(size=nn)
+x3 = 0.5 * age3 + rng74b.normal(size=nn)
+ten3 = 0.8 * x3 + 0.9 * u3 + rng74b.normal(size=nn)
+wo3 = 0.9 * u3 + rng74b.normal(size=nn)
+y3 = 1.0 * x3 + 0.5 * ten3 + 0.7 * age3 + 0.8 * wo3 + rng74b.normal(size=nn)
+b_wo = np.linalg.lstsq(np.column_stack([np.ones(nn), x3, age3, ten3, wo3]), y3, rcond=None)[0][1]
+b_no = np.linalg.lstsq(np.column_stack([np.ones(nn), x3, age3, ten3]), y3, rcond=None)[0][1]
+check("v2.7.4 simulation of G3: controlling Tenure and Wo gives the direct effect (1, within 0.01); Tenure alone does not",
+      abs(b_wo - 1) < 0.01 and abs(b_no - 1) > 0.1, (round(b_wo, 4), round(b_no, 4)))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

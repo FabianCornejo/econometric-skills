@@ -227,6 +227,17 @@ def optimal_adjustment_set(g, x: str, y: str):
     return sorted(O)
 
 
+def _closing_set(g, a: str, b: str, given: set, candidates: list, max_size: int = 3):
+    """Smallest set W (up to max_size variables, among the first 15 candidates) with a and b d-separated given
+    `given` | W in g, or None."""
+    cand = candidates[:15]
+    for k in range(1, min(max_size, len(cand)) + 1):
+        for W in itertools.combinations(cand, k):
+            if d_separated(g, a, b, set(given) | set(W)):
+                return list(W)
+    return None
+
+
 def classify_controls(g, x: str, y: str) -> pd.DataFrame:
     """Role of every other variable relative to the effect of x on y, with a recommendation.
 
@@ -235,10 +246,13 @@ def classify_controls(g, x: str, y: str) -> pd.DataFrame:
     causes x but y only through x (controlling raises the variance and amplifies any remaining
     bias). Outcome predictor: causes y, not x: optional, improves precision. Collider: not a
     cause of x or y, but controlling for it opens a path that a valid set had closed (M-bias).
-    v2.7.4: a mediator that is also a collider is named so, with the parents that make it one: a parent P of v that
-    is not x, nor a descendant of x, nor in the minimal set, and stays connected to y given that set and x once v's
-    own edges out are removed (x -> v <- P -> ... -> y). Controlling such a v does not even give the direct effect; with P observed,
-    controlling P closes that path, and with P unobserved the direct effect is not identified by adjusting for v."""
+    v2.7.4 (criterion of review r1 S1): a mediator v whose link to y is confounded is named "mediator ... and
+    collider": with v's own edges out removed, v is still connected to y given the minimal set and x, so controlling v
+    opens x -> v <- P ... y through its parents P. The recommendation then says which of three cases holds, by a
+    search of small observed sets (up to 3) that close those paths: (a) a set not affected by x: control it together
+    with v for the controlled direct effect; (b) only sets that contain a variable affected by x (a
+    treatment-induced confounder): no single regression gives the direct effect (g-formula or sequential
+    g-estimation); (c) none: the direct effect is not identified by adjusting for v."""
     g = _as_dag(g)
     desc_x = g.descendants(x) - {x}
     cn = _causal_nodes(g, x, y)
@@ -253,15 +267,23 @@ def classify_controls(g, x: str, y: str) -> pd.DataFrame:
         if v in cn:
             role, rec = "mediator (x -> v -> y)", "do not control: removes part of the effect"
             gv = DAG([(a, b) for a, b in g.edges if a != v] + [(u, None) for u in g.nodes], g.latent)
-            ps = sorted(p_ for p_ in g.parents(v) - desc_x - {x} - base    # a parent in the set blocks the path
-                        if not d_separated(gv, p_, y, base | {x}))
-            if ps:
-                lat = [p_ for p_ in ps if p_ in g.latent]
-                role = f"mediator (x -> v -> y) and collider (x -> v <- {', '.join(ps)} -> ... -> y)"
-                rec = ("do not control: removes part of the effect, and controlling it opens x -> v <- "
-                       f"{', '.join(ps)}; " + (f"with {', '.join(lat)} unobserved, not even the direct effect is "
-                                               "identified by adjusting for v" if lat else
-                                               f"for the direct effect, control {', '.join(ps)} too"))
+            cond = base | {x}
+            if not d_separated(gv, v, y, cond):
+                ps = sorted(p_ for p_ in g.parents(v) - {x} - base if not d_separated(gv, p_, y, cond))
+                lab = ", ".join(p_ + (" (unobserved)" if p_ in g.latent else "") for p_ in ps)
+                role = f"mediator (x -> v -> y) and collider (controlling it opens x -> v <- {', '.join(ps)} ... -> y)"
+                free = g.observed - {x, y, v} - g.descendants(v) - g.descendants(y) - base
+                w_a = _closing_set(gv, v, y, cond, sorted(free - desc_x))
+                w_b = None if w_a is not None else _closing_set(gv, v, y, cond, sorted(free))
+                rec = "do not control: removes part of the effect, and controlling it opens a path through " + lab + "; "
+                if w_a is not None:
+                    rec += "for the controlled direct effect, control v together with " + ", ".join(w_a)
+                elif w_b is not None:
+                    rec += ("for the controlled direct effect no single regression works: " + ", ".join(w_b)
+                            + " closes the path but is itself affected by x (use the g-formula or sequential "
+                              "g-estimation)")
+                else:
+                    rec += "nothing observed closes it: the direct effect is not identified by adjusting for v"
         elif v in g.descendants(y) - {y}:
             role, rec = "descendant of the outcome (consequence of y)", "do not control: conditioning on it biases the effect"
         elif v in desc_x:

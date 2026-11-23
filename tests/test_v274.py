@@ -28,7 +28,7 @@ CASE = ROOT / "econometrics" / "evals" / "routing" / "review-var-omitted"
 g_txt = (CASE / "graders" / "answer.md").read_text(encoding="utf-8")
 m = re.search(r"^pattern: '(.*)'$", g_txt, re.M)
 PAT = m.group(1) if m else ""
-GOOD = [  # answers that name the omitted driver, or measurement and filtering (the point of the v2.7.4 rules)
+GOOD = [  # review r1 S4 added the last 8; answers that name the omitted driver, or measurement and filtering (the point of the v2.7.4 rules)
     'A conclusão confunde precedência preditiva com causalidade, e uma variável omitida (petróleo, açúcar) pode mover os dois.',
     'Há risco de viés de variável omitida: a inflação ficou de fora do VAR.',
     'O VAR bivariado deixa de fora causas comuns, como o preço do petróleo; com elas o resultado pode sumir.',
@@ -49,6 +49,14 @@ GOOD = [  # answers that name the omitted driver, or measurement and filtering (
     'Precisa de um VAR com as variáveis que ficaram de fora antes de qualquer leitura causal.',
     'Variáveis relevantes omitidas no VAR (petróleo) tornam a leitura causal inválida.',
     'O câmbio pode apenas antecipar um fator comum, não causar o etanol.',
+    'O preço do petróleo, que afeta os dois preços, não está no VAR.',
+    'O relatório ignora determinantes comuns.',
+    'Pode haver um choque comum que move as duas séries.',
+    'Há variáveis relevantes não incluídas.',
+    'Uma variável ausente do VAR pode explicar o resultado.',
+    'The VAR omits oil prices, a common driver of both.',
+    'Faltam controles: petróleo e câmbio influenciam ambos.',
+    'O petróleo pode estar por trás das duas séries.',
 ]
 BAD = [  # answers that miss it: generic Granger caveats, other checks, or the prompt echoed back
     'A conclusão confunde precedência preditiva com causalidade.',
@@ -74,6 +82,11 @@ BAD = [  # answers that miss it: generic Granger caveats, other checks, or the p
     'Use dados diários para ter mais poder.',
     'A estabilidade do VAR precisa ser conferida pelas raízes.',
     'O VAR mensal só com câmbio e etanol mostra que o câmbio Granger-causa o etanol (p = 0,01).',
+    'O frete antecipa o componente em um mês.',
+    'O modelo está bem especificado: os resíduos são ruído branco.',
+    'A amostra de 240 meses é suficiente para o teste.',
+    'O relatório ignora a não estacionariedade das séries.',
+    'Ignorar a quebra estrutural é o problema principal.',
 ]
 pat = re.compile(PAT, re.I)
 check("review-var-omitted: the grader accepts each of the right answers (Python)",
