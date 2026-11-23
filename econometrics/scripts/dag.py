@@ -234,7 +234,11 @@ def classify_controls(g, x: str, y: str) -> pd.DataFrame:
     never control. Confounder: causes x and causes y other than through x. Instrument-like:
     causes x but y only through x (controlling raises the variance and amplifies any remaining
     bias). Outcome predictor: causes y, not x: optional, improves precision. Collider: not a
-    cause of x or y, but controlling for it opens a path that a valid set had closed (M-bias)."""
+    cause of x or y, but controlling for it opens a path that a valid set had closed (M-bias).
+    v2.7.4: a mediator that is also a collider is named so, with the parents that make it one: a parent P of v that
+    is not x, nor a descendant of x, nor in the minimal set, and stays connected to y given that set and x once v's
+    own edges out are removed (x -> v <- P -> ... -> y). Controlling such a v does not even give the direct effect; with P observed,
+    controlling P closes that path, and with P unobserved the direct effect is not identified by adjusting for v."""
     g = _as_dag(g)
     desc_x = g.descendants(x) - {x}
     cn = _causal_nodes(g, x, y)
@@ -248,6 +252,16 @@ def classify_controls(g, x: str, y: str) -> pd.DataFrame:
     for v in sorted(g.nodes - {x, y}):
         if v in cn:
             role, rec = "mediator (x -> v -> y)", "do not control: removes part of the effect"
+            gv = DAG([(a, b) for a, b in g.edges if a != v] + [(u, None) for u in g.nodes], g.latent)
+            ps = sorted(p_ for p_ in g.parents(v) - desc_x - {x} - base    # a parent in the set blocks the path
+                        if not d_separated(gv, p_, y, base | {x}))
+            if ps:
+                lat = [p_ for p_ in ps if p_ in g.latent]
+                role = f"mediator (x -> v -> y) and collider (x -> v <- {', '.join(ps)} -> ... -> y)"
+                rec = ("do not control: removes part of the effect, and controlling it opens x -> v <- "
+                       f"{', '.join(ps)}; " + (f"with {', '.join(lat)} unobserved, not even the direct effect is "
+                                               "identified by adjusting for v" if lat else
+                                               f"for the direct effect, control {', '.join(ps)} too"))
         elif v in g.descendants(y) - {y}:
             role, rec = "descendant of the outcome (consequence of y)", "do not control: conditioning on it biases the effect"
         elif v in desc_x:

@@ -128,5 +128,48 @@ r_ok = dag.adjustment_report(noedge + "; A -> P", "A", "P", show=False)
 check("missing edge x -> y: warning raised and optimal set unavailable; with the edge, no warning and O-set {S}",
       len(r_no["warnings"]) == 1 and r_no["optimal_set"] is None and not r_ok["warnings"] and r_ok["optimal_set"] == ["S"])
 
+
+# --- v2.7.4: a mediator that is also a collider (chat of 2026-11-18: Tenure with an unobserved parent M) ----------
+base74 = "Age -> X; Age -> Y; X -> Y; X -> Tenure; Tenure -> Y"
+c_lat = dag.classify_controls(dag.DAG(base74 + "; M -> Tenure; M -> Y", latent=["M"]), "X", "Y")
+r_t = c_lat.loc["Tenure"]
+check("v2.7.4 mediator with an unobserved parent that causes y: 'mediator ... and collider', naming M",
+      r_t["role"] == "mediator (x -> v -> y) and collider (x -> v <- M -> ... -> y)", r_t["role"])
+check("v2.7.4 ... and the recommendation says the direct effect is not identified by adjusting for it",
+      r_t["recommendation"].startswith("do not control") and "M unobserved" in r_t["recommendation"]
+      and "not even the direct effect" in r_t["recommendation"], r_t["recommendation"])
+c_obs = dag.classify_controls(dag.DAG(base74 + "; M -> Tenure; M -> Y"), "X", "Y")
+r_o = c_obs.loc["Tenure"]
+check("v2.7.4 same graph with M observed: still marked, and the recommendation says to control M for the direct effect",
+      "and collider (x -> v <- M" in r_o["role"] and "control M too" in r_o["recommendation"]
+      and "unobserved" not in r_o["recommendation"], r_o.to_dict())
+c_w = dag.classify_controls(dag.DAG(base74 + "; W -> Tenure"), "X", "Y")
+check("v2.7.4 a parent of the mediator with no other path to y (W -> Tenure only) does not make it a collider",
+      c_w.loc["Tenure", "role"] == "mediator (x -> v -> y)", c_w.loc["Tenure", "role"])
+c_a = dag.classify_controls(dag.DAG(base74 + "; Age -> Tenure"), "X", "Y")
+check("v2.7.4 a parent already blocked by the minimal set (the confounder Age -> Tenure) does not make it a collider",
+      c_a.loc["Tenure", "role"] == "mediator (x -> v -> y)", c_a.loc["Tenure", "role"])
+c_d = dag.classify_controls(dag.DAG(base74 + "; X -> D; D -> Tenure"), "X", "Y")
+check("v2.7.4 a parent that descends from x (X -> D -> Tenure) is not a collider parent",
+      c_d.loc["Tenure", "role"] == "mediator (x -> v -> y)", c_d.loc["Tenure", "role"])
+c_2 = dag.classify_controls(dag.DAG(base74 + "; M -> Tenure; M -> Y; N -> Tenure; N -> Y", latent=["M"]), "X", "Y")
+check("v2.7.4 two collider parents are both named, sorted, and only the latent one is called unobserved",
+      "x -> v <- M, N ->" in c_2.loc["Tenure", "role"] and "with M unobserved" in c_2.loc["Tenure", "recommendation"],
+      c_2.loc["Tenure"].to_dict())
+# the claim itself, by simulation: linear SEM of the first graph, regression of Y on X with Age and Tenure
+rng74 = np.random.default_rng(7405)
+nn = 200_000
+age, m_ = rng74.normal(size=nn), rng74.normal(size=nn)
+xx = 0.5 * age + rng74.normal(size=nn)
+ten = 0.8 * xx + 0.9 * m_ + rng74.normal(size=nn)
+yy = 1.0 * xx + 0.5 * ten + 0.7 * age + 0.8 * m_ + rng74.normal(size=nn)
+Xd = np.column_stack([np.ones(nn), xx, age, ten])
+b_ad = np.linalg.lstsq(Xd, yy, rcond=None)[0][1]
+# closed form of the X coefficient given Age and Tenure: direct effect 1 plus the collider bias -0.8*0.9*0.8/(0.9^2+1)
+bias = -0.8 * (0.9 * 0.8) / (0.9 ** 2 + 1.0)
+check("v2.7.4 simulation: controlling the mediator-collider gives neither the direct effect (1) nor the total; it "
+      "matches 1 + the collider bias (closed form)", abs(b_ad - (1 + bias)) < 0.01 and abs(b_ad - 1) > 0.25,
+      f"{b_ad:.4f} vs {1 + bias:.4f}")
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
