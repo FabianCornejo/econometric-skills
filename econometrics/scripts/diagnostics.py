@@ -312,6 +312,14 @@ def influence(res, top: int = 10, show: bool = True) -> pd.DataFrame:
 def chow(y, X, point, show: bool = True) -> dict:
     """Chow test for a break at a known point.
 
+    Returns a dict (v2.7.3: keys exact):
+      "F"              float, classical F with (k, n1 + n2 - 2k) df, k = columns of X plus the constant
+      "p"              float, its p-value
+      "robust_wald"    float, HC3 Wald test that the regime interactions are zero (heteroskedasticity-robust)
+      "robust_p"       float, its p-value (the one the printed verdict uses)
+      "n1", "n2"       int, rows before `point` and from `point` on
+    Example (r = the result): r["robust_p"]; r["F"]
+
     y: Series; X: DataFrame (no constant; it is added). point: index label where the
     second regime starts. The classical F is sensitive to heteroskedasticity, so a robust
     version (interactions with a regime dummy + HC3 Wald) is also reported.
@@ -407,6 +415,17 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
                  alpha: float = ALPHA) -> pd.DataFrame:
     """ADF, KPSS and DF-GLS with constant and with trend, in levels and first difference.
 
+    Returns a DataFrame (v2.7.3: columns exact), 4 rows with index 0-3 in this order: level/constant,
+    level/constant+trend, 1st difference/constant, 1st difference/constant+trend.
+      columns ["Series", "Transform", "Deterministics", "ADF", "p ADF", "lags", "DF-GLS", "p DF-GLS", "KPSS",
+               "p KPSS", "Verdict"]; "Transform" is "level" or "1st difference", "Deterministics" "constant" or
+               "constant+trend"; "lags" are the ADF lags
+      attrs["suggested_order"]  str, the summary ("I(0)", "I(1)", or a sentence starting with one of them,
+                                or "undetermined — …")
+      attrs["alpha"]            float, the level used
+      attrs["warnings"]         list of str, empty unless alpha is outside [0.01, 0.10]
+    Example (r = the result): r.attrs["suggested_order"]; r.loc[0, "p ADF"]; r["Verdict"].iloc[2]
+
     The verdict uses DF-GLS (more power) + KPSS (opposite null), both at level alpha (v2.4.7.2; default 0.05).
     The KPSS p-value is interpolated from a table bounded at [0.01, 0.10]: values at the bounds mean '≤0.01' or
     '≥0.10', so the KPSS decision is only exact for alpha in [0.01, 0.10]; outside that range a warning is
@@ -457,6 +476,13 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
 
 
 def stationarity_many(df: pd.DataFrame, show: bool = True, alpha: float = ALPHA) -> pd.DataFrame:
+    """stationarity() on each column of df; with show=True it prints each table and then the summary.
+
+    Returns a DataFrame (v2.7.3: columns exact), one row per column of df in its order, index 0..k-1 (not the names):
+      columns ["Series", "Suggested order"]; "Suggested order" is stationarity()'s attrs["suggested_order"]
+    The full table of each series is not kept: call stationarity(df[c]) for one series' p-values.
+    Example (r = the result): r.set_index("Series")["Suggested order"]
+    """
     summary = []
     for c in df.columns:
         t = stationarity(df[c], c, show=show, alpha=alpha)
@@ -494,6 +520,16 @@ def _engle_granger(y, xs, trend: str, autolag: str) -> dict:
 
 def cointegration(df: pd.DataFrame, k_ar_diff: int = 1, det_order: int = 0, show: bool = True) -> dict:
     """Engle-Granger (1st column as dependent) and Johansen (trace and max-eigenvalue, 5%).
+
+    Returns a dict (v2.7.3: keys exact):
+      "engle_granger"  dict, keys ["statistic", "p", "conclusion", "lags_aic", "statistic_bic", "p_bic", "lags_bic",
+                       "lag_sensitive"]; statistic/p are the run with residual-ADF lags by AIC; lags_* None
+                       when the lag cannot be read back; lag_sensitive True when AIC and BIC disagree at 5%
+      "johansen"       DataFrame, one row per rank, columns ["H0: rank ≤", "Trace", "5% CV trace", "Reject (trace)",
+                       "Max eigen", "5% CV max", "Reject (max)"]
+      "rank_trace", "rank_max_eigen"  int, the rank each Johansen test selects (k = number of columns: full rank)
+      "johansen_note"  str when the rank is full (do not read it as I(0) with det_order=0), else None
+    Example (r = the result): r["engle_granger"]["p"]; r["rank_trace"]
 
     det_order: -1 no deterministics, 0 constant, 1 linear trend.
     k_ar_diff: lags in differences (choose with vecm.select_order).
@@ -1635,6 +1671,16 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
 def hausman(fe_res, re_res, show: bool = True) -> dict:
     """Classical Hausman test FE vs RE (linearmodels). Fit both with cov_type="unadjusted".
 
+    Returns a dict (v2.7.3: keys exact):
+      "statistic"      float, NaN when V_FE − V_RE is zero
+      "df"             int, rank of V_FE − V_RE (0: not computed)
+      "p"              float, NaN when df is 0
+      "valid"          bool, False when V_FE − V_RE is not positive semidefinite
+      "classical_cov"  True when both fits used the unadjusted covariance, False when not (the result is then
+                       not interpretable), None when linearmodels does not say which covariance was used
+      "conclusion"     str
+    Example (r = the result): r["p"]; r["conclusion"]
+
     df = rank of V_FE − V_RE (v2.6.12): eigenvalues λ of D⁻¹(V_FE − V_RE)D⁻¹, D = √diag(V_FE), with |λ| ≤ 1e-8 times
     the largest eigenvalue of D⁻¹V_FE D⁻¹ count as zero, so the cut does not depend on units; the statistic uses the
     generalized inverse over the others. When V_FE − V_RE is zero the result is "Not computed"."""
@@ -1689,6 +1735,11 @@ def hausman(fe_res, re_res, show: bool = True) -> dict:
 def panel_bp_lm(resid_pooled: pd.Series, show: bool = True) -> dict:
     """Breusch-Pagan LM (Stata's xttest0): H0 = variance of the individual effect is zero (pooled OK).
 
+    Returns a dict (v2.7.3: keys exact):
+      "LM"             float, NaN when not defined (no entity with two or more rows, or all residuals zero)
+      "p"              float, chi²(1) p-value; NaN with LM
+    Example (r = the result): r["p"]
+
     resid_pooled: pooled OLS residuals with a (entity, time) MultiIndex. Balanced or unbalanced: the statistic
     is Baltagi and Li's (1990) n²/(2(ΣT_i² − n))·[e'De/e'e − 1]², D block-diagonal with T_i×T_i blocks of ones,
     n = ΣT_i, which is NT/(2(T−1))·[…]² when every T_i = T (v2.6.11: the mean T was used before, which over-rejects
@@ -1722,6 +1773,15 @@ def mundlak_test(df: pd.DataFrame, y: str, x_vary: list[str], entity: str, time:
                  x_const: list[str] | None = None, time_effects: bool = True, show: bool = True) -> dict:
     """Mundlak / correlated random effects (CRE) test: FE vs RE robust to heteroskedasticity and
     within-unit correlation (clustered by entity) — preferable to the classical Hausman test.
+
+    Returns a dict (v2.7.3: keys exact):
+      "statistic"      float, clustered Wald χ² that the unit means are jointly zero
+      "p"              float
+      "df"             int, number of unit means (len(x_vary))
+      "results"        linearmodels RandomEffects result: .params, .std_errors, .pvalues (no .bse)
+      "coefficients"   Series, the CRE coefficients (= results.params); the means are named "<x>_mean"
+      "balanced"       bool
+    Example (r = the result): r["p"]; r["coefficients"].filter(like="_mean")
 
     Estimates RE of y on x_vary, x_const, unit means of x_vary (and time dummies), then a clustered
     Wald test that the means are jointly zero. Rejection ⇒ the unit effect is correlated with x
@@ -1916,6 +1976,13 @@ def tobit(y, X, lower_limit: float | None = 0.0, upper_limit: float | None = Non
 # =============================================================================
 def diebold_mariano(e1, e2, h: int = 1, power: int = 2, show: bool = True) -> dict:
     """Diebold-Mariano test with the Harvey-Leybourne-Newbold small-sample correction.
+
+    Returns a dict (v2.7.3: keys exact):
+      "DM_HLN"         float, the HLN-corrected statistic (negative: model 1 more accurate)
+      "p"              float, two-sided, t(T − 1); NaN when not computed (a missing or infinite loss, identical
+                       losses, or a long-run variance that is not positive): the reason is printed when show=True
+      "mean_loss_diff" float, mean of |e1|^power − |e2|^power
+    Example (r = the result): r["p"]; r["DM_HLN"]
 
     e1, e2: forecast errors (actual − forecast) of models 1 and 2 over the same period;
     h: horizon; power 2 = squared loss, 1 = absolute loss.
