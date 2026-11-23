@@ -1271,7 +1271,8 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
       "table"          DataFrame, one row per coefficient (the formula's names: "Intercept", "x", ...), columns
                        ["OLS", "OLS se", "2SLS", "2SLS se", "2SLS p", "2SLS ci_low", "2SLS ci_high"]
       "first_stage"    DataFrame, one row per endogenous regressor, columns ["partial F", "partial F p", "partial R²",
-                       "strength"]; read the strength from F against 10 and 104.7, not from its p (see below)
+                       "strength"]; read the strength from F against 10 and 104.7, not from its p (see below);
+                       "partial F (HC3)" is added before "strength" when a row has leverage in [0.5, 1) (robust)
       "tests"          DataFrame, index named "test" with each test's full name, columns ["H0", "statistic", "p"]: the
                        endogeneity row first, "endogeneity (control function, HC1)" (robust, heteroskedastic, kernel)
                        or "endogeneity (Wu-Hausman)" (unadjusted, homoskedastic), then, only when overidentified,
@@ -1289,7 +1290,9 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
       "warnings"       list of str
       "high_leverage_rows"  list of row labels with leverage 1 from the instruments (robust cov_type)
       "endogeneity_linearmodels"  dict, keys ["test", "statistic", "p"] (robust cov_type), else None
-    More on the keys: "partial F (HC3)" is added to first_stage (before "strength") when a row has leverage from
+
+    More on the keys (v2.7.4: moved out of the block, which ends within the first 2500 characters of the docstring):
+    "partial F (HC3)" is added to first_stage (before "strength") when a row has leverage from
     0.5 to below 1 with a robust cov_type (not with a row of leverage 1, where the robust F is NaN). With
     cov_type="robust" the first-stage F is HC0 (as linearmodels; with "kernel", linearmodels' kernel F) and its p
     rejected 6-17% with irrelevant instruments while P(F > 10) stayed at or below 0.6% (v2.7.1, M3c). In
