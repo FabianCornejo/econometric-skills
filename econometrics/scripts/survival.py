@@ -78,7 +78,7 @@ def logrank(df: pd.DataFrame, duration: str, event: str, group: str, strata: str
     Example (r = the result): r["p"]
 
     A missing value in duration, event, group or strata raises ValueError (v2.7.4; before, a missing group gave a
-    TypeError from statsmodels or counted as a group of its own): drop those rows or give the group a label.
+    TypeError from statsmodels, a missing numeric one a LinAlgError): drop those rows or give the group a label.
     """
     from statsmodels.duration.survfunc import survdiff
     cols = [duration, event, group] + ([strata] if strata is not None else [])
@@ -182,7 +182,7 @@ def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "
                        ["coef", "HR", "HR_ci_low", "HR_ci_high", "se", "p"]; coef and se on the log-hazard scale,
                        HR = exp(coef) with a 95% CI; se robust (default), clustered (cluster=) or model-based
                        (robust=False)
-      tab.attrs["dropped_rows"]  int (v2.7.4), rows left out for a missing duration, event or covariate (0 if none)
+      tab.attrs["dropped_rows"]  int (v2.7.4), rows left out for a missing duration, event, stratum or covariate
     Example (r = the result): r[1]["HR"]; r[1].loc[r[1].index[0], "p"]; r[0].params
 
     No intercept is estimated (the baseline hazard absorbs it), so do not add '0 +'.
@@ -194,16 +194,25 @@ def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "
     (about a quarter of samples with early censoring) and, with tied event times and ties="efron", too small
     (it uses Breslow increments). Checked against R survival::coxph(robust = TRUE) with ties, strata and clusters
     (tools/r_reference/cox_v267_reference.R). A missing cluster label raises an error.
-    v2.7.4: rows with a missing covariate (dropped by the formula) are left out of the robust and clustered
+    v2.7.4: rows with a missing covariate or stratum (dropped by the formula) are left out of the robust and clustered
     variance too (before, the groups kept those rows and the fit failed with "array is not broadcastable"); a
     sample with no event raises ValueError (before, an IndexError)."""
     import statsmodels.formula.api as smf
-    d = df.dropna(subset=[duration, event]).copy()
+    # v2.7.4 (review r1 B2): rows are tracked by position, so a repeated index label does not multiply them
+    d0 = df.reset_index(drop=True)
+    d = d0.dropna(subset=[duration, event]).copy()
     kw = {"status": d[event].astype(int), "ties": ties}
     if strata:
         kw["strata"] = d[strata]
-    mod = smf.phreg(f"{duration} ~ {formula}", d, **kw)
-    used = d.loc[mod.data.row_labels]                  # v2.7.4: the rows the formula kept (missing covariates out)
+    try:
+        mod = smf.phreg(f"{duration} ~ {formula}", d, **kw)
+    except ValueError as e:
+        if "zero-size" in str(e):                      # review r1 N3: every row dropped for a missing value
+            raise ValueError("cox: no row is left after dropping rows with a missing duration, event, stratum or "
+                             "covariate") from e
+        raise
+    pos = np.asarray(mod.data.row_labels)              # positions in df of the rows the formula kept
+    used = d0.iloc[pos]
     if not (used[event].astype(int) == 1).any():
         raise ValueError(f"cox: no event in the {len(used)} rows used ({event!r} is never 1): the hazard ratios are "
                          "not identified")
@@ -233,11 +242,12 @@ def cox(df: pd.DataFrame, formula: str, duration: str, event: str, ties: str = "
               + (f"; stratified by {strata}" if strata else "") + f"); N = {len(used)}, "
               f"events = {int((used[event].astype(int) == 1).sum())}")
         if dropped:
-            print(f"  {dropped} row(s) left out for a missing duration, event or covariate.")
+            print(f"  {dropped} row(s) left out for a missing duration, event, stratum or covariate.")
         print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
         print("  HR > 1: higher hazard (event happens sooner); HR < 1: lower hazard (longer duration).")
         print("  A HR of 1.25 means a 25% higher instantaneous event rate, not a 25% shorter duration.")
     res.hr_table = tab
+    res.rows_used = pos                                # v2.7.4: positions in df of the rows used (ph_test reads them)
     return res, tab
 
 
@@ -257,8 +267,11 @@ def ph_test(res, df: pd.DataFrame, duration: str, event: str, transform: str = "
     Remedies: stratify on that variable, interact it with time, or split the period.
     v2.7.4: uses the rows the Cox fit used (a row with a missing covariate is left out, as in cox); before, it
     dropped only rows with a missing duration or event and failed with "operands could not be broadcast"."""
-    rows_ = getattr(getattr(res.model, "data", None), "row_labels", None)
-    d = df.loc[rows_] if rows_ is not None else df.dropna(subset=[duration, event])
+    pos = getattr(res, "rows_used", None)               # set by cox (positions in its df)
+    if pos is not None and len(pos) and int(np.max(pos)) < len(df):
+        d = df.iloc[pos]
+    else:
+        d = df.dropna(subset=[duration, event])
     sch = np.asarray(res.schoenfeld_residuals)
     ev = d[event].astype(int).to_numpy() == 1
     t = d[duration].astype(float).to_numpy()

@@ -641,6 +641,23 @@ check("v2.7.4 stationarity_many show: the summary keeps two columns and a 'Warni
       "Warning (a): 80 missing value(s)" in o74 and "Warning (b)" not in o74
       and "Warnings" not in o74.split("Summary:")[1].splitlines()[1], o74[-400:])
 
+
+# review r1 B3: repeated index labels (no missing value; and with a gap)
+for lab_, idx_ in (("first two labels equal", [0, 0] + list(range(2, 300))), ("every label equal", [7] * 300)):
+    gd = pd.Series(y74.to_numpy().copy(), index=idx_)
+    try:
+        sd = dg.stationarity(gd, show=False)
+        ok_ = sd.attrs["warnings"] == [] and np.allclose(sd[["ADF", "KPSS"]].to_numpy(float),
+                                                         dg.stationarity(y74, show=False)[["ADF", "KPSS"]].to_numpy(float),
+                                                         rtol=0, atol=0)
+        gd2 = gd.copy(); gd2.iloc[[100, 101]] = np.nan
+        ok_ = ok_ and "2 missing value(s) inside the series (1 gap(s))" in dg.stationarity(gd2, show=False).attrs["warnings"][0]
+        info = ""
+    except Exception as e_:                                          # noqa: BLE001
+        ok_, info = False, f"{type(e_).__name__}: {e_}"
+    check(f"v2.7.4 review r1 B3: stationarity with repeated index labels ({lab_}): runs, same numbers, no warning; a "
+          "gap is counted by position", ok_, info)
+
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")
 sys.exit(0 if passed == len(results) else 1)

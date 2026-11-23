@@ -447,7 +447,9 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
     if len(x):
         # v2.7.4 (v2.7.3 review r1-A): dropna joined the two sides of an interior gap and the lags of every test ran
         # across it, silently. Missing values at the ends (series that start or stop on other dates) are fine.
-        inner = s_.iloc[s_.index.get_loc(x.index[0]):s_.index.get_loc(x.index[-1]) + 1].isna().to_numpy()
+        na_ = s_.isna().to_numpy()                       # by position (review r1 B3: repeated index labels)
+        valid = np.flatnonzero(~na_)
+        inner = na_[valid[0]:valid[-1] + 1]
         if inner.any():
             n_gaps = int(inner[0] + (np.diff(inner.astype(int)) == 1).sum())
             warns.append(f"{int(inner.sum())} missing value(s) inside the series ({n_gaps} gap(s)): the tests joined "

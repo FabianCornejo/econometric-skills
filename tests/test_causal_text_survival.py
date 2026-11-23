@@ -289,7 +289,7 @@ okr, msg = raises(lambda: sv.logrank(s74_ng, "t", "e", "g"), "'g': 7", "missing"
 check("v2.7.4 logrank: a missing group raises ValueError naming the column and the 7 rows (was a TypeError)", okr, msg)
 s74_nf = s74.assign(g=s74["g"].map({"a": 0.0, "b": 1.0, "c": 2.0})); s74_nf.loc[s74_nf.index[:4], "g"] = np.nan
 okr, msg = raises(lambda: sv.logrank(s74_nf, "t", "e", "g"), "'g': 4")
-check("v2.7.4 logrank: a missing numeric group raises too (before it counted as a group of its own)", okr, msg)
+check("v2.7.4 logrank: a missing numeric group raises too (before: a LinAlgError)", okr, msg)
 s74_nt = s74.copy(); s74_nt.loc[s74_nt.index[3], "t"] = np.nan
 okr, msg = raises(lambda: sv.logrank(s74_nt, "t", "e", "g"), "'t': 1")
 check("v2.7.4 logrank: a missing duration raises, naming it", okr, msg)
@@ -355,6 +355,37 @@ check("v2.7.4 cox: a single event is not refused (the boundary of the new error)
 s74_2 = s74.assign(e=0); s74_2.loc[s74_2.index[10], "e"] = 1; s74_2.loc[s74_2.index[10], "x"] = np.nan
 okr, msg = raises(lambda: sv.cox(s74_2, "x", "t", "e", show=False), "no event", "239 rows")
 check("v2.7.4 cox: the only event on a row with a missing covariate is 'no event in the rows used'", okr, msg)
+
+
+# review r1 B2: repeated index labels (after a concat, say): rows tracked by position, as in v2.7.3 for the fit
+for idx_lab, idx_ in (("all labels equal", [0] * n74), ("each label twice", list(np.repeat(np.arange(n74 // 2), 2)))):
+    s_dup = s74_nx.copy(); s_dup.index = idx_
+    s_ref = s74_nx.reset_index(drop=True)
+    try:
+        r_d, t_d = sv.cox(s_dup, "x + z", "t", "e", show=False)
+        r_r, t_r = sv.cox(s_ref, "x + z", "t", "e", show=False)
+        ph_d = sv.ph_test(r_d, s_dup, "t", "e", show=False)
+        ph_r = sv.ph_test(r_r, s_ref, "t", "e", show=False)
+        same = (np.allclose(t_d[["coef", "se"]].to_numpy(), t_r[["coef", "se"]].to_numpy(), rtol=1e-12, atol=0)
+                and t_d.attrs["dropped_rows"] == 5 and np.allclose(ph_d["rho"], ph_r["rho"], rtol=1e-12, atol=0))
+        info = (t_d.attrs["dropped_rows"], t_d["se"].tolist(), t_r["se"].tolist())
+    except Exception as e_:                                          # noqa: BLE001
+        same, info = False, f"{type(e_).__name__}: {e_}"
+    check(f"v2.7.4 review r1 B2: cox (robust) and ph_test with repeated index labels ({idx_lab}) equal the fit on a "
+          "fresh index; dropped_rows 5", same, info)
+buf = io.StringIO()
+s_dup = s74_nx.copy(); s_dup.index = [0] * n74
+with contextlib.redirect_stdout(buf):
+    sv.cox(s_dup, "x + z", "t", "e", robust=False)
+check("v2.7.4 review r1 B2: with repeated labels the printed N is the rows used (235), never more than the data",
+      "N = 235" in buf.getvalue(), buf.getvalue()[:200])
+s_st = s74.assign(st=rng74.integers(0, 2, n74).astype(float)); s_st.loc[s_st.index[[1, 2, 3]], "st"] = np.nan
+_, t_st = sv.cox(s_st, "x", "t", "e", strata="st", show=False)
+_, t_stc = sv.cox(s_st.dropna(), "x", "t", "e", strata="st", show=False)
+check("v2.7.4 review r1 N2: a missing stratum is counted in dropped_rows (3) and the fit is the complete-rows one",
+      t_st.attrs["dropped_rows"] == 3 and np.allclose(t_st["se"], t_stc["se"], rtol=1e-12, atol=0))
+okr, msg = raises(lambda: sv.cox(s74.assign(x=np.nan), "x", "t", "e", show=False), "no row is left")
+check("v2.7.4 review r1 N3: every row dropped gives a clear ValueError", okr, msg)
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

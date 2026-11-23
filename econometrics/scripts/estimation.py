@@ -437,7 +437,7 @@ def wild_cluster_bootstrap(df: pd.DataFrame, formula: str, coef: str, cluster: s
         # v2.7.4: cat.codes gave -1 to a missing label and those rows were merged into the last cluster, silently
         raise ValueError(f"cluster {cluster!r} has {int(g_lab.isna().sum())} missing label(s) among the rows used: "
                          "drop those rows or fill the cluster id (a missing label is not a cluster of its own)")
-    g_codes = g_lab.astype("category").cat.codes.to_numpy()
+    g_codes = pd.factorize(g_lab, sort=True)[0]   # review r1 S3: unused categories of a categorical are not clusters
     G = int(g_codes.max() + 1)
     n, K = X.shape
     k = names.index(coef)

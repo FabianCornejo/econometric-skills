@@ -236,5 +236,15 @@ r_c = est.wild_cluster_bootstrap(w74d.dropna(), "y ~ x", "x", "g", B=199, ci=Fal
 check("v2.7.4 wild_cluster_bootstrap: a missing label on rows the formula drops is ignored (same as complete rows)",
       r_d["n_clusters"] == 19 and r_d["n"] == 285 and abs(r_d["se"] - r_c["se"]) < 1e-14 and r_d["p"] == r_c["p"])
 
+
+# review r1 S3: a categorical cluster with unused categories (a filter before the call): clusters are the labels used
+w74c = w74.copy()
+w74c["g"] = pd.Categorical(w74c["g"].astype(int) * 2, categories=list(range(40)))
+r_cat = est.wild_cluster_bootstrap(w74c, "y ~ x", "x", "g", B=199, ci=False)
+r_pl = est.wild_cluster_bootstrap(w74, "y ~ x", "x", "g", B=199, ci=False)
+check("v2.7.4 review r1 S3: unused categories do not count as clusters (n_clusters 20, the same se, p and CR1 p as "
+      "with plain labels)", r_cat["n_clusters"] == 20 and abs(r_cat["se"] - r_pl["se"]) < 1e-14
+      and r_cat["p_cr1_t_G-1"] == r_pl["p_cr1_t_G-1"], (r_cat["n_clusters"], r_cat["se"], r_pl["se"]))
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
