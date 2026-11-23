@@ -728,7 +728,8 @@ blk = head_check("person_period", sv.person_period)
 r_ = sv.person_period(sd, "id", "t", "e")
 check("person_period: columns id, period, y, then df's other columns except duration and event, index 0..N-1",
       list(r_.columns) == ["id", "period", "y", "x", "grp", "reg"] and r_.index.equals(pd.RangeIndex(len(r_)))
-      and '"period"' in " ".join(blk) and '"y"' in " ".join(blk), list(r_.columns))
+      and re.findall(r'"([^"]+)"', " ".join(blk).split("columns:")[1].split("Example")[0]) == ["period", "y"],
+      list(r_.columns))   # mutation r0: '"y"' anywhere in the block matched the Example line
 check("person_period: y is 1 only in the last period of an event spell; period runs 1..ceil(duration)",
       r_["y"].sum() == sd["e"].sum() and r_.groupby("id")["period"].max().equals(sd.set_index("id")["t"].astype(int)))
 example_check("person_period", blk, r_)
