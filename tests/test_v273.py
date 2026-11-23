@@ -184,7 +184,7 @@ except ValueError as x_:
 check("evaluate (B2): no common row is refused with the reason (not an 'overflow' warning)", "no row where" in msg_, msg_)
 t_, o_, w_ = evw(a, {"perfect": a.copy(), "m": fa}, show=False)
 check("evaluate (B3): a perfect benchmark makes Theil's U inf, and the warning says why",
-      np.isinf(t_.loc["m", "Theil_U(RMSE/RMSE_naive)"]) and any("Theil's U is inf because the benchmark perfect" in x_
+      np.isinf(t_.loc["m", "Theil_U(RMSE/RMSE_naive)"]) and any("because the benchmark perfect has no error in any row" in x_
                                                                   for x_ in w_) and all_named(t_, w_), w_)
 up = pd.Series(np.abs(rng5.normal(size=80)) + 0.1)
 t_, o_, w_ = evw(pd.Series(rng5.normal(size=80)), {"b": up, "m": up + 0.1}, direction="return", show=False)
@@ -197,6 +197,11 @@ t_, o_, w_ = evw(a, {"a": fa, "b": f_inf}, show=False)
 check("evaluate: an inf in one forecast only is attributed to 'the forecast', not to actual",
       any(x_.startswith("b: the forecast has infinite values") for x_ in w_)
       and not any(x_.startswith("a: ") and "infinite" in x_ for x_ in w_), w_)
+a_sub = pd.Series(np.r_[1e-320, np.arange(1.0, 40)])    # a subnormal actual: MAPE overflows to inf
+t_, o_, w_ = evw(a_sub, {"m": a_sub + 0.5}, show=False)
+check("evaluate: an inf MAPE from an actual close to 0 is named (the last, generic warning)",
+      np.isinf(t_.loc["m", "MAPE_%"]) and any(x_.startswith("m: MAPE_% not finite (MAPE divides by actual") for x_ in w_),
+      w_)
 for case, act_, fs, _w in cases:
     t_, o_, w_ = evw(act_, fs, show=False)
     check(f"evaluate ({case}): every inf or NaN of the table has a warning on its model", all_named(t_, w_), w_)
@@ -252,6 +257,20 @@ grp_df["t"] = np.ceil(rng6.exponential(np.where(grp_df.g == 1, 3.0, 9.0)))
 grp_df["e"] = 1
 lr_ = sv.logrank(grp_df, "t", "e", "g")
 check("logrank: the conclusion follows p at 5%", (lr_["p"] < 0.05) == (lr_["conclusion"] == "survival differs across groups"))
+# mutation r1: the 5% cut is only tested with a p between 0.05 and 0.10 (seeds 0 and 16 from the search)
+r0_ = np.random.default_rng(0)
+g0_ = np.repeat([0, 1], 40)
+lg_ = sv.logrank(pd.DataFrame({"g": g0_, "t": np.ceil(r0_.exponential(np.where(g0_ == 1, 6.0, 8.0))), "e": 1}),
+                 "t", "e", "g")
+check(f"logrank: p = {lg_['p']:.3f} (between 5% and 10%) -> 'no significant difference'",
+      0.05 < lg_["p"] < 0.10 and lg_["conclusion"] == "no significant difference", lg_)
+r16 = np.random.default_rng(16)
+x16 = r16.normal(size=120)
+d16 = pd.DataFrame({"x": x16, "t": np.ceil(r16.exponential(np.exp(-0.5 * x16) * 8)).clip(1, 20),
+                    "e": (r16.uniform(size=120) < 0.7).astype(int)})
+ph16 = sv.ph_test(sv.cox(d16, "x", "t", "e", show=False)[0], d16, "t", "e", show=False)
+check(f"ph_test: p = {ph16['p'].iloc[0]:.3f} (between 5% and 10%) -> PH_violated_5% False",
+      0.05 < ph16["p"].iloc[0] < 0.10 and not ph16["PH_violated_5%"].iloc[0], ph16)
 check("ph_test: PH_violated_5% is p < 0.05 on every row", (r_q["PH_violated_5%"] == (r_q["p"] < 0.05)).all())
 import statsmodels.formula.api as smf  # noqa: E402
 res_m, tab_m = sv.cox(sd, "x", "t", "e", robust=False, show=False)

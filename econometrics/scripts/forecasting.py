@@ -406,8 +406,8 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
             other = [c for c in tab.columns if c not in ("DM_vs_" + benchmark, "DM_p")
                      and not np.isfinite(float(tab.loc[k, c]))]
             if "Theil_U(RMSE/RMSE_naive)" in other and float(tab.loc[benchmark, "RMSE"]) == 0:
-                mine.append(f"{k}: Theil's U is inf because the benchmark {benchmark} has no error in any row (its "
-                            "RMSE is 0)")
+                mine.append(f"{k}: Theil's U is inf (NaN for a model that is also perfect) because the benchmark "
+                            f"{benchmark} has no error in any row (its RMSE is 0)")
                 other.remove("Theil_U(RMSE/RMSE_naive)")
             pt = [c for c in other if c in ("directional_accuracy", "PT_p_value")]
             if pt:
@@ -415,7 +415,8 @@ def evaluate(actual: pd.Series, forecasts: dict[str, pd.Series], benchmark: str 
                             "the forecast are not zero, and some variation in the forecast's sign")
             rest = [c for c in other if c not in pt]
             if rest:
-                mine.append(f"{k}: {', '.join(rest)} not finite")
+                mine.append(f"{k}: {', '.join(rest)} not finite"
+                            + (" (MAPE divides by actual: an actual value very close to 0)" if "MAPE_%" in rest else ""))
         warns += mine
     tab.attrs["warnings"] = warns
     if show:

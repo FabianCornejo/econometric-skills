@@ -716,6 +716,11 @@ check("sup_wald, X with a constant (dummies): recursive_coefficients has only X'
       list(r_["recursive_coefficients"].columns) == list(Xd_.columns)
       and any("already contains a constant" in w_ for w_ in r_["warnings"])
       and "only X's names when X already contains a constant" in ENTRIES["sup_wald"]["recursive_coefficients"])
+check("sup_wald: the block says break_position is a position in F_path's index (not in y)",
+      "its position in F_path's index" in ENTRIES["sup_wald"]["break_position"])
+r_ = est.bootstrap(lambda d_: d_["x"].mean(), pan.rename(columns={"g": 0}), B=19, cluster=0)
+check("bootstrap: a cluster column named 0 gives a cluster bootstrap (review r1-A A13)",
+      r_["method"] == "cluster bootstrap", r_["method"])
 
 # A2: a constant, non-zero loss difference: NaN, never "significant"
 r_, out_ = None, None
@@ -888,7 +893,7 @@ late = pd.DataFrame({"t": np.arange(1, 41, dtype=float), "e": [1] * 5 + [0] * 35
 rk = sv.kaplan_meier(late, "t", "e", show=False)["summary"]
 check("kaplan_meier: median and its CI NaN when the curve does not reach 0.5, as the block says",
       rk[["median_survival", "median_ci_low", "median_ci_high"]].isna().all(axis=None)
-      and "NaN" in ent["summary"])
+      and "is NaN when the curve does not reach 0.5" in ent["summary"])   # mutation r1: "NaN" alone matched the CI
 
 blk = head_check("logrank", sv.logrank)
 ent_of("logrank", blk)
