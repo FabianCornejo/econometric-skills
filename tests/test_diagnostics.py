@@ -622,13 +622,13 @@ g4 = y74.copy(); g4.iloc[:20] = np.nan; g4.iloc[150] = np.nan
 w4 = dg.stationarity(g4, show=False).attrs["warnings"]
 check("v2.7.4 stationarity: a leading block does not count as a gap, an interior value does (1 missing, 1 gap)",
       len(w4) == 1 and "1 missing value(s) inside the series (1 gap(s))" in w4[0], w4)
-g5 = pd.Series(y74.to_numpy(), index=pd.date_range("2000-01-01", periods=300, freq="MS")); g5.iloc[120] = np.nan
+g5 = pd.Series(y74.to_numpy().copy(), index=pd.date_range("2000-01-01", periods=300, freq="MS")); g5.iloc[120] = np.nan
 check("v2.7.4 stationarity: the check also works on a date index", len(dg.stationarity(g5, show=False).attrs["warnings"]) == 1)
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     dg.stationarity(g1)
 check("v2.7.4 stationarity show: prints the gap warning", "Warning: 80 missing value(s) inside the series" in buf.getvalue())
-dfm = pd.DataFrame({"a": g1.to_numpy(), "b": y74.to_numpy()})
+dfm = pd.DataFrame({"a": g1.to_numpy().copy(), "b": y74.to_numpy().copy()})  # copies: no copy-on-write in pandas 2.2
 sm74 = dg.stationarity_many(dfm, show=False)
 check("v2.7.4 stationarity_many: a 'Warnings' column carries each series' warnings ('' when none)",
       list(sm74.columns) == ["Series", "Suggested order", "Warnings"]
