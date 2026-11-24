@@ -491,3 +491,372 @@ def wild_cluster_bootstrap(df: pd.DataFrame, formula: str, coef: str, cluster: s
     return {"estimand": coef, "method": f"wild cluster bootstrap-t (restricted, {weights})",
             "estimate": float(b[k]), "se": se0, "t": float(t_obs), "p": p, "ci_low": lo, "ci_high": hi,
             "p_cr1_t_G-1": float(p_cr1), "null": null, "n": n, "n_clusters": G, "B": B, "warnings": warn}
+
+
+# =============================================================================
+# Generalized method of moments (v2.8.0)
+# =============================================================================
+_GMM_STEPS = ("one-step", "two-step", "iterated")
+_GMM_KERNELS = ("bartlett", "truncated")
+_GMM_WEAK_F = 10.0        # v2.8.0: rank statistic / df below which identification is called weak (Stock-Yogo rule of thumb)
+
+
+def _gmm_S(G, lags, kernel, center):
+    """Long-run covariance of the moment contributions G (n x m): Gamma_0 + sum_j w_j (Gamma_j + Gamma_j')."""
+    n = G.shape[0]
+    U = G - G.mean(0) if center else G
+    S = U.T @ U / n
+    for j in range(1, (lags or 0) + 1):
+        w = 1.0 - j / (lags + 1.0) if kernel == "bartlett" else 1.0
+        Gam = U[j:].T @ U[:-j] / n
+        S = S + w * (Gam + Gam.T)
+    return (S + S.T) / 2
+
+
+def _gmm_rank_test(G_of, th, lags, kernel):
+    """Cragg-Donald (1997) minimum-Wald test of H0: rank(D) <= k - 1, D = E[dg_i/dtheta'] (m x k).
+
+    For each direction c (|c| = 1), the Wald statistic of E[dg_i/dtheta' c] = 0 uses the HAC covariance of the
+    per-observation derivatives along c; the statistic is its minimum over c, chi2(m - k + 1) under H0. It does
+    not depend on the units of theta or on invertible recombinations of the moments. Returns (stat, df)."""
+    th = np.asarray(th, float)
+    h = _steps(th)
+    k = len(th)
+    cols = []
+    for j in range(k):
+        e = np.zeros(k)
+        e[j] = h[j]
+        cols.append((G_of(th + e) - G_of(th - e)) / (2 * h[j]))
+    Di = np.stack(cols, axis=2)                                    # n x m x k
+    n, m, _ = Di.shape
+
+    def wald(c):
+        c = np.asarray(c, float)
+        nc = np.linalg.norm(c)
+        if not np.isfinite(nc) or nc == 0:
+            return np.inf
+        d = Di @ (c / nc)
+        V = _gmm_S(d, lags, kernel, True)
+        dm = d.mean(0)
+        try:
+            return float(n * dm @ np.linalg.solve(V, dm))
+        except np.linalg.LinAlgError:
+            return float(n * dm @ np.linalg.pinv(V) @ dm)
+
+    if k == 1:
+        return wald([1.0]), m
+    rng = np.random.default_rng(0)
+    if k == 2:
+        grid = np.linspace(0.0, np.pi, 361)
+        vals = [wald([np.cos(a), np.sin(a)]) for a in grid]
+        i = int(np.argmin(vals))
+        res = optimize.minimize_scalar(lambda a: wald([np.cos(a), np.sin(a)]),
+                                       bounds=(grid[max(i - 1, 0)], grid[min(i + 1, 360)]), method="bounded",
+                                       options={"xatol": 1e-10})
+        best = min(float(res.fun), float(vals[i]))
+    else:
+        starts = [np.eye(k)[j] for j in range(k)] + [rng.standard_normal(k) for _ in range(10 * k)]
+        best = np.inf
+        for c0 in starts:
+            res = optimize.minimize(wald, c0, method="Nelder-Mead",
+                                    options={"xatol": 1e-9, "fatol": 1e-10, "maxiter": 4000 * k})
+            best = min(best, float(res.fun))
+    return best, m - k + 1
+
+
+def _gmm_inv(S):
+    """Inverse of a covariance that should be positive definite; (inverse, smallest eigenvalue, ok).
+
+    When S is not positive definite (a truncated kernel can give negative eigenvalues), its eigenvalues are
+    floored at 1e-10 times the largest absolute one before inverting, so the weight stays positive definite."""
+    ev, vec = np.linalg.eigh(S)
+    top = max(float(np.abs(ev).max()), np.finfo(float).tiny)
+    ok = bool(ev.min() > 1e-12 * top)
+    if ok:
+        return np.linalg.inv(S), float(ev.min()), True
+    fl = np.maximum(ev, 1e-10 * top)
+    return (vec / fl) @ vec.T, float(ev.min()), False
+
+
+def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=None, hac_lags: int | None = None,
+        kernel: str = "bartlett", center: bool = True, jacobian=None, bounds=None, maxiter: int = 100,
+        tol: float = 1e-8, alpha: float = ALPHA, show: bool = True) -> dict:
+    """Generalized method of moments from moment conditions E[g_i(theta)] = 0 that the user writes.
+
+    Returns a dict (v2.8.0: keys exact):
+      "estimand"   "theta"
+      "method"     str, e.g. "GMM (two-step, Bartlett HAC with 4 lags)"
+      "params"     Series of estimates, indexed by names
+      "table"      DataFrame indexed by names, columns ["estimate", "se", "z", "p", "ci_low", "ci_high"]
+      "cov"        DataFrame, covariance of the estimates (already divided by n)
+      "j"          float, Hansen's J = n g' W g at the estimate (None with steps="one-step": not a test there)
+      "j_df"       int, m - k (0 when exactly identified: J is 0 by construction, not a test)
+      "j_p"        float, RIGHT-tail p-value, chi2.sf(J, m - k); this is the p-value
+      "j_cdf"      float, chi2.cdf(J, m - k) = 1 - j_p: what some old tables print as "Prob" (not a p-value)
+      "n", "m", "k"  observations, moments, parameters
+      "weight"     ndarray m x m, final weighting matrix; "S" ndarray m x m, long-run covariance at the estimate
+      "jacobian"   ndarray m x k, d mean(g) / d theta' at the estimate
+      "objective"  float, mean(g)' W mean(g) at the estimate
+      "converged"  bool; "iterations" int (weight updates)
+      "rank_stat", "rank_df", "rank_p"  Cragg-Donald (1997) minimum-Wald test of rank(D) < k, chi2(m - k + 1)
+      "ident_F"    rank_stat / rank_df; weak identification below 10 (it matched the first-stage F of a linear IV
+                   with one endogenous regressor within 4% when F < 10; v2.8.0 measurement)
+      "used"       dict, keys ["steps", "first_weight", "hac_lags", "kernel", "center", "bounds", "n", "m", "k",
+                   "iterations", "converged", "skill_version"]
+      "warnings"   list of dicts with keys ["level", "message", "action"]
+
+    moments(theta, *args) returns the n x m matrix of moment contributions g_i(theta), one row per
+    observation (not their mean), e.g. for an Euler equation with instruments z_t:
+    (beta * c_growth**(-gamma) * R - 1)[:, None] * Z. jacobian(theta, *args), optional, returns the
+    m x k Jacobian of the MEAN moment; without it, central differences.
+    steps    "two-step" (default): first step with `weight` (identity if None; the first step depends on
+             the units of the moments: scale them), then W = S^-1 at the first-step estimate; "iterated":
+             repeat until the estimate stops moving (Hansen, Heaton and Yaron 1996); "one-step": `weight`
+             only, sandwich SEs, and no J (J needs the efficient weight).
+    hac_lags None: S = covariance of the contributions (independent observations, any heteroskedasticity);
+             an integer L: HAC with L lags, `kernel` "bartlett" (Newey-West 1987, always positive
+             semidefinite) or "truncated" (equal weights, Hansen-Singleton 1982 with a known MA(L) error;
+             may be indefinite). Multi-period Euler equations have MA(n - 1) errors: hac_lags >= n - 1.
+    center   True: S from the demeaned contributions (Hall 2000; keeps J consistent under misspecification).
+    bounds   optional list of (low, high) per parameter (None for no bound), e.g. a discount factor in (0, 1].
+    Standard errors: (D'WD)^-1 D'WSWD (D'WD)^-1 / n with the final W and S at the estimate (= (D'S^-1 D)^-1 / n
+    at the efficient weight when S is re-estimated there).
+    J: n mean(g)'W mean(g) with the weight of the last step; chi2(m - k) under correct specification. Its p-value
+    is the RIGHT tail (j_p). "Prob" columns in Hansen-Singleton (1982, 1983) are the CDF (j_cdf): a Prob of 0.967
+    is p = 0.033, a rejection at 5%.
+    Findings: exactly identified; a parameter at or within one SE of a bound (J, Wald and LR leave the chi2;
+    Andrews 1999); a Jacobian whose rank test does not reject rank < k (not identified) or whose statistic
+    per df is below 10 (weak identification); fewer than 10 observations per moment; S not
+    positive definite; no convergence (report no number). Try several starting values: GMM criteria of
+    nonlinear models have flat valleys (gamma and beta of an Euler equation trade off)."""
+    from reporting import SKILL_VERSION, _finding, _print_findings
+    if steps not in _GMM_STEPS:
+        raise ValueError(f"steps must be one of {_GMM_STEPS}")
+    if kernel not in _GMM_KERNELS:
+        raise ValueError(f"kernel must be one of {_GMM_KERNELS}")
+    if hac_lags is not None and (int(hac_lags) != hac_lags or hac_lags < 0):
+        raise ValueError("hac_lags must be None or a non-negative integer")
+    theta0 = np.atleast_1d(np.asarray(theta0, float)).copy()
+    k = len(theta0)
+    names = list(names) if names is not None else [f"theta{j}" for j in range(k)]
+    if len(names) != k:
+        raise ValueError("names must have one entry per parameter")
+
+    def G_of(th):
+        G = np.asarray(moments(th, *args), float)
+        if G.ndim == 1:
+            G = G[:, None]
+        return G
+
+    G0 = G_of(theta0)
+    if not np.all(np.isfinite(G0)):
+        raise ValueError("moments are not finite at theta0 (missing values in the data, or a bad start)")
+    n, m = G0.shape
+    if m < k:
+        raise ValueError(f"{m} moments for {k} parameters: the model is not identified (need m >= k)")
+    if hac_lags is not None and hac_lags >= n:
+        raise ValueError("hac_lags must be smaller than the number of observations")
+
+    def gbar(th):
+        return G_of(th).mean(0)
+
+    def D_of(th):
+        if jacobian is not None:
+            return np.atleast_2d(np.asarray(jacobian(th, *args), float)).reshape(m, k)
+        return _jacobian(gbar, th)
+
+    if bounds is not None:
+        if len(bounds) != k:
+            raise ValueError("bounds must have one (low, high) pair per parameter")
+        lo = np.array([-np.inf if b is None or b[0] is None else b[0] for b in bounds], float)
+        hi = np.array([np.inf if b is None or b[1] is None else b[1] for b in bounds], float)
+    else:
+        lo, hi = np.full(k, -np.inf), np.full(k, np.inf)
+
+    def fit(W, start):
+        # n * gbar' W gbar = || sqrt(n) L' gbar ||^2 with W = L L': least squares on r(theta) = sqrt(n) L' gbar
+        L = np.linalg.cholesky((W + W.T) / 2)
+        rn = np.sqrt(n)
+        start = np.clip(start, np.nextafter(lo, np.inf), np.nextafter(hi, -np.inf))
+        res = optimize.least_squares(lambda th: rn * (L.T @ gbar(th)), start,
+                                     jac=lambda th: rn * (L.T @ D_of(th)), bounds=(lo, hi), method="trf",
+                                     x_scale="jac", xtol=1e-12, ftol=1e-14, gtol=1e-12, max_nfev=200 * (k + 1))
+        return res.x, bool(res.status > 0)
+
+    warns = []
+    W1 = np.eye(m) if weight is None else np.asarray(weight, float)
+    if W1.shape != (m, m):
+        raise ValueError(f"weight must be {m} x {m}")
+    try:
+        np.linalg.cholesky((W1 + W1.T) / 2)
+    except np.linalg.LinAlgError:
+        raise ValueError("weight must be positive definite") from None
+    th, conv = fit(W1, theta0)
+    W, it = W1, 0
+    S_pd_ok, s_min_all = True, np.inf
+    if steps in ("two-step", "iterated"):
+        cap = 1 if steps == "two-step" else maxiter
+        for it in range(1, cap + 1):
+            S_w = _gmm_S(G_of(th), hac_lags, kernel, center)
+            W, s_w, ok = _gmm_inv(S_w)
+            S_pd_ok &= ok
+            s_min_all = min(s_min_all, s_w)
+            th_new, conv = fit(W, th)
+            moved = np.max(np.abs(th_new - th) / (1.0 + np.abs(th)))
+            th = th_new
+            if steps == "iterated" and moved < tol:
+                break
+        else:
+            if steps == "iterated":
+                conv = False
+                warns.append(_finding("warning", f"iterated GMM did not settle in {maxiter} weight updates",
+                                      "report the two-step estimate, or raise maxiter and check the starting values"))
+    Gh = G_of(th)
+    g = Gh.mean(0)
+    D = D_of(th)
+    S = _gmm_S(Gh, hac_lags, kernel, center)
+    Sinv_fin, s_min, ok = _gmm_inv(S)
+    S_pd_ok &= ok
+    s_min_all = min(s_min_all, s_min)
+    if not ok:                                   # the floored S, the one whose inverse was used
+        S = np.linalg.inv(Sinv_fin)
+    A = np.linalg.pinv(D.T @ W @ D)
+    V = A @ D.T @ W @ S @ W @ D @ A / n
+    V = (V + V.T) / 2
+    tab = _table(th, V, names, alpha)
+    se = tab["se"].to_numpy()
+    df_j = m - k
+    if steps == "one-step":
+        J = None
+        j_p = j_cdf = None
+    else:
+        J = float(n * g @ W @ g)
+        j_p = float(stats.chi2.sf(J, df_j)) if df_j > 0 else None
+        j_cdf = float(stats.chi2.cdf(J, df_j)) if df_j > 0 else None
+    # findings
+    if not conv:
+        warns.append(_finding("warning", "the optimizer did not report convergence",
+                              "do not report these numbers: try other starting values, rescale the moments or set bounds"))
+    if df_j == 0:
+        warns.append(_finding("notice", f"exactly identified ({m} moments, {k} parameters): J is 0 by construction",
+                              "J tests nothing here; add moments (instruments) to test the model's restrictions"))
+    elif steps == "one-step":
+        warns.append(_finding("notice", "one-step GMM: no J statistic (J needs the efficient weight S^-1)",
+                              "use steps='two-step' or 'iterated' to test the overidentifying restrictions"))
+    for j in range(k):
+        for side, b in (("lower", lo[j]), ("upper", hi[j])):
+            if np.isfinite(b) and np.isfinite(se[j]) and abs(th[j] - b) <= max(se[j], 1e-8 * (1 + abs(b))):
+                warns.append(_finding(
+                    "warning", f"{names[j]} = {th[j]:.6g} is within one SE ({se[j]:.3g}) of its {side} bound {b:g}",
+                    "near a bound the t-ratio, the CI and the chi2 references of J, Wald and LR are not valid "
+                    "(Andrews 1999); report the bound as binding and use a boundary-aware test or a bootstrap"))
+    rank_stat, rank_df = _gmm_rank_test(G_of, th, hac_lags, kernel)
+    rank_p = float(stats.chi2.sf(rank_stat, rank_df))
+    ident_F = rank_stat / rank_df
+    if not rank_p < alpha:
+        warns.append(_finding(
+            "warning", f"the parameters may not be identified: the rank test of the Jacobian does not reject "
+            f"rank < {k} (Cragg-Donald minimum Wald {rank_stat:.3g}, df {rank_df}, p = {rank_p:.3g})",
+            "do not report the estimates or their SEs; add informative moments or fix a parameter from theory"))
+    elif ident_F < _GMM_WEAK_F:
+        warns.append(_finding(
+            "warning", f"weak identification: rank statistic / df = {ident_F:.3g} (below {_GMM_WEAK_F:g}, the "
+            "rule of thumb for a first-stage F): some combination of the parameters barely moves the moments",
+            "the SEs, CIs and J can be far off; report the criterion over a grid or an identification-robust "
+            "S test (Stock and Wright 2000), or fix one parameter from theory"))
+    if n < 10 * m:
+        warns.append(_finding("notice", f"{n} observations for {m} moments (< 10 per moment): S is estimated with "
+                              "noise and J tends to over-reject",
+                              "use fewer moments (fewer instrument lags) or report J with that caveat"))
+    if not S_pd_ok:
+        warns.append(_finding("warning", f"S is not positive definite (smallest eigenvalue {s_min_all:.3g}): "
+                              "its eigenvalues were floored at 1e-10 of the largest",
+                              "use kernel='bartlett' (always positive semidefinite) or drop redundant moments"))
+    lag_txt = "" if hac_lags is None else f", {kernel.capitalize()} HAC with {hac_lags} lags"
+    method = f"GMM ({steps}{lag_txt})"
+    used = {"steps": steps, "first_weight": "identity" if weight is None else "user", "hac_lags": hac_lags,
+            "kernel": kernel if hac_lags is not None else None, "center": center,
+            "bounds": None if bounds is None else [tuple(b) if b is not None else None for b in bounds],
+            "n": n, "m": m, "k": k, "iterations": it, "converged": conv, "skill_version": SKILL_VERSION}
+    out = {"estimand": "theta", "method": method, "params": pd.Series(th, index=names), "table": tab,
+           "cov": pd.DataFrame(V, index=names, columns=names), "j": J, "j_df": df_j, "j_p": j_p, "j_cdf": j_cdf,
+           "n": n, "m": m, "k": k, "weight": W, "S": S, "jacobian": D, "objective": float(g @ W @ g),
+           "converged": conv, "iterations": it, "rank_stat": rank_stat, "rank_df": rank_df,
+           "rank_p": rank_p, "ident_F": ident_F, "used": used, "warnings": warns}
+    if show:
+        print(f"\n{method}: n = {n}, {m} moments, {k} parameters")
+        print(tab.to_string(float_format=lambda v: f"{v:.6g}"))
+        if J is not None and df_j > 0:
+            print(f"Hansen J = {J:.4f}, df = {df_j}, p (right tail) = {j_p:.4f}"
+                  f"   [chi2 CDF = {j_cdf:.4f}: what old tables print as 'Prob'; not the p-value]")
+        print(f"Identification (rank of the Jacobian): Cragg-Donald minimum Wald = {rank_stat:.4g}, df = {rank_df}, "
+              f"p = {rank_p:.4g}; per df = {ident_F:.4g} (weak below {_GMM_WEAK_F:g})")
+        _print_findings(warns)
+    return out
+
+
+def lr_test(unrestricted: dict, restricted: dict, df: int | None = None, boundary: bool = False,
+            alpha: float = ALPHA, show: bool = True) -> dict:
+    """Likelihood-ratio test between two nested models fitted by `mle` on the SAME sample, for restrictions of
+    any form (trinity_test handles only linear R theta = r). Example: Hansen and Singleton (1983) test the
+    cross-equation restrictions of an asset-pricing model against an unrestricted VAR.
+
+    Returns a dict (v2.8.0: keys exact):
+      "estimand"  "LR"
+      "statistic" float, 2 (loglik_unrestricted - loglik_restricted)
+      "df"        int (default: k_unrestricted - k_restricted)
+      "p"         float, RIGHT-tail p-value (with boundary=True and df=1, the 50:50 mixture of chi2(0) and chi2(1))
+      "chi2_cdf"  float, chi2.cdf(statistic, df) = 1 - p without boundary: what H-S print in parentheses
+      "reject"    bool, p < alpha
+      "used"      dict, keys ["df", "boundary", "n", "alpha", "skill_version"]
+      "warnings"  list of dicts with keys ["level", "message", "action"]
+
+    unrestricted, restricted : results of `mle` (they carry "loglik", "n", "k", "converged"). Both
+    log-likelihoods must be evaluated on the same observations: an LR between different effective samples
+    (e.g. a VAR with more lags losing initial rows) has no chi2 distribution, and the function refuses it.
+    boundary : True when the null puts a parameter on the edge of its space (a variance of 0, an ARCH
+    coefficient of 0): with one such parameter the reference is the 50:50 mixture (Self and Liang 1987);
+    with more, the mixture weights depend on the model and the chi2 p-value is conservative."""
+    from reporting import SKILL_VERSION, _finding, _print_findings
+    for name, f in (("unrestricted", unrestricted), ("restricted", restricted)):
+        if not isinstance(f, dict) or "loglik" not in f or "n" not in f:
+            raise ValueError(f"{name} must be an mle() result (a dict with 'loglik' and 'n')")
+    if int(unrestricted["n"]) != int(restricted["n"]):
+        raise ValueError(f"the fits use different samples (n = {unrestricted['n']} and {restricted['n']}): "
+                         "evaluate both on the same observations")
+    if df is None:
+        df = int(unrestricted.get("k", 0)) - int(restricted.get("k", 0))
+    if int(df) != df or df < 1:
+        raise ValueError("df must be a positive integer (the number of independent restrictions)")
+    df = int(df)
+    lr = 2.0 * (float(unrestricted["loglik"]) - float(restricted["loglik"]))
+    warns = []
+    for name, f in (("unrestricted", unrestricted), ("restricted", restricted)):
+        if f.get("converged") is False:
+            warns.append(_finding("warning", f"the {name} fit did not converge",
+                                  "do not report the LR until both fits converge"))
+    if lr < -1e-6 * max(1.0, abs(float(unrestricted["loglik"]))):
+        warns.append(_finding("warning", f"the restricted fit has the higher log-likelihood (LR = {lr:.4g} < 0): "
+                              "the unrestricted optimum was not found or the models are not nested",
+                              "refit the unrestricted model from the restricted estimates"))
+    lr_pos = max(lr, 0.0)
+    cdf = float(stats.chi2.cdf(lr_pos, df))
+    if boundary and df == 1:
+        p = float(0.5 * stats.chi2.sf(lr_pos, 1)) if lr_pos > 0 else 1.0
+        warns.append(_finding("notice", "boundary null with one restriction: p from the 50:50 mixture of chi2(0) "
+                              "and chi2(1) (Self and Liang 1987), half the chi2(1) p-value",
+                              "say that the null is on the boundary when you report the test"))
+    else:
+        p = float(stats.chi2.sf(lr_pos, df))
+        if boundary:
+            warns.append(_finding("warning", f"boundary null with {df} restrictions: the chi2({df}) p-value is "
+                                  "conservative (the true reference is a mixture whose weights depend on the model)",
+                                  "report it as an upper bound on the p-value, or bootstrap the LR under the null"))
+    used = {"df": df, "boundary": boundary, "n": int(unrestricted["n"]), "alpha": alpha,
+            "skill_version": SKILL_VERSION}
+    out = {"estimand": "LR", "statistic": lr, "df": df, "p": p, "chi2_cdf": cdf, "reject": bool(p < alpha),
+           "used": used, "warnings": warns}
+    if show:
+        print(f"\nLR = {lr:.4f}, df = {df}, p (right tail) = {p:.4f}   [chi2 CDF = {cdf:.4f}: not the p-value]")
+        _print_findings(warns)
+    return out

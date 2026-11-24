@@ -246,5 +246,333 @@ check("v2.7.4 review r1 S3: unused categories do not count as clusters (n_cluste
       "with plain labels)", r_cat["n_clusters"] == 20 and abs(r_cat["se"] - r_pl["se"]) < 1e-14
       and r_cat["p_cr1_t_G-1"] == r_pl["p_cr1_t_G-1"], (r_cat["n_clusters"], r_cat["se"], r_pl["se"]))
 
+
+# =============================================================================================
+# v2.8.0: generic GMM (estimation.gmm) and the LR test between nested mle fits (estimation.lr_test)
+# References are written here by other routes: the closed form of linear GMM, the IV formula, the HAC sum
+# over all pairs, statsmodels' NonlinearIVGMM (independent code), the normal-regression LR n log(SSR_r/SSR_u),
+# and a design with known truth (Euler equation with gamma = 2, beta = 0.995; QuantEcon "Estimating Euler
+# Equations by GMM", lecture-python.myst 0dc4fe7, described there; the simulator below is ours).
+# =============================================================================================
+import contextlib
+import io
+
+
+def _lin_moments(th, y, X, Z):
+    return (y - X @ th)[:, None] * Z
+
+
+rng80 = np.random.default_rng(80)
+n80 = 600
+z80 = rng80.standard_normal((n80, 3))
+v80 = rng80.standard_normal(n80)
+x80 = 0.8 * z80.sum(1) + v80
+u80 = (0.6 * v80 + rng80.standard_normal(n80)) * np.sqrt(0.5 + z80[:, 0] ** 2)   # endogenous and heteroskedastic
+y80 = 1.0 + 2.0 * x80 + u80
+X80 = np.column_stack([np.ones(n80), x80])
+Z80 = np.column_stack([np.ones(n80), z80])
+
+# closed form of two-step linear GMM (centered S, identity first step), written without the function
+A80 = Z80.T @ X80 / n80
+c80 = Z80.T @ y80 / n80
+
+
+def _cf_step(W):
+    return np.linalg.solve(A80.T @ W @ A80, A80.T @ W @ c80)
+
+
+def _cf_S(th):
+    g = (y80 - X80 @ th)[:, None] * Z80
+    gc = g - g.mean(0)
+    return gc.T @ gc / n80
+
+
+th1 = _cf_step(np.eye(4))
+W2 = np.linalg.inv(_cf_S(th1))
+th2 = _cf_step(W2)
+gbar2 = ((y80 - X80 @ th2)[:, None] * Z80).mean(0)
+J_cf = n80 * gbar2 @ W2 @ gbar2
+B80 = np.linalg.inv(A80.T @ W2 @ A80)
+V_cf = B80 @ A80.T @ W2 @ _cf_S(th2) @ W2 @ A80 @ B80 / n80
+g80 = est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), names=["const", "x"], show=False)
+check("v2.8.0 gmm: two-step linear GMM equals the closed form (A'WA)^-1 A'Wc with W = S(theta1)^-1 (rel <= 1e-9)",
+      np.allclose(g80["params"].to_numpy(), th2, rtol=1e-9, atol=0), (g80["params"].to_numpy(), th2))
+check("v2.8.0 gmm: sandwich covariance with S at the estimate equals the closed form (rel <= 1e-7)",
+      np.allclose(g80["cov"].to_numpy(), V_cf, rtol=1e-7, atol=0))
+check("v2.8.0 gmm: J = n gbar' W gbar with the step-2 weight, df = m - k = 2 (rel <= 1e-7)",
+      abs(g80["j"] / J_cf - 1) < 1e-7 and g80["j_df"] == 2, (g80["j"], J_cf))
+check("v2.8.0 gmm: j_p is the RIGHT tail chi2.sf(J, 2) and j_cdf = 1 - j_p",
+      abs(g80["j_p"] - stats.chi2.sf(J_cf, 2)) < 1e-9 and abs(g80["j_p"] + g80["j_cdf"] - 1) < 1e-12)
+
+# iterated: at the fixed point the estimate solves the problem with W = S(theta)^-1 at itself
+g80i = est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), steps="iterated", tol=1e-12, show=False)
+th_i = g80i["params"].to_numpy()
+check("v2.8.0 gmm: iterated GMM is a fixed point, theta = argmin with W = S(theta)^-1 (rel <= 1e-8)",
+      np.allclose(_cf_step(np.linalg.inv(_cf_S(th_i))), th_i, rtol=1e-8, atol=0) and g80i["converged"])
+
+# one-step: the user's weight, sandwich SEs, no J
+W_zz = np.linalg.inv(Z80.T @ Z80 / n80)
+g80o = est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), steps="one-step", weight=W_zz, show=False)
+th_o = _cf_step(W_zz)
+Bo = np.linalg.inv(A80.T @ W_zz @ A80)
+V_o = Bo @ A80.T @ W_zz @ _cf_S(th_o) @ W_zz @ A80 @ Bo / n80
+check("v2.8.0 gmm: one-step with W = (Z'Z/n)^-1 is 2SLS, with the sandwich covariance (rel <= 1e-7)",
+      np.allclose(g80o["params"].to_numpy(), th_o, rtol=1e-9, atol=0)
+      and np.allclose(g80o["cov"].to_numpy(), V_o, rtol=1e-7, atol=0))
+check("v2.8.0 gmm: one-step reports no J and says why",
+      g80o["j"] is None and g80o["j_p"] is None
+      and any(w["level"] == "notice" and "no J" in w["message"] for w in g80o["warnings"]))
+
+# exactly identified: the IV formula, J = 0 and a notice
+Zx = Z80[:, :2]
+g80e = est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Zx), show=False)
+iv = np.linalg.solve(Zx.T @ X80, Zx.T @ y80)
+check("v2.8.0 gmm: exactly identified GMM equals the IV estimator (Z'X)^-1 Z'y and J = 0 (no p-value)",
+      np.allclose(g80e["params"].to_numpy(), iv, rtol=1e-9, atol=0) and g80e["j_df"] == 0 and g80e["j"] < 1e-12
+      and g80e["j_p"] is None)
+check("v2.8.0 gmm: exactly identified gets the notice that J tests nothing",
+      any(w["level"] == "notice" and "exactly identified" in w["message"] for w in g80e["warnings"])
+      and not any("exactly identified" in w["message"] for w in g80["warnings"]))
+
+# HAC S against the double sum over all pairs (|t - s| <= L, weight 1 - |t - s|/(L + 1) or 1)
+rng_h = np.random.default_rng(81)
+Gh = rng_h.standard_normal((60, 2))
+Gh[1:] += 0.6 * Gh[:-1]
+for kern in ("bartlett", "truncated"):
+    U = Gh - Gh.mean(0)
+    Sd = np.zeros((2, 2))
+    for t in range(60):
+        for s_ in range(60):
+            lag = abs(t - s_)
+            if lag <= 3:
+                Sd += (1 - lag / 4 if kern == "bartlett" else 1.0) * np.outer(U[t], U[s_])
+    Sd /= 60
+    check(f"v2.8.0 gmm: the {kern} HAC long-run covariance equals the double sum over pairs (rel <= 1e-12)",
+          np.allclose(est._gmm_S(Gh, 3, kern, True), Sd, rtol=1e-12, atol=0))
+
+
+# Euler equation with known truth
+def _euler_sim(n, gamma=2.0, beta=0.995, seed=0):
+    r = np.random.default_rng(seed)
+    burn = 200
+    e = r.standard_normal(n + burn)
+    dc = np.empty(n + burn)
+    dc[0] = 0.0015
+    for t in range(1, n + burn):
+        dc[t] = 0.0015 * 0.6 + 0.4 * dc[t - 1] + 0.006 * e[t]
+    cg = np.exp(dc[burn:])
+    sdf = beta * cg ** (-gamma)
+    xi = np.exp(0.02 * r.standard_normal(n) - 0.5 * 0.02 ** 2)     # mean one: E[sdf R] = 1
+    return xi / sdf, cg
+
+
+def _euler_arrays(R, cg, p):
+    n = len(R)
+    Z = [np.ones(n - p)]
+    for j in range(1, p + 1):
+        Z += [R[p - j:n - j], cg[p - j:n - j]]
+    return R[p:], cg[p:], np.column_stack(Z)
+
+
+def _euler_moments(th, R, cg, Z):
+    return (th[1] * cg ** (-th[0]) * R - 1.0)[:, None] * Z
+
+
+Re, ce = _euler_sim(5000, seed=3)
+Rr, cr, Ze = _euler_arrays(Re, ce, 2)
+ge = est.gmm(_euler_moments, [1.0, 0.99], args=(Rr, cr, Ze), names=["gamma", "beta"], center=False,
+             weight=np.linalg.inv(Ze.T @ Ze / len(Ze)), show=False)
+from statsmodels.sandbox.regression.gmm import NonlinearIVGMM
+
+
+def _sm_err(params, exog):
+    return params[1] * exog[:, 1] ** (-params[0]) * exog[:, 0] - 1.0
+
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    sm_res = NonlinearIVGMM(np.zeros(len(Rr)), np.column_stack([Rr, cr]), Ze, _sm_err).fit(
+        start_params=np.array([1.0, 0.99]), maxiter=2, optim_method="bfgs", optim_args={"disp": False, "gtol": 1e-12},
+        wargs={"centered": False})
+check("v2.8.0 gmm: Euler equation, same estimates as statsmodels NonlinearIVGMM two-step (rel <= 1e-8; "
+      "different optimizers)", np.allclose(ge["params"].to_numpy(), sm_res.params, rtol=1e-8, atol=0),
+      (ge["params"].to_numpy(), sm_res.params))
+check("v2.8.0 gmm: Euler equation, same SEs and J as NonlinearIVGMM (rel <= 1e-6; numerical Jacobians differ)",
+      np.allclose(ge["table"]["se"].to_numpy(), sm_res.bse, rtol=1e-6, atol=0)
+      and abs(ge["j"] / sm_res.jtest()[0] - 1) < 1e-6, (ge["table"]["se"].to_numpy(), sm_res.bse))
+check("v2.8.0 gmm: Euler equation with n = 4998 is strongly identified (rank test per df far above 10; no "
+      "identification warning)", ge["ident_F"] > 50 and ge["rank_p"] < 1e-10
+      and not any("identif" in w["message"] for w in ge["warnings"]), ge["ident_F"])
+
+# Monte Carlo: 400 samples of 900 months, two instrument lags (5 moments), default options.
+# Bands fixed before running: coverage of the 95% CI in [0.92, 0.98] (MC SE 1.1%); size of J at 5% in [0.02, 0.085]
+# (catches a 2x inflation).
+cov_g, cov_b, rej = [], [], []
+for rep in range(400):
+    R_, c_ = _euler_sim(900, seed=1000 + rep)
+    a_ = _euler_arrays(R_, c_, 2)
+    f_ = est.gmm(_euler_moments, [1.0, 0.99], args=a_, show=False)
+    t_ = f_["table"]
+    cov_g.append(t_["ci_low"].iloc[0] <= 2.0 <= t_["ci_high"].iloc[0])
+    cov_b.append(t_["ci_low"].iloc[1] <= 0.995 <= t_["ci_high"].iloc[1])
+    rej.append(f_["j_p"] < 0.05)
+mc = (np.mean(cov_g), np.mean(cov_b), np.mean(rej))
+check("v2.8.0 gmm: Euler Monte Carlo (400 x 900): 95% CI coverage of gamma and beta in [0.92, 0.98]",
+      0.92 <= mc[0] <= 0.98 and 0.92 <= mc[1] <= 0.98, mc)
+check("v2.8.0 gmm: Euler Monte Carlo: J rejects at 5% in [0.02, 0.085] of the samples (size)", 0.02 <= mc[2] <= 0.085, mc)
+
+# bound: beta capped at 0.99 when the truth is 0.995 -> the estimate sits on the bound -> warning
+gb = est.gmm(_euler_moments, [1.0, 0.98], args=(Rr, cr, Ze), names=["gamma", "beta"], bounds=[None, (0.0, 0.99)],
+             show=False)
+check("v2.8.0 gmm: an estimate on its bound gets the boundary warning (Andrews 1999)",
+      abs(gb["params"]["beta"] - 0.99) < 1e-9 and any(w["level"] == "warning" and "upper bound" in w["message"]
+                                                     for w in gb["warnings"]))
+gb2 = est.gmm(_euler_moments, [1.0, 0.98], args=(Rr, cr, Ze), names=["gamma", "beta"], bounds=[None, (0.0, 1.5)],
+              show=False)
+check("v2.8.0 gmm: a bound far from the estimate (many SEs) gives no boundary warning",
+      not any("bound" in w["message"] for w in gb2["warnings"]))
+
+
+# weak and missing identification in a linear IV with one endogenous regressor (constant + 3 instruments)
+def _iv_case(pi, seed, n=500):
+    r = np.random.default_rng(seed)
+    z = r.standard_normal((n, 3))
+    v = r.standard_normal(n)
+    x = pi * z.sum(1) + v + 1.0
+    y = x + 0.5 * v + r.standard_normal(n)
+    return y, np.column_stack([np.ones(n), x]), np.column_stack([np.ones(n), z])
+
+
+def _fs_F(y, X, Z):
+    return float(np.squeeze(sm.OLS(X[:, 1], Z).fit().f_test(np.eye(4)[1:]).fvalue))
+
+
+strong = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(1.0, 1), show=False)
+check("v2.8.0 gmm: strong instruments (first-stage F in the hundreds): no identification warning",
+      not any("identif" in w["message"] for w in strong["warnings"]) and strong["ident_F"] > 10)
+
+# both sides of the weak-identification cut (10), seeds copied from claude/scripts/v280/seed_search.py
+wk_below = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.08, 0), show=False)
+wk_above = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.10, 10), show=False)
+check("v2.8.0 gmm: rank statistic per df 7.2 (below 10, rank test rejects) -> weak-identification warning",
+      7 < wk_below["ident_F"] < 10 and wk_below["rank_p"] < 0.05
+      and any(w["level"] == "warning" and "weak identification" in w["message"] for w in wk_below["warnings"]),
+      wk_below["ident_F"])
+check("v2.8.0 gmm: rank statistic per df 10.8 (just above 10) -> no identification warning",
+      10 < wk_above["ident_F"] < 13 and not any("identif" in w["message"] for w in wk_above["warnings"]),
+      wk_above["ident_F"])
+none_ = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.0, 0), show=False)
+check("v2.8.0 gmm: irrelevant instruments (rank test p = 0.38) -> 'may not be identified' warning, not 'weak'",
+      none_["rank_p"] >= 0.05 and any("may not be identified" in w["message"] for w in none_["warnings"])
+      and not any("weak identification" in w["message"] for w in none_["warnings"]), none_["rank_p"])
+ratios = []
+for pi_ in (0.05, 0.10):
+    for sd in range(20):
+        a_ = _iv_case(pi_, sd)
+        ratios.append(est.gmm(_lin_moments, [0.0, 0.0], args=a_, show=False)["ident_F"] / _fs_F(*a_))
+check("v2.8.0 gmm: where identification is weak (pi 0.05 and 0.1, 40 samples) the rank statistic per df is the "
+      "first-stage F (median ratio within 5% of 1)", abs(np.median(ratios) - 1) < 0.05, np.median(ratios))
+
+# truncated kernel with an indefinite S (an MA(1) with a unit root in the MA part, two lags; seed 1)
+r_neg = np.random.default_rng(1)
+e_neg = r_neg.standard_normal(81)
+x_neg = e_neg[1:] - e_neg[:-1]
+gneg = est.gmm(lambda th, x: (x - th[0])[:, None], [0.0], args=(x_neg,), hac_lags=2, kernel="truncated", show=False)
+check("v2.8.0 gmm: truncated kernel with a negative S -> warning, a positive weight, finite estimate",
+      any(w["level"] == "warning" and "not positive definite" in w["message"] for w in gneg["warnings"])
+      and np.isfinite(gneg["params"].iloc[0]) and np.linalg.eigvalsh(gneg["weight"]).min() > 0)
+gpos = est.gmm(lambda th, x: (x - th[0])[:, None], [0.0], args=(x_neg,), hac_lags=2, kernel="bartlett", show=False)
+check("v2.8.0 gmm: the same data with the Bartlett kernel -> no positive-definiteness warning",
+      not any("positive definite" in w["message"] for w in gpos["warnings"]))
+
+# iterated GMM that is not allowed to settle
+g_ns = est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), steps="iterated", maxiter=1, tol=0.0, show=False)
+check("v2.8.0 gmm: iterated GMM stopped by maxiter -> converged False and the warning",
+      g_ns["converged"] is False and any("did not settle" in w["message"] for w in g_ns["warnings"]))
+
+# few observations per moment
+few = est.gmm(_lin_moments, [0.0, 0.0], args=(y80[:39], X80[:39], Z80[:39]), show=False)
+enough = est.gmm(_lin_moments, [0.0, 0.0], args=(y80[:40], X80[:40], Z80[:40]), show=False)
+check("v2.8.0 gmm: 39 observations for 4 moments -> notice; 40 -> no notice",
+      any("per moment" in w["message"] for w in few["warnings"])
+      and not any("per moment" in w["message"] for w in enough["warnings"]))
+
+# stdout: labels the reader sees
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.08, 0), names=["const", "x"])
+txt = buf.getvalue()
+check("v2.8.0 gmm show: prints the method, the table, J with 'p (right tail)', the CDF labelled as not the "
+      "p-value, the identification line and each finding with its action",
+      "GMM (two-step)" in txt and "estimate" in txt and "p (right tail)" in txt and "not the p-value" in txt
+      and "Cragg-Donald" in txt and "WARNING: weak identification" in txt and "action:" in txt, txt[-400:])
+check("v2.8.0 gmm: 'used' records the choices actually applied", g80["used"]["steps"] == "two-step"
+      and g80["used"]["first_weight"] == "identity" and g80["used"]["n"] == n80 and g80["used"]["m"] == 4
+      and g80o["used"]["first_weight"] == "user" and g80["used"]["skill_version"])
+
+# refusals
+for bad, kw in (("steps", dict(steps="three")), ("kernel", dict(kernel="parzen", hac_lags=2)),
+                ("hac_lags", dict(hac_lags=-1))):
+    try:
+        est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), show=False, **kw)
+        refused = False
+    except ValueError:
+        refused = True
+    check(f"v2.8.0 gmm: refuses a bad {bad}", refused)
+try:
+    est.gmm(_lin_moments, [0.0, 0.0, 0.0], args=(y80, X80[:, :1].repeat(3, 1), Z80[:, :2]), show=False)
+    under = False
+except ValueError:
+    under = True
+check("v2.8.0 gmm: fewer moments than parameters is refused (not identified)", under)
+
+
+# ---------------------------------------------------------------------------------------------
+# lr_test: normal linear regression, where LR = n log(SSR_r / SSR_u) exactly at the MLE
+# ---------------------------------------------------------------------------------------------
+def _ll_normal(th, y, X):
+    b, ls = th[:-1], th[-1]
+    e = y - X @ b
+    return -0.5 * np.log(2 * np.pi) - ls - 0.5 * e ** 2 * np.exp(-2 * ls)
+
+
+rng_l = np.random.default_rng(82)
+nl = 300
+Xl = np.column_stack([np.ones(nl), rng_l.standard_normal((nl, 3))])
+yl = Xl @ np.array([1.0, 0.5, 0.15, 0.0]) + rng_l.standard_normal(nl)
+fu = est.mle(_ll_normal, np.r_[np.zeros(4), 0.0], args=(yl, Xl))
+fr = est.mle(_ll_normal, np.r_[np.zeros(2), 0.0], args=(yl, Xl[:, :2]))
+ssr = lambda X: float(np.sum((yl - X @ np.linalg.lstsq(X, yl, rcond=None)[0]) ** 2))
+lr_cf = nl * np.log(ssr(Xl[:, :2]) / ssr(Xl))
+lt = est.lr_test(fu, fr, show=False)
+check("v2.8.0 lr_test: equals n log(SSR_r/SSR_u) of the normal regression (rel <= 1e-6), df = 2",
+      abs(lt["statistic"] / lr_cf - 1) < 1e-6 and lt["df"] == 2, (lt["statistic"], lr_cf))
+check("v2.8.0 lr_test: p is the right tail chi2.sf and chi2_cdf = 1 - p",
+      abs(lt["p"] - stats.chi2.sf(lt["statistic"], 2)) < 1e-12 and abs(lt["p"] + lt["chi2_cdf"] - 1) < 1e-12
+      and lt["reject"] == (lt["p"] < 0.05))
+fr_short = est.mle(_ll_normal, np.r_[np.zeros(2), 0.0], args=(yl[:-1], Xl[:-1, :2]))
+try:
+    est.lr_test(fu, fr_short, show=False)
+    same_n = False
+except ValueError:
+    same_n = True
+check("v2.8.0 lr_test: fits on different samples are refused", same_n)
+lb1 = est.lr_test(fu, fr, df=1, boundary=True, show=False)
+check("v2.8.0 lr_test: boundary with one restriction -> p = half the chi2(1) p (Self-Liang), with a notice",
+      abs(lb1["p"] - 0.5 * stats.chi2.sf(lb1["statistic"], 1)) < 1e-12
+      and any(w["level"] == "notice" for w in lb1["warnings"]))
+lb2 = est.lr_test(fu, fr, boundary=True, show=False)
+check("v2.8.0 lr_test: boundary with two restrictions -> chi2(2) p and the 'conservative' warning",
+      abs(lb2["p"] - lt["p"]) < 1e-15 and any("conservative" in w["message"] for w in lb2["warnings"]))
+lneg = est.lr_test(fr, fu, df=2, show=False)
+check("v2.8.0 lr_test: arguments swapped (LR < 0) -> warning and p = 1",
+      lneg["statistic"] < 0 and lneg["p"] == 1.0
+      and any("higher log-likelihood" in w["message"] for w in lneg["warnings"]))
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    est.lr_test(fu, fr)
+check("v2.8.0 lr_test show: prints LR, df, 'p (right tail)' and the CDF labelled as not the p-value",
+      "LR =" in buf.getvalue() and "p (right tail)" in buf.getvalue() and "not the p-value" in buf.getvalue())
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
