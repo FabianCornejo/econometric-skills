@@ -1,0 +1,236 @@
+"""v2.7.5: the corpora of right and wrong answers that measure the graders of the three new routing cases (used by
+test_v275.py; not a test on its own, so the CI loop over tests/test_*.py does not run it)."""
+
+MIXED = {  # review-mixed-samples: the mean is of the 64 base-sample rows, the regression of 111
+    "good": [
+        "A previsão mistura amostras: a média 6,5 é das 64 ex-colônias, mas a regressão usa 111 países.",
+        "A média usada não é a da amostra da regressão; use a média dos 111 países.",
+        "Os números vêm de amostras diferentes: a regressão tem 111 países e a média, 64.",
+        "Calcule a média na mesma amostra da regressão, senão a previsão não é 'no índice médio'.",
+        "A média é de outra amostra (a base de 64), então 8,09 não é a previsão no valor médio da regressão.",
+        "Há mistura de amostras entre a regressão e a média.",
+        "Amostras distintas: o coeficiente vem de 111 países, a média de 64.",
+        "A média não corresponde à amostra da regressão; com os 111 países a média é 7,2 e a previsão, 8,46.",
+        "Inconsistência de amostra: estimação com 111, média com 64.",
+        "O valor 6,5 é a média de um subconjunto, não da amostra de estimação.",
+        "A previsão deve usar a média da amostra de estimação, não a da amostra-base.",
+        "The mean comes from a different sample than the regression.",
+        "Use the same sample for the mean and the regression.",
+        "Sample mismatch: 111 countries in the regression, 64 in the mean.",
+        "O índice médio foi calculado em outra amostra, o que torna a frase enganosa.",
+        "A média de 6,5 vem das 64 ex-colônias, um subconjunto dos 111: não é a média dos dados da regressão.",
+        "Média e regressão não usam as mesmas observações.",
+        "A amostra da média difere da amostra da regressão.",
+        "É preciso reportar o n de cada número: a regressão tem 111 e a média 64, amostras diferentes.",
+        "Previsão em uma média de subamostra: não é o país médio da regressão.",
+        "A média deveria ser calculada sobre os mesmos 111 países usados na regressão.",
+        "O problema é usar a média de uma amostra diferente da usada para estimar.",
+        "O índice médio da regressão é 7,2, não 6,52.",  # mutation r1: an answer that rests on 7,2 alone
+        'O 6,5 é a média das 64 ex-colônias, enquanto a regressão foi estimada com 111 países; a média relevante seria 7,2.',  # review r1 S2-5
+        "Incoerência: coeficientes estimados em 111 países, mas o valor 'médio' vem de só 64.",  # review r1 S2-5
+        'The regression uses 111 countries but the mean is taken over the 64 base-sample colonies.',  # review r1 S2-5
+        'Base inconsistente: a média foi tirada da amostra-base (64), não do conjunto de estimação (111).',  # review r1 S2-5
+        "As 64 ex-colônias são um subgrupo dos 111; o 'índice médio' deveria ser 7,21, e a previsão 8,46.",  # review r1 S2-5
+        'A previsão no índice médio deveria usar 7,21, a média nos 111 países da regressão.',  # review r1 S2-5
+        "O 'índice médio' de 6,52 não é a média dos países usados na regressão: é de um grupo menor, as 64 ex-colônias.",  # review r2
+        'A média vem da amostra-base de AJR (64 países), mas os coeficientes foram estimados com 111; para prever no país médio, use a média dos 111.',  # review r2
+        'Prever no valor médio exige que o valor médio seja calculado nos dados do ajuste; aqui não é.',  # review r2
+        'Há um descasamento: regressão com N=111 e média com N=64.',  # review r2
+        'The 6.52 average is from the 64-country base sample, not from the 111 countries in the regression.',  # review r2
+        'Média e coeficientes saíram de conjuntos de países diferentes.',  # review r2
+        'Para o país médio da regressão, o índice é cerca de 7,21 e o log previsto, cerca de 8,45.',  # review r2
+        "A frase 'índice médio' é enganosa: a média citada é das ex-colônias da amostra-base, que é só parte dos países da regressão.",  # review r2
+    ],
+    "bad": [
+        "O coeficiente de 0,53 é estatisticamente significativo; a previsão está correta.",
+        "A regressão sofre de endogeneidade: use variáveis instrumentais.",
+        "Falta reportar o erro-padrão e o intervalo de confiança da previsão.",
+        "4,63 + 0,53 × 6,5 dá 8,08, então o 8,09 está certo pelo arredondamento.",
+        "O índice de expropriação é medido com erro, o que atenua o coeficiente.",
+        "Inclua controles como latitude e continente.",
+        "A causalidade reversa é um problema: países ricos protegem mais a propriedade.",
+        "Reporte o R² e os resíduos.",
+        "A amostra-base de AJR é a correta para a análise.",
+        "Use erros-padrão robustos à heterocedasticidade.",
+        "O efeito de 0,53 em log significa cerca de 70% a mais de PIB por ponto do índice.",
+        "A previsão está certa; o relatório só deveria arredondar menos.",
+        "Teste a forma funcional com RESET.",
+        "Com 111 países a regressão tem poder suficiente.",
+        "A constante de 4,63 não tem interpretação econômica.",
+        "O log do PIB per capita previsto é 8,09, como no relatório.",
+        "Faltou o intervalo de previsão, que é mais largo que o intervalo da média.",
+        "As ex-colônias são um grupo especial; analise-as separadamente.",
+        "Os outliers podem dominar a regressão; verifique a influência.",
+        "Regredimos o log do PIB per capita de 1995 no índice de proteção contra expropriação, com todos os 111 países.",
+        "A amostra é pequena para conclusões gerais.",
+        "Use o estimador de MQ2E com a mortalidade dos colonizadores.",
+        'Use uma subamostra das ex-colônias para checar a robustez do coeficiente.',  # review r1 S3-1
+        'Recomendo estimar também em outras amostras (por década) e reportar o R².',  # review r1 S3-1
+        'O resultado deveria ser checado num subconjunto de países africanos; fora isso, ok.',  # review r1 S3-1
+        'Regressão com 111 países, média de 6,52 nas 64 ex-colônias e previsão de 8,09: tudo consistente com AJR.',  # review r2
+        'Os 111 países incluem as 64 ex-colônias de AJR; a previsão de 8,09 está correta.',  # review r2
+        'Recomendo repetir a regressão em um subgrupo de ex-colônias para checar a robustez.',  # review r2
+        'Estime também em um subconjunto sem a África para ver se o 0,53 se mantém.',  # review r2
+        'Os países vão de 3,5 a 10 no índice, uma amplitude de 6,5; a previsão de 8,09 está certa.',  # review r2
+        'Cada ponto do índice eleva o PIB per capita em cerca de 70% (exp(0,53) − 1); com 7,2 pontos de diferença entre extremos o efeito é enorme. A previsão confere.',  # review r2
+        'Não há incoerência entre os números; a previsão está certa.',  # review r2
+        'A média de 6,52 é baixa comparada à de 7,2 da OCDE, mas a previsão está certa.',  # r2 follow-up probe
+        'Os 64 países da amostra-base são ex-colônias; os 111 incluem outras, e a previsão confere.',  # r2 follow-up probe
+        'O subgrupo das ex-colônias tem média menor, o que é esperado.',  # r2 follow-up probe
+        'A mesma amostra de AJR foi usada, então está tudo certo.',  # r2 follow-up probe
+        'Usaram a amostra-base, o que é correto.',  # r2 follow-up probe
+    ],
+}
+
+JPROB = {  # review-j-prob-cdf: Prob = 0.967 is P(chi2 <= J); the p-value is 0.033, which rejects at 5%
+    "good": [
+        "A coluna Prob de Hansen e Singleton é a CDF: o p-valor é 1 − 0,967 = 0,033, e as restrições são rejeitadas a 5%.",
+        "Prob é a probabilidade acumulada; o p-valor de cauda direita é 0,033.",
+        "O p-valor é 0,033, não 0,967: rejeita-se a sobreidentificação.",
+        "0,967 é P(χ² ≤ J); o p-valor é 1 − Prob.",
+        "Na convenção de Hansen-Singleton, Prob é a função de distribuição acumulada, não o p-valor.",
+        "Com J = 10,5 e 4 gl, o p-valor da cauda direita é cerca de 0,03.",
+        "Isso é a CDF, não um p-valor: os dados rejeitam as restrições.",
+        "O p-valor correto é 1 - 0,967, ou seja 0,033.",
+        "Prob(J) é a acumulada; probabilidade alta aqui significa estatística grande, rejeição.",
+        "The Prob column is the CDF; the right-tail p-value is 0.033.",
+        "p = 1 − Prob = 0.033, so the overidentifying restrictions are rejected.",
+        "Prob is the cumulative distribution, not the p-value.",
+        "Leitura invertida: o p-valor é 0,03 e a hipótese nula é rejeitada.",
+        "A probabilidade reportada é a distribuição acumulada do qui-quadrado.",
+        "O p-valor (cauda superior) é 0,033.",
+        "Prob = P(χ²(4) ≤ 10,5); o valor-p é o complemento, 0,033.",
+        "O relatório confundiu a CDF com o p-valor.",
+        "Valor-p = 0,033 < 0,05: rejeita.",
+        "A tabela de Hansen e Singleton reporta a acumulada, então o p-valor é 1 menos esse número.",
+        "Um J de 10,5 com 4 graus de liberdade tem p-valor de 0,033, longe de 0,967.",
+        "Prob alto (0,967) quer dizer que J está na cauda direita: p ≈ 0,03.",
+        '0,967 é a probabilidade de um χ²(4) ficar abaixo de 10,5; a de ficar acima, que é o p-valor, é 0,033.',  # review r1 S2-5
+        'J = 10,5 com 4 graus de liberdade passa do valor crítico de 9,49 a 5%: rejeita. A coluna Prob não é o p-valor.',  # review r1 S2-5
+        "A 'Prob' é a função de distribuição do qui-quadrado: o p-valor fica em 3,3%, e as restrições são rejeitadas.",  # review r1 S2-5
+        'Prob = 0,967 significa que 96,7% da distribuição está abaixo de J; sobram 3,3% na cauda, rejeição a 5%.',  # review r1 S2-5
+        'The reported Prob is P(chi2 <= J); the p-value is 0.033.',  # review r1 S2-5
+        'Prob = 0,967 é P(J ≤ 10,5); o p-valor é 0,033 e rejeitamos a 5%.',  # review r2
+        'A coluna Prob dá a área à esquerda de J; a área à direita, o p-valor, é 0,033.',  # review r2
+        'O teste rejeita: χ²(4) = 10,5 tem p ≈ 0,033.',  # review r2
+        'A interpretação está invertida: valores de Prob próximos de 1 indicam rejeição.',  # review r2
+        'Hansen e Singleton reportam a probabilidade de o qui-quadrado ser menor que J; então 0,967 implica rejeição a 5% (p = 0,033).',  # review r2
+        'Em vez de 0,967, o nível de significância observado é 0,033.',  # review r2
+        'The p-value is 1 - 0.967 = 0.033; the restrictions are rejected.',  # review r2
+    ],
+    "bad": [
+        "Com p-valor de 0,967 não rejeitamos as restrições; a conclusão está correta.",
+        "O teste J não prova que os instrumentos são válidos, só que são coerentes entre si.",
+        "Não rejeitar não é evidência de validade: o teste J tem pouco poder.",
+        "Reporte os erros-padrão de γ e β.",
+        "O GMM em dois passos tem viés em amostras pequenas; use o iterado.",
+        "A estatística J segue qui-quadrado com 4 graus de liberdade.",
+        "O modelo com duas defasagens é o preferido pelo critério de informação.",
+        "Use a matriz de pesos HAC.",
+        "A probabilidade de 0,967 indica bom ajuste.",
+        "Reproduzir a Tabela I com outros dados exige os mesmos instrumentos.",
+        "Teste a estabilidade dos parâmetros com uma amostra dividida.",
+        "A aversão ao risco estimada é plausível.",
+        "O teste de sobreidentificação tem 4 graus de liberdade porque há 6 momentos e 2 parâmetros.",
+        "Os dados não rejeitam as restrições de sobreidentificação.",
+        "Probabilidade alta significa que o modelo é bem especificado.",
+        "Instrumentos fracos podem distorcer o teste J.",
+        "Mostre o p-valor com três casas decimais.",
+        "A estatística J é 10,5, o que está dentro do esperado.",
+        "Compare com o teste de Hansen robusto.",
+        "O J de Sargan e o de Hansen coincidem sob homocedasticidade.",
+        "Prob 0,967: não rejeita a 5%.",
+        'A estatística J tem função de distribuição qui-quadrado com 4 graus de liberdade; com Prob 0,967 as restrições não são rejeitadas.',  # review r2
+        'Sob a nula, J segue um qui-quadrado (função de distribuição com 4 gl), e a Prob de 0,967 confirma o modelo.',  # review r2
+        'Como complemento, reporte também o teste de Hansen robusto; a conclusão está correta.',  # review r2
+        'A distribuição acumulada dos resíduos parece normal; com Prob 0,967 o modelo é bem especificado.',  # review r2
+        'J/gl = 2,6; cerca de 33,3% dos momentos são redundantes, mas a Prob 0,967 indica que o modelo é aceito.',  # review r2
+        'O valor crítico a 1% é 13,28, e com 9,49 a 5% de referência a Prob de 0,967 mostra não rejeição.',  # review r2
+        'A função de distribuição do J é qui-quadrado; não rejeita.',  # r2 follow-up probe
+        'O p-valor reportado de 0,967 é alto, então o modelo passa.',  # r2 follow-up probe
+        'A cauda direita da distribuição é longa, mas Prob 0,967 confirma o modelo.',  # r2 follow-up probe
+        'Prob 0,967 > 0,05, não rejeitamos.',  # r2 follow-up probe
+        '3,3 é o valor de J/gl esperado.',  # r2 follow-up probe
+    ],
+}
+
+HAND2SLS = {  # review-2sls-by-hand: the OLS SE of the second step is wrong (0.13 by hand against 0.15 from 2SLS)
+    "good": [
+        "Os erros-padrão do segundo passo por MQO estão errados: use um estimador de 2SLS.",
+        "Rodar o segundo estágio à mão dá o coeficiente certo, mas o erro-padrão é incorreto.",
+        "O erro-padrão de 0,13 é inválido; com IV2SLS o erro-padrão é cerca de 0,15.",
+        "Os resíduos usados no segundo passo são os errados (com os valores previstos), por isso o EP está subestimado.",
+        "Use iv_report ou IV2SLS para obter erros-padrão válidos.",
+        "O EP não é válido porque o segundo estágio foi feito manualmente.",
+        "A precisão é ilusória: erros-padrão do MQO no segundo estágio estão errados.",
+        "Standard errors from a by-hand second stage are wrong.",
+        "The second stage run by OLS gives incorrect standard errors; use a 2SLS estimator.",
+        "O erro-padrão está subestimado; re-estime com mínimos quadrados em dois estágios de uma vez.",
+        "Erros-padrão incorretos: o MQO no segundo passo ignora que os valores previstos foram estimados.",
+        "O t de 7,5 não vale, porque os erros-padrão do segundo passo por MQO estão errados.",
+        "O coeficiente está certo, mas a inferência não: refaça com o estimador de 2SLS.",
+        "Erro-padrão inválido no segundo estágio feito à mão.",
+        "O EP correto vem do estimador IV, que usa os resíduos com a variável original.",
+        "Os erros-padrão são incorretos quando o 2º estágio é rodado por MQO.",
+        "Os erros-padrão do procedimento manual são incorretos.",
+        "Precisa corrigir os erros-padrão: o MQO do segundo passo não serve para inferência.",
+        "Inferência errada: use o estimador de MQ2E (2SLS) para os erros-padrão.",
+        "O segundo estágio por MQO dá erro-padrão errado; o correto é maior.",
+        "Standard errors are understated.",
+        'O EP do MQO do segundo passo usa os resíduos com x previsto em vez de x; o EP do 2SLS é cerca de 0,15 e o t cai para ~6.',  # review r1 S2-5
+        'Esse erro-padrão não serve: o 2SLS correto dá cerca de 0,15.',  # review r1 S2-5
+        'A variância está mal calculada porque usa os resíduos do segundo estágio, não os estruturais.',  # review r1 S2-5
+        'The SE of 0.13 is too small; with IV2SLS it is 0.154.',  # review r1 S2-5
+        'Os erros-padrão reportados são viesados para baixo: rode o IV2SLS.',  # review r1 S2-5
+        'O erro-padrão de 0,13 está subestimado porque o MQO do segundo passo usa resíduos calculados com os valores previstos.',  # review r2
+        'Os EPs do segundo estágio manual não levam em conta que o regressor foi estimado; o EP válido (2SLS) é 0,154.',  # review r2
+        'A inferência do segundo passo é inválida: use o estimador 2SLS completo.',  # review r2
+        'O t de 7,5 está inflado: o desvio-padrão correto é maior.',  # review r2
+        'The reported SE ignores the first-stage estimation; the proper 2SLS SE is about 0.154.',  # review r2
+        'Rodar o MQO nos valores ajustados dá σ̂ errado, pois os resíduos usam x̂ e não x; use IV2SLS.',  # review r2
+    ],
+    "bad": [
+        "O instrumento precisa satisfazer a exclusão: a mortalidade afeta o PIB só pelas instituições?",
+        "Reporte a estatística F do primeiro estágio.",
+        "Com F abaixo de 10 o instrumento é fraco.",
+        "O efeito de 0,94 é muito maior que o do MQO, o que sugere erro de medida.",
+        "O LATE se refere aos países cujas instituições respondem à mortalidade.",
+        "Use erros-padrão robustos à heterocedasticidade.",
+        "Inclua controles de latitude e continente.",
+        "O efeito é muito preciso, com t = 7,5.",
+        "Mostre o intervalo de Anderson-Rubin.",
+        "A mortalidade dos colonizadores pode afetar o PIB por outros canais, como a doença.",
+        "O coeficiente de 0,94 deve ser interpretado em log.",
+        "Estimamos em dois passos: primeiro regredimos o índice na mortalidade; depois, por MQO, o PIB nos valores previstos.",
+        "Teste de endogeneidade de Hausman deve ser reportado.",
+        "A amostra de 64 países é pequena.",
+        "O primeiro estágio tem o sinal esperado.",
+        "Os dados de mortalidade foram criticados por Albouy.",
+        "Reporte o teste de sobreidentificação.",
+        "Faça um teste de robustez excluindo a África.",
+        "O erro-padrão de 0,13 indica um efeito preciso.",
+        "A interpretação causal depende da validade do instrumento.",
+        "Use o modelo em primeiras diferenças.",
+        'A inferência não depende do método de estimação; o resultado está certo.',  # review r1 S3-1
+        'O MQO simples seria viesado pela endogeneidade; o procedimento em dois passos resolve isso e o efeito é preciso.',  # review r2
+        'Com instrumento fraco o 2SLS é viesado em direção ao MQO; reporte o F do primeiro estágio.',  # review r2
+        'A mortalidade não serve como instrumento se afeta o PIB por outros canais, como as doenças.',  # review r2
+        'Verifique a heterocedasticidade nos resíduos do segundo estágio com um teste de White.',  # review r2
+        'The sample of 64 countries is too small for strong conclusions.',  # review r2
+        'O primeiro estágio tem R² de 0,15, o que é aceitável; o efeito é preciso.',  # review r2
+        'O efeito pode estar mal calculado se a mortalidade tiver erro de medida; fora isso o EP está ok.',  # review r2
+        'O EP de 0,13 é razoável e o efeito é preciso.',  # r2 follow-up probe
+        'Isso se deve ao instrumento fraco, viesado.',  # r2 follow-up probe
+        'O erro de medida é de 0,15 pontos.',  # r2 follow-up probe
+        'Os erros-padrão são robustos, então tudo bem.',  # r2 follow-up probe
+        'O 2SLS de 0,94 é maior que o MQO de 0,52.',  # r2 follow-up probe
+        'Se o EP for robusto, tudo bem.',  # r2 follow-up probe
+        'O resultado se mantém com 0,15 de R² no primeiro estágio.',  # r2 follow-up probe
+    ],
+}
+
+# Wrong answers that the graders still accept (review r1 S3-1): they deny or invert the point with the same words
+# ("não há problema de amostras diferentes", "Prob já é o p-valor de cauda direita", "os erros-padrão não estão
+# errados"). A regex grader cannot read negation, and the eval runner has no "must not match" grader; test_v275.py
+# prints how many of these still pass, so a later grader that refuses them shows up. Read failed runs by hand.
+KNOWN_FALSE_PASSES = {'MIXED': ['A amostra de 111 países é a mesma amostra usada por AJR, então a previsão está correta.', 'Não há problema de amostras diferentes aqui; a previsão está certa.'], 'JPROB': ['O p-valor de 0,967 é a probabilidade acumulada de não rejeitar; a conclusão está correta.', 'O valor de Prob é o p-valor de cauda direita, 0,967: não rejeita.', 'Não é preciso calcular o complemento: Prob já é o p-valor, então não rejeita.', 'Não é a CDF; é o p-valor, então o modelo não é rejeitado.', '0,967 é o p-valor da cauda superior, logo não rejeitamos as restrições.'], 'HAND2SLS': ['Os erros-padrão não estão errados: o MQO no segundo passo é equivalente ao 2SLS.', 'O EP de 0,13 está correto; o que está errado é a interpretação causal.', 'O instrumento é inválido porque viola a exclusão; os erros-padrão estão ok.', 'Não há necessidade de corrigir os erros-padrão; o efeito é preciso.']}
