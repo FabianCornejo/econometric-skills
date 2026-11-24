@@ -174,8 +174,8 @@ check("sprt_design: Wald's bounds alpha/(1-beta) and beta/(1-alpha)",
       near(sd["wald_bound_alpha"], 0.05 / 0.9, 1e-15) and near(sd["wald_bound_beta"], 0.1 / 0.95, 1e-15))
 check("sprt_design: book's Beta(2,5) vs Beta(5,2): errors 0.012 and 0.022 within 3 MC SEs + 0.0005, mean stop "
       "1.59 within 0.03 (MC and rounding)",
-      abs(sd["sim_alpha"] - 0.012) <= 3 * sd["sim_alpha_se"] + 0.0005
-      and abs(sd["sim_beta"] - 0.022) <= 3 * sd["sim_beta_se"] + 0.0005 and abs(sd["sim_en"] - 1.59) <= 0.03, sd)
+      near(sd["sim_alpha"], 0.012, 3 * sd["sim_alpha_se"] + 0.0005)
+      and near(sd["sim_beta"], 0.022, 3 * sd["sim_beta_se"] + 0.0005) and near(sd["sim_en"], 1.59, 0.03), sd)
 check("sprt_design: simulated errors within Wald's bounds; the overshoot notice fires",
       sd["sim_alpha"] <= sd["wald_bound_alpha"] and sd["sim_beta"] <= sd["wald_bound_beta"]
       and any("overshoot" in w["message"] for w in sd["warnings"]))

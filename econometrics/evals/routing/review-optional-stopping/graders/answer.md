@@ -1,0 +1,6 @@
+---
+type: regex
+pattern: '(peeking|optional stopping|parada opcional|espiar|(infla\w*|inflaciona\w*|(aument|elev)\w*(?= (a |o )?(taxa|chance|probabilidade|risco|erro|alfa|α)))[^.;]{0,40}(erro (do )?tipo I|type I error|alfa|alpha|α|falsos? positivos?|false positives?|taxa de falsos positivos|false positive rate)|(erro (do )?tipo I|type I error|alfa|alpha|α|falsos? positivos?|false positives?|taxa de falsos positivos|false positive rate)[^.;]{0,60}(infl\w*|aument\w*|eleva\w*|sobe|passa (bem )?de 5|(é|fica|is) (bem |far |much )?(acima de 5|maior que 5|above 5)|bem acima|far above|much larger|muito acima|n[aã]o (é|vale)|not 5|is not)|(erro (do )?tipo I|type I error|alfa|alpha|α|falsos? positivos?|false positives?|taxa de falsos positivos|false positive rate)[^.;]{0,40}\b(1[5-9]|2[0-2])([,.]\d+)? ?%|(alfa|alpha|α|erro (do )?tipo I|type I error) (real|efetivo|verdadeiro|actual|true)[^.;]{0,20}(maior|acima|larger|higher|bigger)|(usar|usado|use|usem|deveria|deveriam|precisaria|recomend\w*|em vez|instead|should|planej\w*|o correto seria)[^.;]{0,60}(SPRT|teste sequencial|sequential test|alpha[- ]?spending|gasto de alfa|Pocock|O.?Brien)|(olhadas|olhar|monitor\w*|acompanh\w*|interim|repeated)[^.;]{0,120}(invalid|inválid|n[aã]o (é|vale) (um )?p|not valid))'
+flags: i
+target: last_message
+---

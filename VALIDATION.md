@@ -26,11 +26,11 @@ The *Tolerance* column is the one the test uses, read from the test. Many tests 
 
 ## Largest observed difference
 
-For the level-A rows whose reference is outside the Python scientific stack the skill is built on (published values, and R, Stata, DoubleML, csdid, lifelines), `tools/validation_diffs.py` redoes the test's comparison and records the largest difference and the tolerance of that comparison, written as *difference of tolerance*. Measured on 2026-11-19 with Python 3.13.18, numpy 2.5.5, pandas 3.1.1, scipy 1.18.1, statsmodels 0.15.0, linearmodels 7.1, scikit-learn 1.9.1; output in `tools/validation_diffs.json`. It reads data, designs and reference values from the tests themselves, and CI runs it with `--check` (every comparison within its tolerance) on the latest dependency versions. Rows compared with software run in the test (scipy, statsmodels, linearmodels, arch, pandas) or with a closed form computed in the test are not measured.
+For the level-A rows whose reference is outside the Python scientific stack the skill is built on (published values, and R, Stata, DoubleML, csdid, lifelines), `tools/validation_diffs.py` redoes the test's comparison and records the largest difference and the tolerance of that comparison, written as *difference of tolerance*. Measured on 2026-11-24 (v2.8.0; the same versions as the run of 2026-11-19) with Python 3.13.18, numpy 2.5.5, pandas 3.1.1, scipy 1.18.1, statsmodels 0.15.0, linearmodels 7.1, scikit-learn 1.9.1; output in `tools/validation_diffs.json`. It reads data, designs and reference values from the tests themselves, and CI runs it with `--check` (every comparison within its tolerance) on the latest dependency versions. Rows compared with software run in the test (scipy, statsmodels, linearmodels, arch, pandas) or with a closed form computed in the test are not measured.
 
 ## Summary
 
-293 public functions: level A 98, level B 143, level C 22, level D 30.
+302 public functions: level A 107, level B 143, level C 22, level D 30.
 
 | module | A | B | C | D |
 |---|---|---|---|---|
@@ -41,7 +41,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `dependence` | 0 | 5 | 1 | 5 |
 | `diagnostics` | 15 | 1 | 1 | 4 |
 | `discrete_choice` | 2 | 0 | 0 | 0 |
-| `estimation` | 4 | 2 | 0 | 0 |
+| `estimation` | 6 | 2 | 0 | 0 |
 | `finance_empirics` | 9 | 4 | 1 | 0 |
 | `forecasting` | 1 | 7 | 2 | 0 |
 | `hte` | 0 | 10 | 0 | 1 |
@@ -52,6 +52,7 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `reporting` | 0 | 4 | 1 | 2 |
 | `risk` | 3 | 12 | 1 | 2 |
 | `segments` | 1 | 3 | 1 | 0 |
+| `sequential` | 7 | 0 | 0 | 0 |
 | `simulation` | 2 | 23 | 0 | 1 |
 | `specification` | 12 | 0 | 0 | 0 |
 | `state_space` | 0 | 4 | 2 | 1 |
@@ -210,6 +211,8 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `estimation.delta_method` | A | exact variance a'Va of a linear function | 1e-9 | not measured (closed form in the test) | test_estimation.py: delta method of a linear function is exact |  |
 | `estimation.bootstrap` | B | HC3 and CR1 SEs under simulated heteroskedasticity and clustering | within 15% | — | test_estimation.py: pairs bootstrap SE ~ HC3 SE |  |
 | `estimation.wild_cluster_bootstrap` | B | simulated 8-cluster design | size in [2%, 9%]; power > 70% | — | test_estimation.py: 8 clusters: wild cluster bootstrap size |  |
+| `estimation.gmm` | A | closed form of two-step linear GMM, the IV formula (exactly identified) and the HAC double sum over pairs, computed in the test; statsmodels NonlinearIVGMM (Euler equation, simulated and on the QuantEcon lecture's data, `hansen_singleton_1982_data.csv`, SHA-256 checked); SEs against an analytic Jacobian | 1e-9 relative (estimates), 1e-7 (covariance, J) against the closed form; 1e-12 (HAC); 1e-8 relative (estimates) and 1e-6 (SEs, J) against statsmodels on simulated data, 1e-7 and 1e-6 on the lecture's data (different optimizers and numerical Jacobians) | not measured (software run in the test) | test_estimation.py: v2.8.0 gmm: two-step linear GMM equals the closed form; test_estimation.py: v2.8.0 gmm: Euler equation, same estimates as statsmodels; test_quantecon_replication.py: H-S 1982 NLAG <p_>: gmm = statsmodels | known truth: Euler equation with γ = 2, β = 0.995, 400 samples of 900 months, coverage of the 95% CIs 0.945 and 0.938, J size 0.035 (bands [0.92, 0.98] and [0.02, 0.085]); Hansen-Singleton (1982) Table I only qualitatively (the lecture's data are a FRED / Ken French reconstruction, not CRSP); the weak-identification cut (10) from a v2.8.0 measurement against the first-stage F |
+| `estimation.lr_test` | A | n log(SSR_r/SSR_u) of the normal linear regression, computed in the test | 1e-6 relative (the two fits come from an optimizer) | not measured (closed form in the test) | test_estimation.py: v2.8.0 lr_test: equals n log(SSR_r/SSR_u) | boundary p (Self-Liang) checked as half the χ²(1) p |
 
 ## `finance_empirics`
 
@@ -368,6 +371,18 @@ For the level-A rows whose reference is outside the Python scientific stack the 
 | `segments.logit_leaf_model` | B | simulated two-segment process with opposite effects | split at x1 = 0 within 0.15; AMEs of opposite signs | — | test_llm_annotation_segments.py: tree finds the true segment boundary |  |
 | `segments.leaf_model_stability` | B | simulated two-segment process | the true split variable in every seed | — | test_llm_annotation_segments.py: stability |  |
 | `segments.predict_leaf_model` | C | — | — | — | test_llm_annotation_segments.py: predictions are probabilities | range and warnings only |
+
+## `sequential`
+
+| function | level | reference | tolerance | largest observed difference | test | note |
+|---|---|---|---|---|---|---|
+| `sequential.divergence` | A | closed forms computed in the test (KL between normals, Betas and Poissons; Chernoff of two normals with equal variance); published values of the QuantEcon book (KL 0.7592, Chernoff 0.1212 at φ 0.5969) | 1e-9 to 1e-14 against the closed forms; 0.00005 on the book's four decimals | 4.6e-05 of 5e-05 | test_sequential.py: divergence: KL between normals equals; test_sequential.py: divergence: the book's KL | JS of continuous distributions against a fine discretization (1e-6); the book values are rounded to four decimals |
+| `sequential.divergence_rate` | A | published values of the QuantEcon book (Markov rates 0.0588 and 0.0563); the mean log-likelihood-ratio step of long simulated Markov and VAR paths | 0.00005 on the book's four decimals; 3-4 simulation SEs | 4.5e-05 of 5e-05 | test_sequential.py: divergence_rate: Markov rates equal the book's; test_sequential.py: divergence_rate: VAR rate = mean | the VAR rate has no published value; it is checked by simulation only |
+| `sequential.sprt_design` | A | closed forms (Wald's thresholds and bounds; approximate E[N] with KL = μ²/2 for normal means); published simulation of the QuantEcon book (Beta(2,5) against Beta(5,2): errors 0.012 and 0.022, mean stop 1.59) | 1e-14 (thresholds); 1e-8 relative (E[N]); 3 Monte Carlo SEs + 0.0005 (errors) and 0.03 (mean stop) against the book | 0.015 of 0.03 | test_sequential.py: sprt_design: thresholds log; test_sequential.py: sprt_design: book's Beta(2,5) | the book's errors are a simulation too: the tolerance adds both Monte Carlo errors and the rounding |
+| `sequential.sprt` | A | the log-likelihood-ratio path cumsum(x − 1/2) of N(0,1) against N(1,1), computed in the test | 1e-12 | not measured (closed form in the test) | test_sequential.py: sprt: the path equals | crossings at known observations on both thresholds and just below log A |
+| `sequential.peeking_size` | A | published values: Armitage, McPherson and Rowe (1969) sizes 0.083, 0.142, 0.193, 0.248; Pocock (1977) per-look levels 0.0294, 0.0158, 0.0106; the trivariate normal CDF (scipy) and 200 000 simulated z paths | 0.0005 and 0.00005 (half the last printed digit); 1e-4 (CDF); 3 simulation SEs | 0.00036 of 0.0005 | test_sequential.py: peeking_size: Armitage-McPherson-Rowe; test_sequential.py: peeking_size: Pocock's; test_sequential.py: peeking_size: three looks equal | recursion grid of 401 points: within 6e-9 of 4001 points up to 50 looks (v2.8.0 measurement) |
+| `sequential.n_for_error` | A | the Neyman-Pearson sample size ((z_α + z_β)/μ)² for normal means, computed in the test | exact (integer) | not measured (closed form in the test) | test_sequential.py: n_for_error: normal means | simulated n within 1 of it; Bernoulli 0.3 vs 0.4: normal approximation within 15% of the simulated n |
+| `sequential.importance_tail_prob` | A | the exact normal tails of the log-likelihood ratio of N(0,1) against N(0.5,1), computed in the test | 3 importance-sampling SEs | not measured (closed form in the test) | test_sequential.py: importance_tail_prob: type I tail equals | variance at least 50x below plain simulation; a 1e-6 tail with no plain hit |
 
 ## `simulation`
 

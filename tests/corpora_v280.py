@@ -1,0 +1,200 @@
+"""v2.8.0: the corpora of right and wrong answers that measure the graders of the two new routing cases (used by
+test_v280.py; not a test on its own, so the CI loop over tests/test_*.py does not run it)."""
+
+GMM = {  # gmm-euler: the answer must point to the skill's estimation.gmm (the case measures that the agent finds it)
+    "good": [
+        "Use `estimation.gmm` com os momentos (β·g^(-γ)·R − 1) multiplicados pelos instrumentos.",
+        "A função é estimation.gmm(moments, theta0, args=...), em duas etapas; o J tem 3 graus de liberdade.",
+        "```python\nimport estimation as est\nfit = est.gmm(euler, [1.0, 0.99], args=(R, cg, Z))\n```",
+        "fit = est.gmm(momentos, [2, 0.99], args=(R, c, Z), names=['gamma', 'beta'])",
+        "Chame est.gmm( ... ) e leia fit['j_p'], o p-valor da cauda direita.",
+        "Na skill, o GMM genérico está em `estimation.gmm` (references/estimation-theory.md, seção 7).",
+        "Com `import estimation as es`, rode es.gmm(euler, theta0, args=(R, cg, Z)).",
+        "O caminho é estimation.gmm: você escreve a função de momentos e ela faz o GMM em duas etapas e o J.",
+        "Use a função gmm do módulo estimation (scripts/estimation.py).",
+        "A função `gmm` em estimation.py estima por GMM e reporta o J com p de cauda direita.",
+        "Em estimation.py há a função gmm; passe os momentos n x m.",
+        "estimation.gmm(euler_moments, [1.0, 0.99], args=(R, cg, Z), steps='iterated')",
+        "I would use estimation.gmm with the Euler moments times the instruments.",
+        "Use est.gmm(moments, theta0, args=(R, cg, Z)) from the skill's estimation module.",
+        "The skill's generic GMM is estimation.gmm; J = n·ḡ'Wḡ with 5 − 2 = 3 df.",
+        "Function: `estimation.gmm` — two-step by default, Newey-West with hac_lags if needed.",
+        "Rode `res = est.gmm(mom, [1, .99], args=(R, C, Z), bounds=[None, (0, 1)])`.",
+        "O estimador é o estimation.gmm (GMM não linear com momentos do usuário).",
+        "Passo 1: estimation.gmm em duas etapas. Passo 2: leia o J (j_p) e o teste de posto (ident_F).",
+        "Para o teste de sobreidentificação, o J vem de estimation.gmm (j, j_df, j_p).",
+        "Use `estimation.gmm` e, como segunda rota, o NonlinearIVGMM do statsmodels.",
+        "O módulo estimation tem gmm(); o J de Hansen sai com o p da cauda direita.",
+        "est.gmm(euler, theta0=[1.0, 0.99], args=(ret, cons, Z), center=False)",
+        "A skill estima isso com estimation.gmm; não use o IVGMM linear, porque o modelo é não linear.",
+        "gmm do estimation.py, com os momentos (β (C_{t+1}/C_t)^{-γ} R_{t+1} − 1) z_t.",
+        "Estime com `estimation.gmm(...)` e confira a identificação (ident_F abaixo de 10 é fraca).",
+        "Use es.gmm(moments, [1., .99], args=(R, cg, Z)).",
+        "Função recomendada: estimation.gmm (steps='two-step').",
+        "A estimação: estimation.gmm; o teste: o J de Hansen que ela reporta.",
+        "Com o script da skill: `fit = est.gmm(euler, [1.0, 0.99], args=(R, cg, Z))` e `fit['j_p']`.",
+        "Para a equação de Euler, a skill tem `estimation.gmm`: escreva g_i(θ) = (β c^-γ R − 1)·z.",  # held-out corpus (written after the grader)
+        "Recomendo: `import estimation as est; res = est.gmm(...)`.",  # held-out corpus (written after the grader)
+        "Use `estimation.gmm(moments, [1.0, 0.99], args=(R, cg, Z), hac_lags=None)`; J com 3 gl.",  # held-out corpus (written after the grader)
+        "A função certa é a gmm do módulo `estimation`.",  # held-out corpus (written after the grader)
+        "Rode o GMM genérico (estimation.gmm) e veja se ident_F fica abaixo de 10.",  # held-out corpus (written after the grader)
+        "No estimation.py há gmm(), que faz duas etapas e o J.",  # held-out corpus (written after the grader)
+        "es.gmm(f, x0, args=a) dá os coeficientes e o J.",  # held-out corpus (written after the grader)
+        "Estimate with estimation.gmm and read j_p, the right-tail p-value.",  # held-out corpus (written after the grader)
+        "The skill's estimation module has a gmm function for user moments.",  # held-out corpus (written after the grader)
+        "Use the gmm function in estimation.py.",  # held-out corpus (written after the grader)
+    ],
+    "bad": [
+        "Use o NonlinearIVGMM do statsmodels: NonlinearIVGMM(endog, exog, instr, func).fit().",
+        "Use linearmodels.iv.IVGMM.from_formula(...).fit().",
+        "Escreva o critério ḡ'Wḡ e minimize com scipy.optimize.minimize.",
+        "from statsmodels.sandbox.regression import gmm; gmm.GMM(...)",
+        "Use o comando gmm do Stata: gmm (b*x^(-g)*R - 1), instruments(L.R L.x) twostep.",
+        "No R, gmm::gmm(g, x, t0 = c(1, 0.99)).",
+        "Estime por máxima verossimilhança com estimation.mle, supondo lognormalidade.",
+        "Faça um 2SLS do log do retorno no log do consumo com systems.three_sls.",
+        "O GMM de Arellano-Bond (systems.dynamic_panel) resolve isso.",
+        "Use mínimos quadrados não lineares (estimation.nls) na equação de Euler.",
+        "Não há função pronta para GMM; escreva o seu próprio código.",
+        "O teste de sobreidentificação é o J de Hansen; Prob alto significa que o modelo não é rejeitado.",
+        "Use IVGMM da linearmodels com a forma log-linear da equação de Euler.",
+        "Você pode usar o pacote pydynpd.",
+        "Use diagnostics.overid_test após um 2SLS.",
+        "Use NonlinearIVGMM(...).fit(maxiter=2, weights_method='hac').",
+        "Calcule o GMM com a fórmula fechada (Z'X)^-1 Z'y.",
+        "The function is statsmodels' GMM class.",
+        "Use the gmm package in R.",
+        "Minimize the GMM objective by hand with scipy.",
+        "Use linearmodels IVGMM and read j_stat.",
+        "There is no GMM in the skill; use Stata.",
+        "Estimate by OLS of returns on consumption growth.",
+        "Use estimation.trinity_test for the overidentifying restrictions.",
+        "Fit with systems.sur_system and test with the Breusch-Pagan LM.",
+        "Use a VAR (multivariate.var_analysis) and test Granger causality.",
+        "Use scipy.optimize.least_squares on the Euler errors.",
+        "A melhor opção é o MLE do Hansen-Singleton 1983 com um VAR.",
+        "Rode o GMM no EViews.",
+        "Use o IVGMM com instrumentos defasados; o J aparece como j_stat.",
+        # adversarial (written to share words with right answers, v2.7.5 lesson)
+        "gmm.GMM do statsmodels, com estimation de pesos HAC.",
+        "O GMM em estimation de equações de Euler é padrão; use o Stata.",
+        "GMM in estimation of Euler equations is standard; use Stata's gmm.",
+        "Use NonlinearIVGMM; o estimation.py só tem mle e nls.",
+        "O estimation.mle faz o MLE; para GMM, use o statsmodels.",
+        "A função de estimação gmm do R resolve.",
+        "Usei a estimation strategy de GMM do artigo, com IVGMM.",
+        "No Stata: gmm (eq), estimation options twostep.",
+        "Use o IVGMM do linearmodels com a equação linearizada.",  # held-out corpus (written after the grader)
+        "Linearize em log e rode um 2SLS com diagnostics.iv_report.",  # held-out corpus (written after the grader)
+        "O pacote gmm do R é o mais indicado.",  # held-out corpus (written after the grader)
+        "statsmodels.sandbox.regression.gmm.NonlinearIVGMM é a função.",  # held-out corpus (written after the grader)
+        "Use mle com uma distribuição lognormal conjunta (Hansen-Singleton 1983).",  # held-out corpus (written after the grader)
+        "Minimize o critério de GMM com scipy e calcule o J à mão.",  # held-out corpus (written after the grader)
+        "No EViews, use a estimação por GMM com instrumentos.",  # held-out corpus (written after the grader)
+        "A GMM estimation in Stata is the way: gmm with twostep.",  # held-out corpus (written after the grader)
+        "Estimation by GMM requires instruments; use IVGMM.",  # held-out corpus (written after the grader)
+        "Use systems.dynamic_panel com method='system'.",  # held-out corpus (written after the grader)
+    ],
+}
+
+PEEK = {  # review-optional-stopping: daily looks and stopping at p < 0.05 inflate the type I error well above 5%
+    "good": [
+        "Olhar o p-valor todos os dias e parar no primeiro p < 0,05 infla o erro tipo I bem acima de 5%.",
+        "Isso é peeking: com olhadas diárias o erro tipo I real passa de 5% (cerca de 19% com 10 olhadas).",
+        "Parada opcional (optional stopping): o p = 0,041 não é um p-valor válido.",
+        "O teste foi encerrado quando ficou significativo; isso aumenta a chance de falso positivo.",
+        "Ao acompanhar o teste diariamente e parar quando p < 0,05, a taxa de falsos positivos sobe muito acima do alfa nominal.",
+        "Com 9 olhadas, o erro tipo I efetivo é por volta de 18%, não 5%.",
+        "Esse procedimento de monitorar o p-valor todo dia e parar no primeiro resultado significativo invalida o p-valor.",
+        "Deveriam ter usado um teste sequencial (SPRT) ou limites de Pocock/O'Brien-Fleming definidos antes.",
+        "A regra de parada dependeu do resultado: isso infla o alfa.",
+        "Múltiplas olhadas sem correção elevam o erro tipo I; a 'confiança de 95%' não vale.",
+        "The test was stopped as soon as p < 0.05 after daily looks: optional stopping inflates the false positive rate.",
+        "Peeking at the p-value every day inflates the type I error far above 5%.",
+        "With repeated interim looks the actual alpha is not 5%; use an alpha-spending boundary.",
+        "O erro tipo I não é 5%: com olhadas repetidas e parada no primeiro sucesso ele fica em torno de 19% (10 olhadas).",
+        "A decisão de encerrar quando p cruzou 0,05 transforma o teste num procedimento com alfa inflado.",
+        "Esse é o problema clássico de espiar os resultados (peeking).",
+        "Encerrar o experimento ao ver p < 0,05 não preserva o nível de 5%: a probabilidade de falso positivo aumenta.",
+        "Precisaria planejar o número de olhadas e usar um nível por olhada (Pocock: 0,0158 para 5 olhadas).",
+        "Recomendo um teste sequencial de Wald ou alpha spending em vez de monitorar o p-valor diariamente.",
+        "O monitoramento contínuo do p-valor com parada no primeiro valor abaixo de 0,05 aumenta o erro tipo I.",
+        "Como o teste foi interrompido quando atingiu significância, o p = 0,041 está viesado para baixo e o alfa real é maior.",
+        "Falso positivo provável: olhar 9 vezes e parar no primeiro p < 0,05 eleva o alfa para algo como 17-18%.",
+        "O nível de significância real não é 5% por causa da parada opcional.",
+        "This is optional stopping; the reported 95% confidence is wrong.",
+        "Daily monitoring with stopping at significance makes the type I error much larger than 0.05.",
+        "A interrupção no 9º dia por causa do p-valor infla a taxa de erro tipo I.",
+        "Olhar o resultado várias vezes e parar quando der significativo é p-hacking por parada opcional; o alfa efetivo é maior que 5%.",
+        "O correto seria usar um SPRT ou fixar o tamanho da amostra antes, sem olhadas intermediárias.",
+        "Cada olhada é um novo teste: com 9 testes o erro tipo I acumulado passa bem de 5%.",
+        "Parar o teste assim que p < 0,05 sem regra sequencial pré-definida infla o falso positivo.",
+        "Parar no primeiro dia com p < 0,05 após checagens diárias aumenta a probabilidade de falso positivo.",  # held-out corpus (written after the grader)
+        "Isso é um caso de optional stopping; o erro tipo I real é bem maior que 5%.",  # held-out corpus (written after the grader)
+        "Olhando todos os dias, o alfa efetivo fica acima de 5% (cerca de 18% com 9 olhadas).",  # held-out corpus (written after the grader)
+        "Deveriam ter definido o tamanho da amostra antes ou usado um SPRT.",  # held-out corpus (written after the grader)
+        "O teste foi 'espiado' diariamente, o que infla o alfa.",  # held-out corpus (written after the grader)
+        "A interrupção quando o p caiu abaixo de 0,05 eleva a taxa de erro tipo I.",  # held-out corpus (written after the grader)
+        "Monitorar o p-valor e parar ao atingir significância torna o p-valor inválido.",  # held-out corpus (written after the grader)
+        "With nine looks, the false positive rate is about 17%, not 5%.",  # held-out corpus (written after the grader)
+        "They should have used alpha spending or Pocock boundaries.",  # held-out corpus (written after the grader)
+        "Stopping at the first significant look inflates alpha.",  # held-out corpus (written after the grader)
+    ],
+    "bad": [
+        "O p = 0,041 é menor que 0,05, então a conclusão está correta.",
+        "O teste de proporções está correto; o problema é que 9 dias é pouco tempo para captar sazonalidade.",
+        "Falta reportar o tamanho do efeito e o intervalo de confiança.",
+        "Pode haver efeito novidade: usuários clicam no botão novo só por ser novo.",
+        "O teste deveria ser bicaudal.",
+        "A amostra pode não ser representativa de todos os usuários.",
+        "Significância estatística não é significância prática; reporte o aumento em pontos percentuais.",
+        "Há múltiplas métricas; ajuste para comparações múltiplas entre métricas.",
+        "O acompanhamento diário não afeta o erro tipo I, porque cada dia é um teste independente.",
+        "Não há problema em olhar o p-valor todo dia; o que importa é o valor final.",
+        "A conclusão está correta: 95% de confiança porque p < 0,05.",
+        "O problema é a falta de randomização.",
+        "O teste deveria ter usado um teste t em vez de proporções.",
+        "Faltou checar o poder do teste.",
+        "Com p = 0,041 a evidência é fraca; prefira p < 0,01.",
+        "O resultado é causal porque houve randomização, então a conclusão vale.",
+        "The p-value is below 0.05, so the conclusion holds.",
+        "The test should have run for a full week to capture weekly cycles.",
+        "Report the confidence interval of the difference in conversion rates.",
+        "There may be a novelty effect.",
+        "Use a Bayesian A/B test instead.",
+        "Check for sample ratio mismatch between the arms.",
+        "A dúvida é se a conversão foi medida corretamente.",
+        "O alfa de 5% foi respeitado, porque o p final é 0,041.",
+        "Não houve problema de erro tipo I: o teste parou no 9º dia como planejado.",
+        "Seria bom repetir o teste em outro mês.",
+        "O problema é o viés de seleção dos usuários que viram o botão.",
+        "O intervalo de 95% não inclui zero, então o efeito é real.",
+        "Faltou segmentar por dispositivo.",
+        "Use um teste qui-quadrado em vez do teste de proporções.",
+        # adversarial (written to share words with right answers, v2.7.5 lesson)
+        "O botão aumenta a conversão e o alfa de 5% foi respeitado.",
+        "O alfa de 5% acima do p = 0,041 confirma o efeito.",
+        "O aumento de 18% na conversão é relevante.",
+        "Um teste sequencial não seria diferente aqui; a conclusão vale.",
+        "O erro tipo I é 5%, como em qualquer teste com p < 0,05.",
+        "A taxa de conversão sobe 2 pontos, e o erro tipo I é controlado.",
+        "With p = 0.041 the false positive rate is 4.1%.",
+        "The type I error is 5%, which is larger than the p-value.",
+        "A conclusão está certa: p = 0,041 < 0,05.",  # held-out corpus (written after the grader)
+        "O teste deveria ter rodado por duas semanas por causa da sazonalidade.",  # held-out corpus (written after the grader)
+        "Falta o intervalo de confiança da diferença de proporções.",  # held-out corpus (written after the grader)
+        "O alfa é 5% e o p é 0,041; logo rejeitamos H0.",  # held-out corpus (written after the grader)
+        "Houve aumento de 20% na conversão, o que é relevante.",  # held-out corpus (written after the grader)
+        "A taxa de falsos positivos é controlada pelo teste de proporções.",  # held-out corpus (written after the grader)
+        "O efeito é pequeno; a significância prática é questionável.",  # held-out corpus (written after the grader)
+        "The conversion increased 15%, a large effect.",  # held-out corpus (written after the grader)
+        "The type I error rate is 5% by design.",  # held-out corpus (written after the grader)
+        "Check whether the randomization was balanced.",  # held-out corpus (written after the grader)
+    ],
+}
+
+KNOWN_FALSE_PASSES = {  # negations and dismissals: the executor has no negative grader (v2.7.5)
+    "GMM": ["Não use estimation.gmm; prefira o IVGMM.", "A função gmm não existe no módulo estimation."],
+    "PEEK": ["O erro tipo I não aumenta por acompanhar o teste.", "Não houve peeking, pois o teste parou no dia planejado.",
+             "Acompanhar diariamente não invalida o p-valor.", "Usar Pocock aqui seria exagero; a conclusão é válida."],
+}

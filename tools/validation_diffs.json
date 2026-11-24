@@ -1,5 +1,5 @@
 {
- "date": "2026-11-19",
+ "date": "2026-11-24",
  "python": "3.13.18",
  "packages": {
   "numpy": "2.5.5",
@@ -170,6 +170,38 @@
    "tolerance": 0.0,
    "kind": "abs",
    "what": "4 violations -> green",
+   "all_within_tolerance": true
+  },
+  "sequential.divergence": {
+   "comparisons": 3,
+   "worst_diff": 4.56285092879094e-05,
+   "tolerance": 5e-05,
+   "kind": "abs",
+   "what": "test_sequential.py: divergence: the book's KL 0.7592, Chernoff 0.1212 at phi 0.5969 (four decimals)",
+   "all_within_tolerance": true
+  },
+  "sequential.divergence_rate": {
+   "comparisons": 2,
+   "worst_diff": 4.517607269503149e-05,
+   "tolerance": 5e-05,
+   "kind": "abs",
+   "what": "test_sequential.py: divergence_rate: Markov rates equal the book's 0.0588 and 0.0563 (four decimals)",
+   "all_within_tolerance": true
+  },
+  "sequential.peeking_size": {
+   "comparisons": 7,
+   "worst_diff": 0.00035659372898516617,
+   "tolerance": 0.0005,
+   "kind": "abs",
+   "what": "test_sequential.py: peeking_size: Armitage-McPherson-Rowe sizes 0.083, 0.142, 0.193, 0.248 (three decimals)",
+   "all_within_tolerance": true
+  },
+  "sequential.sprt_design": {
+   "comparisons": 3,
+   "worst_diff": 0.014950000000000019,
+   "tolerance": 0.03,
+   "kind": "abs",
+   "what": "test_sequential.py: sprt_design: book's Beta(2,5) vs Beta(5,2): errors 0.012 and 0.022 within 3 MC SEs + 0.0005, mean stop 1.59 within 0.03 (MC and rounding)",
    "all_within_tolerance": true
   },
   "specification.fgls_het": {

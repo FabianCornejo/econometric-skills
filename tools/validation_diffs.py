@@ -118,6 +118,11 @@ GENERIC = {
     "test_diagnostics.py": ("close", {                       # v2.6.11
         "diagnostics.hausman": ["B2.33"], "diagnostics.iv_report": ["W15.1", "W15.8"], "diagnostics.panel_bp_lm": ["B798", "G11.6 Breusch-Pagan"],
         "diagnostics.white_simplified": ["W8.5"], "diagnostics.influence": ["W9.8 influence"]}),
+    "test_sequential.py": ("near", {                         # v2.8.0
+        "sequential.divergence": ["divergence: the book's KL"],
+        "sequential.divergence_rate": ["divergence_rate: Markov rates equal the book's"],
+        "sequential.sprt_design": ["sprt_design: book's Beta(2,5)"],
+        "sequential.peeking_size": ["peeking_size: Armitage-McPherson-Rowe", "peeking_size: Pocock's"]}),
 }
 
 

@@ -1,4 +1,4 @@
-# Estimation engine: maximum likelihood, NLS, delta method and bootstraps
+# Estimation engine: maximum likelihood, NLS, delta method, bootstraps and GMM
 
 Use when a model is not packaged (a custom count or duration model, a structural demand equation, a likelihood from a paper), when the quantity of interest is a function of parameters (elasticity at a point, long-run multiplier, willingness to pay), or when standard errors are doubtful (few clusters, small samples, unusual statistics). Code: `scripts/estimation.py`. The theory is in Greene (chs. 7, 14), Cameron & Trivedi (chs. 5, 7, 11), Hansen (chs. 10, 22) and Sargent & Stachurski, *Intermediate Quantitative Economics with Python* (lecture "Maximum Likelihood Estimation").
 
@@ -75,3 +75,39 @@ Equivalents: Stata `boottest`, R `fwildclusterboot`; MacKinnon, Nielsen & Webb (
 - Solve linear systems instead of inverting (X'X); for OLS use QR or `lstsq` (statsmodels already does).
 - Check identification: a singular or nearly singular information matrix means some parameters are not identified by the data.
 - Compare with a packaged estimator when one exists (statsmodels `GenericLikelihoodModel`, `Poisson`, `Probit`): the test suite does this for Wooldridge Examples 17.1 and 17.3.
+
+## 7. Generalized method of moments (`gmm`, v2.8.0)
+
+For a model that delivers moment conditions E[g_i(θ)] = 0 rather than a likelihood: an Euler equation E_t[β (C_t+1/C_t)^(−γ) R_t+1 − 1] = 0 times instruments known at t (Hansen and Singleton 1982), a structural demand equation with instruments, any estimating equation from a paper. Write the contributions, one row per observation:
+
+```python
+import numpy as np
+import estimation as est
+
+def euler(th, R, cg, Z):                       # n x m: pricing error times each instrument
+    gamma, beta = th
+    return (beta * cg ** (-gamma) * R - 1.0)[:, None] * Z
+
+fit = est.gmm(euler, [1.0, 0.99], args=(R, cg, Z), names=["gamma", "beta"])   # two-step by default
+fit["table"]; fit["j"], fit["j_df"], fit["j_p"]; fit["ident_F"]; fit["warnings"]
+```
+
+- **Steps.** `"two-step"` (default): identity (or `weight=`) first, then W = S⁻¹ at the first-step estimate; `"iterated"`: until the estimate stops moving; `"one-step"`: the given weight with sandwich SEs and no J. The first step depends on the units of the moments: scale them, or pass `weight=np.linalg.inv(Z.T @ Z / n)` (the 2SLS weight; statsmodels' NonlinearIVGMM default).
+- **S.** Without `hac_lags`, the covariance of the contributions (independent observations, any heteroskedasticity); with `hac_lags=L`, Newey-West (Bartlett) or `kernel="truncated"` (Hansen-Singleton's known MA order; can be indefinite, then floored and flagged). An n-period Euler equation has MA(n − 1) errors: `hac_lags ≥ n − 1`. `center=True` (default) demeans the contributions; statsmodels and Hansen-Singleton do not (`center=False` reproduces them).
+- **J** = n ḡ'Wḡ with the last weight, χ²(m − k): **the p-value is the right tail** (`j_p`). Old tables' "Prob" is the CDF (`j_cdf`): Hansen-Singleton's Prob of 0.88 is p = 0.12. With m = k there is no test.
+- **Identification.** `rank_stat` is the Cragg-Donald (1997) minimum-Wald test of rank(D) < k on the Jacobian D = E[∂g/∂θ']; `ident_F` = rank_stat/(m − k + 1) is the first-stage F of a linear IV where it matters (measured, v2.8.0). Below 10 the SEs and J are unreliable: plot the criterion over a grid, fix a parameter from theory, or use an identification-robust test (Stock and Wright 2000). On Hansen and Singleton's 239 months (the lecture's reconstruction), `ident_F` is 4–8 with 2 to 6 instrument lags.
+- **Bounds.** `bounds=[None, (0, 1)]` keeps β ≤ 1; an estimate at or within one SE of a bound gets a warning: no normal interval there (Andrews 1999).
+- **Checks.** `tests/test_estimation.py`: linear two-step GMM against its closed form, exactly identified = IV, HAC against the double sum, Euler equation against statsmodels' NonlinearIVGMM, and a Monte Carlo with γ = 2, β = 0.995 (400 samples of 900 months: 95% CI coverage 0.945 for γ and 0.938 for β, J size 0.035); `tests/test_quantecon_replication.py`: Hansen-Singleton (1982) on the lecture's data. Stata: `gmm`; R: `gmm::gmm`, `momentfit`.
+
+## 8. Likelihood ratio between nested fits (`lr_test`, v2.8.0)
+
+`trinity_test` handles linear restrictions Rθ = r. For restrictions of any form, fit both models with `mle` on the same observations and pass the two results:
+
+```python
+fu = est.mle(ll_var, theta_u0, args=(data,))        # unrestricted (e.g. a VAR)
+fr = est.mle(ll_model, theta_r0, args=(data,))      # the theory's restricted version
+est.lr_test(fu, fr)                                 # LR = 2(l_u - l_r), df = k_u - k_r, right-tail p
+```
+
+Hansen and Singleton (1983) test the cross-equation restrictions of a lognormal asset-pricing model against an unrestricted VAR this way (df = 2p − 1 with p lags in their setup); they print the χ² CDF in parentheses, `chi2_cdf` here. Both fits must use the same rows (a VAR with more lags loses initial rows: trim them first); `lr_test` refuses different n. A null on the boundary (a variance of 0): `boundary=True` (50:50 mixture with one restriction, Self and Liang 1987).
+
