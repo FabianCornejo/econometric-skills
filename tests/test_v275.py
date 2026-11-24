@@ -88,8 +88,10 @@ check("interpretation-rules.md: no conditional-sum-of-squares method is promised
       'method="css"' not in ir and "has no conditional-sum-of-squares method" in sec)
 rc = (SK / "references" / "review-checklist.md").read_text(encoding="utf-8")
 check("review-checklist.md: the checklist asks the four v2.7.5 questions",
-      rc.count("v2.7.5") == 4 and all(w in rc for w in ("by hand with OLS", "CDF", "boundary", "same rows",
-                                                          "prior give mass")))
+      rc.count("v2.7.5") == 4 and all(w in rc for w in ("IV second stage run by hand with OLS", "Prob(J) is the CDF",
+                                                          "null on the boundary of the parameter space",
+                                                          "Do the numbers set side by side", "does the prior give mass",
+                                                          "exact likelihood on a sample that starts far from the mean")))
 ts = (SK / "references" / "time-series.md").read_text(encoding="utf-8")
 vo = (SK / "references" / "volatility.md").read_text(encoding="utf-8")
 check("time-series.md (section 5) and volatility.md point to the new rules",
