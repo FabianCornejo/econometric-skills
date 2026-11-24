@@ -57,6 +57,7 @@ GOOD = [  # review r1 S4 added the last 8; answers that name the omitted driver,
     'The VAR omits oil prices, a common driver of both.',
     'Faltam controles: petróleo e câmbio influenciam ambos.',
     'O petróleo pode estar por trás das duas séries.',
+    'The VAR omits the oil price.',
 ]
 BAD = [  # answers that miss it: generic Granger caveats, other checks, or the prompt echoed back
     'A conclusão confunde precedência preditiva com causalidade.',
