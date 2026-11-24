@@ -67,6 +67,11 @@ for name, corpus in CASES.items():
         check(f"{name}: same verdicts in JavaScript (the eval runner's regex engine)", res == [[], []], res)
     else:
         print("SKIP JavaScript check: node not found")
+known = C.KNOWN_FALSE_PASSES
+for name, key in (("review-mixed-samples", "MIXED"), ("review-j-prob-cdf", "JPROB"), ("review-2sls-by-hand", "HAND2SLS")):
+    g = yaml.safe_load((SK / "evals" / "routing" / name / "graders" / "answer.md").read_text(encoding="utf-8").split("---")[1])
+    still = sum(bool(re.search(g["pattern"], s, re.I)) for s in known[key])
+    print(f"INFO {name}: {still} of {len(known[key])} known false passes (negations) still accepted by the grader")
 n_cases = len([d for d in (SK / "evals" / "routing").iterdir() if d.is_dir()])
 readme = (ROOT / "README.md").read_text(encoding="utf-8")
 check("28 routing cases on disk; the README names the three new reviews", n_cases == 28
@@ -81,11 +86,13 @@ check("interpretation-rules.md: a v2.7.5 section, the last one, with the six rul
           "Prob(J)", "1 − Prob", "0.77",                                    # (b)
           "by hand", "0.1255", "0.1541", "iv_report",                       # (d)
           "boundary", "Self and Liang", "Andrews", "½χ²(0) + ½χ²(1)",       # (e)
-          "prior", "unit root",                                             # (f)
+          "does **not** hold for a GARCH(1,1)",                             # (e), review r1 S2-3
+          "prior", "unit root", "point mass",                               # (f)
           "initial condition", "0.90", "0.49", "AutoReg", "ts_identify")),  # (g)
       sec[:200])
-check("interpretation-rules.md: no conditional-sum-of-squares method is promised for statsmodels' ARIMA",
-      'method="css"' not in ir and "has no conditional-sum-of-squares method" in sec)
+check("interpretation-rules.md: no conditional-sum-of-squares method promised for ARIMA; no unverified 0.88; "
+      "no private script cited", 'method="css"' not in ir and "has no conditional-sum-of-squares method" in sec
+      and "0.88" not in sec and "claude/scripts" not in sec)
 rc = (SK / "references" / "review-checklist.md").read_text(encoding="utf-8")
 check("review-checklist.md: the checklist asks the four v2.7.5 questions",
       rc.count("v2.7.5") == 4 and all(w in rc for w in ("IV second stage run by hand with OLS", "Prob(J) is the CDF",
@@ -134,7 +141,13 @@ val = (ROOT / "VALIDATION.md").read_text(encoding="utf-8")
 rows = {f: next((ln for ln in val.splitlines() if ln.startswith(f"| `{f}`")), "")
         for f in ("diagnostics.iv_report", "diagnostics.endogeneity_test", "estimation.mle", "diagnostics.count_diagnostics")}
 check("VALIDATION.md: the rows of iv_report, endogeneity_test, mle and count_diagnostics cite the QuantEcon replication",
-      all("test_quantecon_replication.py" in r for r in rows.values())
+      all("test_quantecon_replication.py" in r for r in rows.values()) and "control-function" in rows["diagnostics.iv_report"]
+      and all(f"test_quantecon_replication.py: {c_}" in rows[f_] for f_, cs in (
+          ("diagnostics.iv_report", ("AJR iv_report unadjusted", "AJR first stage", "AJR 2SLS closed form",
+                                     "AJR iv_report robust", "AJR Wu-Hausman", "AJR Anderson-Rubin")),
+          ("diagnostics.endogeneity_test", ("AJR endogeneity_test (70 rows)",)),
+          ("estimation.mle", tuple(f"Treisman Model {i}: estimation.mle" for i in (1, 2, 3))),
+          ("diagnostics.count_diagnostics", ("Treisman Model 1: count_diagnostics",))) for c_ in cs)
       and "Acemoglu" in rows["diagnostics.iv_report"] and "Treisman" in rows["estimation.mle"],
       {k: bool("test_quantecon_replication.py" in v) for k, v in rows.items()})
 

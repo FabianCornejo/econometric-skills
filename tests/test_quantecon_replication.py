@@ -14,6 +14,7 @@ import hashlib
 import os
 import sys
 import tempfile
+import time
 import urllib.request
 import warnings
 from pathlib import Path
@@ -57,22 +58,35 @@ def unavailable(reason):
 def fetch(name):
     """The file's path in a cache folder (ECONOMETRICS_TEST_DATA, or the temporary folder), downloaded once."""
     folder = Path(os.environ.get("ECONOMETRICS_TEST_DATA") or Path(tempfile.gettempdir()) / "econometrics-test-data")
-    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        unavailable(f"cache folder {folder}: {e}")
     path = folder / f"{FILES[name][:16]}-{name}"
     if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != FILES[name]:
         path.unlink()  # a damaged or edited cached copy: download it again
     if not path.exists():
-        try:
-            with urllib.request.urlopen(URL.format(name), timeout=60) as r:
-                blob = r.read()
-        except Exception as e:  # noqa: BLE001  (no network, proxy, 404: all mean the data are not available)
-            unavailable(f"{name}: {type(e).__name__}: {e}")
+        blob, err = None, None
+        for attempt in range(2):  # one retry after a short wait: a transient network error should not fail CI
+            try:
+                with urllib.request.urlopen(URL.format(name), timeout=60) as r:
+                    blob = r.read()
+                break
+            except Exception as e:  # noqa: BLE001  (no network, proxy, 404: all mean the data are not available)
+                err = e
+                if attempt == 0:
+                    time.sleep(5)
+        if blob is None:
+            unavailable(f"{name}: {type(err).__name__}: {err}")
         digest = hashlib.sha256(blob).hexdigest()
         if digest != FILES[name]:
             unavailable(f"{name}: SHA-256 {digest} differs from the fixed one")
-        tmp = path.with_suffix(".part")
-        tmp.write_bytes(blob)
-        tmp.replace(path)
+        try:
+            tmp = path.with_suffix(".part")
+            tmp.write_bytes(blob)
+            tmp.replace(path)
+        except OSError as e:
+            unavailable(f"cache folder {folder} is not writable: {e}")
     return path
 
 
@@ -129,20 +143,36 @@ check("AJR trap (d): 2SLS by hand = 0.9443 with SE 0.1255, smaller than iv_repor
       abs(hand.params["pred"] - t["2SLS"]) < 1e-9 and near(hand.bse["pred"], 0.1255, H) and t["2SLS se"] > hand.bse["pred"] + 0.02,
       (hand.params["pred"], hand.bse["pred"]))
 
-# Wu-Hausman against linearmodels' own wu_hausman (an independent route)
-try:
+# 2SLS by closed formulas written here (review r1 S2-1: linearmodels, which iv_report calls, is only an extra check):
+# b = (Xh'X)^-1 Xh'y with Xh the first-stage fitted [1, x]; unadjusted variance (SSR/n)·(Xh'Xh)^-1 with the residuals
+# of the original x; HC0 (Xh'Xh)^-1 Xh' diag(u²) Xh (Xh'Xh)^-1.
+Xo = d4[["const", "avexpr"]].to_numpy(float)
+Zm = d4[["const", "logem4"]].to_numpy(float)
+Xh = Zm @ np.linalg.lstsq(Zm, Xo, rcond=None)[0]
+yo = d4["logpgp95"].to_numpy(float)
+bh = np.linalg.solve(Xh.T @ Xo, Xh.T @ yo)
+uh = yo - Xo @ bh
+A = np.linalg.inv(Xh.T @ Xh)
+se_un = np.sqrt((uh @ uh / len(yo)) * A[1, 1])
+se_h0 = np.sqrt((A @ (Xh.T * uh ** 2) @ Xh @ A)[1, 1])
+check("AJR 2SLS closed form: iv_report's estimate and unadjusted SE (SSR/n) equal it",
+      abs(t["2SLS"] - bh[1]) < 1e-10 and abs(t["2SLS se"] - se_un) < 1e-10 * se_un, (t["2SLS"], bh[1], t["2SLS se"], se_un))
+rob = dg.iv_report("logpgp95 ~ 1 + [avexpr ~ logem4]", df4, cov_type="robust", show=False)
+check("AJR iv_report robust: 2SLS SE 0.1761 = the closed-form HC0 sandwich",
+      abs(rob["table"].loc["avexpr", "2SLS se"] - se_h0) < 1e-10 * se_h0 and near(se_h0, 0.1761, H),
+      (rob["table"].loc["avexpr", "2SLS se"], se_h0))
+# Wu-Hausman (unadjusted) = t² of the first-stage residual added to the OLS of y on [1, x], on the same 64 rows
+cf = sm.OLS(d4["logpgp95"], d4[["const", "avexpr"]].assign(v=f1.resid)).fit()
+row = rep["tests"].loc[[i for i in rep["tests"].index if "Wu-Hausman" in str(i)][0]]
+check("AJR Wu-Hausman: iv_report = t² of the control-function regression (statsmodels; F 24.22, p 7e-6)",
+      abs(row["statistic"] - cf.tvalues["v"] ** 2) < 1e-8 * row["statistic"]
+      and abs(row["p"] - stats.f.sf(cf.tvalues["v"] ** 2, 1, cf.df_resid)) < 1e-10 and near(row["statistic"], 24.22, 0.005),
+      (row.to_dict(), cf.tvalues["v"] ** 2))
+try:  # an extra check against the library itself
     from linearmodels.iv import IV2SLS
     lm = IV2SLS(d4["logpgp95"], d4[["const"]], d4["avexpr"], d4["logem4"]).fit(cov_type="unadjusted")
-    wh = lm.wu_hausman()
-    row = rep["tests"].loc[[i for i in rep["tests"].index if "Wu-Hausman" in str(i)][0]]
-    check("AJR Wu-Hausman: iv_report = linearmodels' wu_hausman() (F 24.22, p 7e-6)",
-          abs(row["statistic"] - wh.stat) < 1e-8 * wh.stat and abs(row["p"] - wh.pval) < 1e-10 and near(wh.stat, 24.22, 0.005),
-          (row.to_dict(), wh.stat, wh.pval))
-    rob = dg.iv_report("logpgp95 ~ 1 + [avexpr ~ logem4]", df4, cov_type="robust", show=False)
-    lr = IV2SLS(d4["logpgp95"], d4[["const"]], d4["avexpr"], d4["logem4"]).fit(cov_type="robust")
-    check("AJR iv_report robust: 2SLS SE 0.1761 = linearmodels robust",
-          abs(rob["table"].loc["avexpr", "2SLS se"] - lr.std_errors["avexpr"]) < 1e-9 and near(lr.std_errors["avexpr"], 0.1761, H),
-          (rob["table"].loc["avexpr", "2SLS se"], lr.std_errors["avexpr"]))
+    check("AJR (extra): linearmodels gives the same 2SLS SE and Wu-Hausman",
+          abs(lm.std_errors["avexpr"] - se_un) < 1e-9 and abs(lm.wu_hausman().stat - row["statistic"]) < 1e-8 * row["statistic"])
 except ImportError:
     check("linearmodels is installed (a core package)", False)
 
