@@ -595,6 +595,69 @@ check("W15.8 (1st ed., p. 485): Sargan R² = nR²/n = .0009 (half the last digit
       and close(r158["tests"].iloc[1]["statistic"], 0.378, 0.0005) and close(r158["tests"].iloc[1]["p"], 0.539, 0.0005),
       r158["tests"])
 
+
+# --- v2.7.4: missing values inside a series in stationarity (before: the two sides were joined silently) ---------
+rng74 = np.random.default_rng(7404)
+y74 = pd.Series(np.cumsum(rng74.normal(size=300)), name="y74")
+g1 = y74.copy(); g1.iloc[100:180] = np.nan
+st1 = dg.stationarity(g1, show=False)
+w1 = st1.attrs["warnings"]
+check("v2.7.4 stationarity: an interior gap is reported (80 missing, 1 gap) in attrs['warnings']",
+      len(w1) == 1 and "80 missing value(s) inside the series (1 gap(s))" in w1[0], w1)
+ref1 = dg.stationarity(g1.dropna().reset_index(drop=True), show=False)
+check("v2.7.4 stationarity: the numbers with a gap are those of the joined series (only the warning is new)",
+      np.allclose(st1[["ADF", "KPSS", "DF-GLS"]].to_numpy(float), ref1[["ADF", "KPSS", "DF-GLS"]].to_numpy(float),
+                  rtol=0, atol=0, equal_nan=True) and not ref1.attrs["warnings"])
+g2 = y74.copy(); g2.iloc[[50, 51, 52, 200]] = np.nan
+w2 = dg.stationarity(g2, show=False).attrs["warnings"]
+check("v2.7.4 stationarity: two gaps of 3 and 1 values are counted as 4 missing in 2 gaps",
+      len(w2) == 1 and "4 missing value(s) inside the series (2 gap(s))" in w2[0], w2)
+g3 = y74.copy(); g3.iloc[:20] = np.nan; g3.iloc[-15:] = np.nan
+st3 = dg.stationarity(g3, show=False)
+ref3 = dg.stationarity(y74.iloc[20:-15], show=False)
+check("v2.7.4 stationarity: missing values only at the ends give no warning and the same numbers",
+      st3.attrs["warnings"] == [] and np.allclose(st3[["ADF", "KPSS", "DF-GLS"]].to_numpy(float),
+                                                  ref3[["ADF", "KPSS", "DF-GLS"]].to_numpy(float), rtol=0, atol=0))
+g4 = y74.copy(); g4.iloc[:20] = np.nan; g4.iloc[150] = np.nan
+w4 = dg.stationarity(g4, show=False).attrs["warnings"]
+check("v2.7.4 stationarity: a leading block does not count as a gap, an interior value does (1 missing, 1 gap)",
+      len(w4) == 1 and "1 missing value(s) inside the series (1 gap(s))" in w4[0], w4)
+g5 = pd.Series(y74.to_numpy().copy(), index=pd.date_range("2000-01-01", periods=300, freq="MS")); g5.iloc[120] = np.nan
+check("v2.7.4 stationarity: the check also works on a date index", len(dg.stationarity(g5, show=False).attrs["warnings"]) == 1)
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    dg.stationarity(g1)
+check("v2.7.4 stationarity show: prints the gap warning", "Warning: 80 missing value(s) inside the series" in buf.getvalue())
+dfm = pd.DataFrame({"a": g1.to_numpy().copy(), "b": y74.to_numpy().copy()})  # copies: no copy-on-write in pandas 2.2
+sm74 = dg.stationarity_many(dfm, show=False)
+check("v2.7.4 stationarity_many: a 'Warnings' column carries each series' warnings ('' when none)",
+      list(sm74.columns) == ["Series", "Suggested order", "Warnings"]
+      and sm74.loc[0, "Warnings"].startswith("80 missing value(s)") and sm74.loc[1, "Warnings"] == "", sm74.to_dict())
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    dg.stationarity_many(dfm)
+o74 = buf.getvalue()
+check("v2.7.4 stationarity_many show: the summary keeps two columns and a 'Warning (a): …' line follows it",
+      "Warning (a): 80 missing value(s)" in o74 and "Warning (b)" not in o74
+      and "Warnings" not in o74.split("Summary:")[1].splitlines()[1], o74[-400:])
+
+
+# review r1 B3: repeated index labels (no missing value; and with a gap)
+for lab_, idx_ in (("first two labels equal", [0, 0] + list(range(2, 300))), ("every label equal", [7] * 300)):
+    gd = pd.Series(y74.to_numpy().copy(), index=idx_)
+    try:
+        sd = dg.stationarity(gd, show=False)
+        ok_ = sd.attrs["warnings"] == [] and np.allclose(sd[["ADF", "KPSS"]].to_numpy(float),
+                                                         dg.stationarity(y74, show=False)[["ADF", "KPSS"]].to_numpy(float),
+                                                         rtol=0, atol=0)
+        gd2 = gd.copy(); gd2.iloc[[100, 101]] = np.nan
+        ok_ = ok_ and "2 missing value(s) inside the series (1 gap(s))" in dg.stationarity(gd2, show=False).attrs["warnings"][0]
+        info = ""
+    except Exception as e_:                                          # noqa: BLE001
+        ok_, info = False, f"{type(e_).__name__}: {e_}"
+    check(f"v2.7.4 review r1 B3: stationarity with repeated index labels ({lab_}): runs, same numbers, no warning; a "
+          "gap is counted by position", ok_, info)
+
 passed = sum(results)
 print(f"\n{passed}/{len(results)} checks passed")
 sys.exit(0 if passed == len(results) else 1)

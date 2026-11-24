@@ -424,7 +424,8 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
       attrs["suggested_order"]  str, the summary ("I(0)", "I(1)", or a sentence starting with one of them,
                                 or "undetermined — …")
       attrs["alpha"]            float, the level used
-      attrs["warnings"]         list of str, empty unless alpha is outside [0.01, 0.10]
+      attrs["warnings"]         list of str, empty unless alpha is outside [0.01, 0.10] or the series has missing
+                                values between its first and last valid value (v2.7.4)
     Example (r = the result): r.attrs["suggested_order"]; r.loc[0, "p ADF"]; r["Verdict"].iloc[2]
 
     The verdict uses DF-GLS (more power) + KPSS (opposite null), both at level alpha (v2.4.7.2; default 0.05).
@@ -441,7 +442,19 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
                      "p-value at the table bound cannot be compared with alpha, and the verdict treats it as not "
                      "rejecting")
     name = name or (series.name if series.name is not None else "series")
-    x = pd.Series(series).dropna()
+    s_ = pd.Series(series)
+    x = s_.dropna()
+    if len(x):
+        # v2.7.4 (v2.7.3 review r1-A): dropna joined the two sides of an interior gap and the lags of every test ran
+        # across it, silently. Missing values at the ends (series that start or stop on other dates) are fine.
+        na_ = s_.isna().to_numpy()                       # by position (review r1 B3: repeated index labels)
+        valid = np.flatnonzero(~na_)
+        inner = na_[valid[0]:valid[-1] + 1]
+        if inner.any():
+            n_gaps = int(inner[0] + (np.diff(inner.astype(int)) == 1).sum())
+            warns.append(f"{int(inner.sum())} missing value(s) inside the series ({n_gaps} gap(s)): the tests joined "
+                         "the two sides of each gap as if consecutive, so lags and differences cross it. Interpolate "
+                         "the gap, or test the longest contiguous stretch")
     rows = []
     for label, data in (("level", x), ("1st difference", x.diff().dropna())):
         for reg, desc in (("c", "constant"), ("ct", "constant+trend")):
@@ -479,18 +492,22 @@ def stationarity(series: pd.Series, name: str | None = None, show: bool = True,
 def stationarity_many(df: pd.DataFrame, show: bool = True, alpha: float = ALPHA) -> pd.DataFrame:
     """stationarity() on each column of df; with show=True it prints each table and then the summary.
 
-    Returns a DataFrame (v2.7.3: columns exact), one row per column of df in its order, index 0..k-1 (not the names):
-      columns ["Series", "Suggested order"]; "Suggested order" is stationarity()'s attrs["suggested_order"]
-    The full table and the warnings of each series are not kept: call stationarity(df[c]) for one series' p-values.
+    Returns a DataFrame (v2.7.4: columns exact), one row per column of df in its order, index 0..k-1 (not the names):
+      columns ["Series", "Suggested order", "Warnings"]; "Suggested order" is stationarity()'s
+              attrs["suggested_order"]; "Warnings" its attrs["warnings"] joined by " | " ("" if none; v2.7.4)
+    The full table is not kept: call stationarity(df[c]) for one series' p-values.
     Example (r = the result): r.set_index("Series")["Suggested order"]
     """
     summary = []
     for c in df.columns:
         t = stationarity(df[c], c, show=show, alpha=alpha)
-        summary.append({"Series": c, "Suggested order": t.attrs["suggested_order"]})
-    out = pd.DataFrame(summary, columns=["Series", "Suggested order"])   # v2.7.3: the columns also with no column
+        summary.append({"Series": c, "Suggested order": t.attrs["suggested_order"],
+                        "Warnings": " | ".join(t.attrs["warnings"])})
+    out = pd.DataFrame(summary, columns=["Series", "Suggested order", "Warnings"])   # also with no column (v2.7.3)
     if show:
-        print("\nSummary:\n" + out.to_string(index=False))
+        print("\nSummary:\n" + out.drop(columns="Warnings").to_string(index=False))
+        for _, r_ in out[out["Warnings"] != ""].iterrows():
+            print(f"Warning ({r_['Series']}): {r_['Warnings']}")
     return out
 
 
@@ -1256,7 +1273,8 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
       "table"          DataFrame, one row per coefficient (the formula's names: "Intercept", "x", ...), columns
                        ["OLS", "OLS se", "2SLS", "2SLS se", "2SLS p", "2SLS ci_low", "2SLS ci_high"]
       "first_stage"    DataFrame, one row per endogenous regressor, columns ["partial F", "partial F p", "partial R²",
-                       "strength"]; read the strength from F against 10 and 104.7, not from its p (see below)
+                       "strength"]; read the strength from F against 10 and 104.7, not from its p (see below);
+                       "partial F (HC3)" is added before "strength" when a row has leverage in [0.5, 1) (robust)
       "tests"          DataFrame, index named "test" with each test's full name, columns ["H0", "statistic", "p"]: the
                        endogeneity row first, "endogeneity (control function, HC1)" (robust, heteroskedastic, kernel)
                        or "endogeneity (Wu-Hausman)" (unadjusted, homoskedastic), then, only when overidentified,
@@ -1274,7 +1292,9 @@ def iv_report(formula: str, data: pd.DataFrame, cov_type: str = "robust", alpha:
       "warnings"       list of str
       "high_leverage_rows"  list of row labels with leverage 1 from the instruments (robust cov_type)
       "endogeneity_linearmodels"  dict, keys ["test", "statistic", "p"] (robust cov_type), else None
-    More on the keys: "partial F (HC3)" is added to first_stage (before "strength") when a row has leverage from
+
+    More on the keys (v2.7.4: moved out of the block, which ends within the first 2500 characters of the docstring):
+    "partial F (HC3)" is added to first_stage (before "strength") when a row has leverage from
     0.5 to below 1 with a robust cov_type (not with a row of leverage 1, where the robust F is NaN). With
     cov_type="robust" the first-stage F is HC0 (as linearmodels; with "kernel", linearmodels' kernel F) and its p
     rejected 6-17% with irrelevant instruments while P(F > 10) stayed at or below 0.6% (v2.7.1, M3c). In

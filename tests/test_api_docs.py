@@ -825,7 +825,7 @@ check("adf_bootstrap: an I(2) series gives the warning about the AR on the diffe
 
 # A12: stationarity_many with no column keeps its columns
 check("stationarity_many: an empty frame gives the two columns and no row",
-      list(dg.stationarity_many(ts3.iloc[:, :0], show=False).columns) == ["Series", "Suggested order"])
+      list(dg.stationarity_many(ts3.iloc[:, :0], show=False).columns) == ["Series", "Suggested order", "Warnings"])
 
 # ============================================================ 9. v2.7.3: survival
 n4 = 150
@@ -1003,6 +1003,83 @@ check(f"rule T: the 21 functions of v2.7.3 and the 13 of v2.7.2 have a block ({l
       "functions)", {"diagnostics.stationarity", "multivariate.vecm_fit",
                      "survival.cox", "forecasting.forecast_metrics", "estimation.bootstrap",
                      "diagnostics.iv_report"} <= with_block and len(with_block) >= 34, len(with_block))   # a count that grows: >=
+
+
+# ============================================================ 12. v2.7.4: the block ends within MAX_CHARS characters
+# The v2.7.3 validation agent read each API by inspect.signature(f) and f.__doc__[:2500], not by grep -A30
+# (claude/teste-validacao-v2.7.3-2026-11-23.md, finding 3); iv_report's block ended at 2998. Measured on the docstring
+# as written in the source, with its indentation (what __doc__ gives on Python 3.10-3.12; 3.13+ strips the indentation
+# and gives a shorter text), so the rule holds on every Python the skill supports.
+MAX_CHARS = 2500
+
+
+def _block_end_chars(base=None):
+    """{"module.function" or "module.Class.method": characters from the docstring's start to the end of its Returns
+    block (the last line before a blank one), on the docstring with its indentation}; functions without a block left
+    out. Same traversal as _public_functions."""
+    out = {}
+    base = base or ROOT / "econometrics" / "scripts"
+
+    def end(node):
+        doc = ast.get_docstring(node, clean=False)
+        if not doc:
+            return None
+        lines_ = doc.split("\n")
+        k = next((i for i, l_ in enumerate(lines_)
+                  if l_.strip().startswith("Returns") and re.search(r"\(v\d+\.\d+", l_)), None)
+        if k is None:
+            return None
+        last = k
+        while last + 1 < len(lines_) and lines_[last + 1].strip():
+            last += 1
+        return len("\n".join(lines_[:last + 1]))
+
+    for f_ in sorted(base.rglob("*.py")):
+        rel = f_.relative_to(base).with_suffix("")
+        if any(p_.startswith("_") for p_ in rel.parts):
+            continue
+
+        def walk(body, prefix):
+            for node in body:
+                if isinstance(node, (ast.If, ast.Try, ast.With)):
+                    for part in ("body", "orelse", "finalbody", "handlers"):
+                        for sub in getattr(node, part, []) or []:
+                            walk(sub.body if isinstance(sub, ast.ExceptHandler) else [sub], prefix)
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if node.name.startswith("_"):
+                        continue
+                    if isinstance(node, ast.ClassDef):
+                        walk(node.body, f"{prefix}.{node.name}")
+                    else:
+                        e_ = end(node)
+                        if e_ is not None:
+                            out[f"{prefix}.{node.name}"] = e_
+
+        walk(ast.parse(f_.read_text(encoding="utf-8")).body, ".".join(rel.parts))
+    return out
+
+
+_syn2 = Path(tempfile.mkdtemp())
+_pad = "    " + "p" * 96 + "\n"                       # 101 characters a line with its newline
+(_syn2 / "m.py").write_text(
+    "def short():\n    \"\"\"x\n\n    Returns a dict (v9.9: keys exact):\n      \"k\"  int\n\n    tail\n    \"\"\"\n"
+    "def long():\n    \"\"\"x\n\n    Returns a dict (v9.9: keys exact):\n" + _pad * 25 + "      \"k\"  int\n    \"\"\"\n"
+    "class C:\n    def meth(self):\n        \"\"\"x\n\n        Returns a dict (v9.9):\n          \"k\"  int\n        \"\"\"\n"
+    "def none():\n    \"\"\"no block\"\"\"\n", encoding="utf-8")
+_e = _block_end_chars(_syn2)
+_doc_short = "x\n\n    Returns a dict (v9.9: keys exact):\n      \"k\"  int"
+check("v2.7.4 block length: the measure counts the docstring with its indentation up to the block's last line, stops "
+      "at the blank line, reads methods, and skips functions without a block",
+      _e.get("m.short") == len(_doc_short) and _e.get("m.long", 0) > MAX_CHARS and "m.none" not in _e
+      and _e.get("m.C.meth") == len("x\n\n        Returns a dict (v9.9):\n          \"k\"  int"), _e)
+ends = _block_end_chars()
+check("v2.7.4 block length: the measure finds every function with a block (rule T's list)",
+      set(ends) == with_block, sorted(set(ends) ^ with_block))
+over = {k_: v_ for k_, v_ in ends.items() if v_ > MAX_CHARS}
+check(f"v2.7.4 block length: every Returns block ends within the first {MAX_CHARS} characters of its docstring "
+      "(f.__doc__[:2500] shows all of it, also on Python 3.10-3.12)", not over, over)
+check("v2.7.4 block length: iv_report's block (2998 characters in v2.7.3) now ends within the limit, with its keys",
+      ends.get("diagnostics.iv_report", 10 ** 9) <= MAX_CHARS, ends.get("diagnostics.iv_report"))
 
 states_check()
 print(f"\n{sum(results)}/{len(results)} checks passed")

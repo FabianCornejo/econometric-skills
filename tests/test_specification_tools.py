@@ -238,5 +238,24 @@ check("sensitivity: year dummies grouped into one benchmark equal to the refit p
       len(key) == 1 and "9 dummies" in key[0] and abs(sb[key[0]] - pr2) < 1e-10 and "x" in sb.index,
       f"{sb[key[0]]:.5f} vs {pr2:.5f}" if key else str(list(sb.index)))
 
+
+# --- v2.7.4: _has_intercept with a linearmodels result (was a TypeError on np.asarray(IVData)) -------------------
+from linearmodels.iv import IV2SLS
+rng74 = np.random.default_rng(7403)
+lm74 = pd.DataFrame({"y": rng74.normal(size=80), "x": rng74.normal(size=80), "z": rng74.normal(size=80)})
+for f_, want in (("y ~ 1 + [x ~ z]", True), ("y ~ 0 + [x ~ z]", False), ("y ~ 0 + x", False), ("y ~ 1 + x", True)):
+    try:
+        got = sp._has_intercept(IV2SLS.from_formula(f_, lm74).fit())
+        check(f"v2.7.4 _has_intercept on linearmodels {f_!r} is {want}", got is want, got)
+    except Exception as e_:                                          # noqa: BLE001
+        check(f"v2.7.4 _has_intercept on linearmodels {f_!r} is {want}", False, f"{type(e_).__name__}: {e_}")
+# mutation r0: the constant in the span of the columns (a full set of dummies, no intercept) is linearmodels' flag, and
+# its R² is centered then; a scan for a constant column alone says False
+lm74["g"] = np.repeat(["a", "b", "c", "d"], 20)
+f_span = IV2SLS.from_formula("y ~ 0 + C(g) + [x ~ z]", lm74).fit()
+check("v2.7.4 _has_intercept on linearmodels with a full set of dummies and no intercept: True, as linearmodels' "
+      "has_constant (the constant is in the span of the columns)", sp._has_intercept(f_span) is True
+      and f_span.model.has_constant)
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

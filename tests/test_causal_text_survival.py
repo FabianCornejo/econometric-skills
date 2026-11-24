@@ -263,5 +263,142 @@ un = ca.did_uncertain_dates(N.assign(lo=np.where(N.g > 0, N.g - 1, 0), hi=np.whe
                             "id", "t", "y", "lo", "hi", n_draws=30, n_boot=99, show=False)
 check("null effect: neither timing check reports a surviving effect", not sn["survives"] and not un["survives"])
 
+
+# --- v2.7.4: missing values in logrank, cox and ph_test; cox with no event ---------------------------------------
+import contextlib, io
+rng74 = np.random.default_rng(7401)
+n74 = 240
+s74 = pd.DataFrame({"t": rng74.exponential(1.0, n74), "e": rng74.integers(0, 2, n74),
+                    "g": rng74.choice(["a", "b", "c"], n74).astype(object), "x": rng74.normal(size=n74),
+                    "z": rng74.normal(size=n74), "cl": rng74.integers(0, 30, n74)},
+                   index=[f"r{i}" for i in range(n74)])            # a non-default index: rows are matched by label
+s74_ng = s74.copy(); s74_ng.loc[s74_ng.index[:7], "g"] = np.nan
+
+
+def raises(f, *words):
+    try:
+        f()
+    except ValueError as e_:
+        return all(w in str(e_) for w in words), str(e_)
+    except Exception as e_:                                          # noqa: BLE001
+        return False, f"{type(e_).__name__}: {e_}"
+    return False, "no error"
+
+
+okr, msg = raises(lambda: sv.logrank(s74_ng, "t", "e", "g"), "'g': 7", "missing")
+check("v2.7.4 logrank: a missing group raises ValueError naming the column and the 7 rows (was a TypeError)", okr, msg)
+s74_nf = s74.assign(g=s74["g"].map({"a": 0.0, "b": 1.0, "c": 2.0})); s74_nf.loc[s74_nf.index[:4], "g"] = np.nan
+okr, msg = raises(lambda: sv.logrank(s74_nf, "t", "e", "g"), "'g': 4")
+check("v2.7.4 logrank: a missing numeric group raises too (before: a LinAlgError)", okr, msg)
+s74_nt = s74.copy(); s74_nt.loc[s74_nt.index[3], "t"] = np.nan
+okr, msg = raises(lambda: sv.logrank(s74_nt, "t", "e", "g"), "'t': 1")
+check("v2.7.4 logrank: a missing duration raises, naming it", okr, msg)
+s74_ns = s74.assign(st=rng74.integers(0, 2, n74).astype(float)); s74_ns.loc[s74_ns.index[0], "st"] = np.nan
+okr, msg = raises(lambda: sv.logrank(s74_ns, "t", "e", "g", strata="st"), "'st': 1")
+check("v2.7.4 logrank: a missing stratum raises, naming it", okr, msg)
+from statsmodels.duration.survfunc import survdiff as _survdiff
+lr74 = sv.logrank(s74, "t", "e", "g")
+c_ref, p_ref = _survdiff(s74["t"].to_numpy(), s74["e"].to_numpy(), s74["g"].to_numpy())
+check("v2.7.4 logrank: without missing values the result is statsmodels' survdiff (unchanged)",
+      abs(lr74["chi2"] - c_ref) < 1e-12 and abs(lr74["p"] - p_ref) < 1e-12 and lr74["df"] == 2)
+
+s74_nx = s74.copy(); s74_nx.loc[s74_nx.index[[2, 50, 51, 120, 239]], "x"] = np.nan
+cc74 = s74_nx.dropna()
+for kw_, lab in (({}, "robust (default)"), ({"cluster": "cl"}, "clustered"), ({"robust": False}, "model-based")):
+    try:
+        _, tab_na = sv.cox(s74_nx, "x + z", "t", "e", show=False, **kw_)
+        _, tab_cc = sv.cox(cc74, "x + z", "t", "e", show=False, **kw_)
+        same = np.allclose(tab_na[["coef", "se", "p"]].to_numpy(), tab_cc[["coef", "se", "p"]].to_numpy(),
+                           rtol=1e-10, atol=0)
+        info = f"{tab_na['se'].round(6).tolist()} vs {tab_cc['se'].round(6).tolist()}; dropped {tab_na.attrs.get('dropped_rows')}"
+        check(f"v2.7.4 cox {lab}: a missing covariate gives the complete-case fit (coef, se, p within 1e-10)",
+              same and tab_na.attrs.get("dropped_rows") == 5 and tab_cc.attrs.get("dropped_rows") == 0, info)
+    except Exception as e_:                                          # noqa: BLE001
+        check(f"v2.7.4 cox {lab}: a missing covariate gives the complete-case fit", False, f"{type(e_).__name__}: {e_}")
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    sv.cox(s74_nx, "x + z", "t", "e")
+out74 = buf.getvalue()
+check("v2.7.4 cox show: prints N used and the rows left out", "N = 235" in out74 and "5 row(s) left out" in out74, out74[:300])
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    sv.cox(s74, "x + z", "t", "e")
+check("v2.7.4 cox show: no 'left out' line when nothing is dropped", "left out" not in buf.getvalue())
+s74_nd = s74.copy(); s74_nd.loc[s74_nd.index[:3], "t"] = np.nan
+_, tab_nd = sv.cox(s74_nd, "x + z", "t", "e", show=False)
+check("v2.7.4 cox: dropped_rows also counts rows with a missing duration", tab_nd.attrs["dropped_rows"] == 3)
+
+res_na, _ = sv.cox(s74_nx, "x + z", "t", "e", robust=False, show=False)
+res_cc, _ = sv.cox(cc74, "x + z", "t", "e", robust=False, show=False)
+try:
+    ph_na = sv.ph_test(res_na, s74_nx, "t", "e", show=False)
+    ph_cc = sv.ph_test(res_cc, cc74, "t", "e", show=False)
+    check("v2.7.4 ph_test: with a missing covariate it uses the rows of the fit (equal to the complete-case test)",
+          np.allclose(ph_na[["rho", "p"]].to_numpy(), ph_cc[["rho", "p"]].to_numpy(), rtol=1e-10, atol=0),
+          f"{ph_na['rho'].tolist()} vs {ph_cc['rho'].tolist()}")
+except Exception as e_:                                              # noqa: BLE001
+    check("v2.7.4 ph_test: with a missing covariate it uses the rows of the fit", False, f"{type(e_).__name__}: {e_}")
+# the reference: Pearson correlation of each Schoenfeld residual with the rank of the event times, computed here
+sch = np.asarray(res_cc.schoenfeld_residuals); evm = cc74["e"].to_numpy() == 1
+r_ref = np.corrcoef(sch[evm, 0], pd.Series(cc74["t"].to_numpy()[evm]).rank().to_numpy())[0, 1]
+check("v2.7.4 ph_test: rho of x is the correlation of its Schoenfeld residuals with the ranked event times",
+      abs(ph_na.loc["x", "rho"] - r_ref) < 1e-12, f"{ph_na.loc['x', 'rho']} vs {r_ref}")
+
+okr, msg = raises(lambda: sv.cox(s74.assign(e=0), "x", "t", "e", show=False), "no event", "240 rows")
+check("v2.7.4 cox: no event raises ValueError (was an IndexError)", okr, msg)
+s74_1 = s74.assign(e=0); s74_1.loc[s74_1.index[10], "e"] = 1
+try:
+    sv.cox(s74_1, "x", "t", "e", show=False); one_ok = True
+except Exception:                                                    # noqa: BLE001
+    one_ok = False
+check("v2.7.4 cox: a single event is not refused (the boundary of the new error)", one_ok)
+s74_2 = s74.assign(e=0); s74_2.loc[s74_2.index[10], "e"] = 1; s74_2.loc[s74_2.index[10], "x"] = np.nan
+okr, msg = raises(lambda: sv.cox(s74_2, "x", "t", "e", show=False), "no event", "239 rows")
+check("v2.7.4 cox: the only event on a row with a missing covariate is 'no event in the rows used'", okr, msg)
+
+
+# review r1 B2: repeated index labels (after a concat, say): rows tracked by position, as in v2.7.3 for the fit
+for idx_lab, idx_ in (("all labels equal", [0] * n74), ("each label twice", list(np.repeat(np.arange(n74 // 2), 2)))):
+    s_dup = s74_nx.copy(); s_dup.index = idx_
+    s_ref = s74_nx.reset_index(drop=True)
+    try:
+        r_d, t_d = sv.cox(s_dup, "x + z", "t", "e", show=False)
+        r_r, t_r = sv.cox(s_ref, "x + z", "t", "e", show=False)
+        ph_d = sv.ph_test(r_d, s_dup, "t", "e", show=False)
+        ph_r = sv.ph_test(r_r, s_ref, "t", "e", show=False)
+        same = (np.allclose(t_d[["coef", "se"]].to_numpy(), t_r[["coef", "se"]].to_numpy(), rtol=1e-12, atol=0)
+                and t_d.attrs["dropped_rows"] == 5 and np.allclose(ph_d["rho"], ph_r["rho"], rtol=1e-12, atol=0))
+        info = (t_d.attrs["dropped_rows"], t_d["se"].tolist(), t_r["se"].tolist())
+    except Exception as e_:                                          # noqa: BLE001
+        same, info = False, f"{type(e_).__name__}: {e_}"
+    check(f"v2.7.4 review r1 B2: cox (robust) and ph_test with repeated index labels ({idx_lab}) equal the fit on a "
+          "fresh index; dropped_rows 5", same, info)
+buf = io.StringIO()
+s_dup = s74_nx.copy(); s_dup.index = [0] * n74
+with contextlib.redirect_stdout(buf):
+    sv.cox(s_dup, "x + z", "t", "e", robust=False)
+check("v2.7.4 review r1 B2: with repeated labels the printed N is the rows used (235), never more than the data",
+      "N = 235" in buf.getvalue(), buf.getvalue()[:200])
+s_st = s74.assign(st=rng74.integers(0, 2, n74).astype(float)); s_st.loc[s_st.index[[1, 2, 3]], "st"] = np.nan
+_, t_st = sv.cox(s_st, "x", "t", "e", strata="st", show=False)
+_, t_stc = sv.cox(s_st.dropna(), "x", "t", "e", strata="st", show=False)
+check("v2.7.4 review r1 N2: a missing stratum is counted in dropped_rows (3) and the fit is the complete-rows one",
+      t_st.attrs["dropped_rows"] == 3 and np.allclose(t_st["se"], t_stc["se"], rtol=1e-12, atol=0))
+okr, msg = raises(lambda: sv.cox(s74.assign(x=np.nan), "x", "t", "e", show=False), "no row is left")
+check("v2.7.4 review r1 N3: every row dropped gives a clear ValueError", okr, msg)
+
+
+# review r2 B1 of v2.7.4: ph_test with a df that is not the one given to cox raises instead of using the wrong rows
+res_cc2, _ = sv.cox(cc74, "x + z", "t", "e", show=False)
+for lab_, df_ in (("the df before dropna", s74_nx), ("the same df sorted by duration", cc74.sort_values("t")),
+                  ("a shorter df", cc74.iloc[:100])):
+    okr, msg = raises(lambda: sv.ph_test(res_cc2, df_, "t", "e", show=False), "not the data frame given to cox")
+    check(f"v2.7.4 r2 B1: ph_test with {lab_} raises ValueError", okr, msg)
+try:
+    sv.ph_test(res_cc2, cc74, "t", "e", show=False); same_ok = True
+except Exception:                                                    # noqa: BLE001
+    same_ok = False
+check("v2.7.4 r2 B1: ph_test with the df given to cox runs (the other side of the check)", same_ok)
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

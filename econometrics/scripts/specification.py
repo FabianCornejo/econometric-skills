@@ -208,7 +208,10 @@ def _has_intercept(res) -> bool:
         return True                                  # not a statsmodels fit: the caller's other gates handle it
     if hasattr(m, "k_constant"):
         return bool(m.k_constant)
-    X = np.asarray(getattr(m, "exog", np.empty((0, 0))), float)
+    if hasattr(m, "has_constant"):                   # v2.7.4: linearmodels (IV2SLS, PanelOLS…) keeps its own flag;
+        return bool(m.has_constant)                  # before, np.asarray(IVData) raised TypeError
+    X = getattr(m, "exog", np.empty((0, 0)))
+    X = np.asarray(getattr(X, "ndarray", X), float)
     if X.ndim != 2 or not X.shape[0]:
         return False
     big = np.max(np.abs(X), axis=0)
