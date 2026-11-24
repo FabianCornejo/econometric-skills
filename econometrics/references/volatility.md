@@ -39,6 +39,8 @@ print(res.summary())
 
 `volatility.stylized_facts(r)` checks the facts of section 1 (Jarque-Bera, Ljung-Box on r and r², ARCH-LM, leverage correlations); `volatility.garch_fit(r, vol)` reports persistence, half-life, the unconditional variance, Ljung-Box on z and z², the Engle-Ng sign-bias tests (`sign_bias_test`) and AIC/BIC, and warns on persistence ≥ 0.99. For a symmetric GARCH it also fits the GJR(1,1,1) with the same mean and distribution and reports the LR test of γ = 0 (`asymmetry_lr`); a rejection is flagged as omitted asymmetry.
 
+**Testing for ARCH effects against a GARCH (v2.7.5).** Under constant volatility α = 0 lies on the boundary and β is not identified, so an LR or J test of the GARCH against constant variance does not have the χ² distribution: read its χ² p-value as approximate, prefer the ARCH-LM test (`stylized_facts`) for the presence of ARCH, and use a parametric bootstrap from the constant-variance model when the conclusion depends on the LR (`interpretation-rules.md`, v2.7.5).
+
 **Names**: GJR-GARCH is the threshold GARCH in the variance; Zakoian's TGARCH models the conditional SD; EGARCH (Nelson) models the log-variance. Calling EGARCH a TGARCH is wrong.
 
 Diagnostics:
