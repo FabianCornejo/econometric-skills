@@ -11,6 +11,7 @@ Without network, or with a file whose SHA-256 differs: SKIP with exit code 0 on 
 (GITHUB_ACTIONS=true), so the test cannot die silently in CI.
 """
 import hashlib
+import io
 import os
 import sys
 import tempfile
@@ -56,16 +57,21 @@ def unavailable(reason):
 
 
 def fetch(name):
-    """The file's path in a cache folder (ECONOMETRICS_TEST_DATA, or the temporary folder), downloaded once."""
+    """The file's path in a cache folder (ECONOMETRICS_TEST_DATA, or the temporary folder), downloaded once; with a
+    read-only cache, the verified bytes in memory."""
     folder = Path(os.environ.get("ECONOMETRICS_TEST_DATA") or Path(tempfile.gettempdir()) / "econometrics-test-data")
     try:
         folder.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        unavailable(f"cache folder {folder}: {e}")
+    except OSError:
+        folder = Path(tempfile.mkdtemp(prefix="econometrics-test-data-"))  # the folder given cannot be created
     path = folder / f"{FILES[name][:16]}-{name}"
+    in_memory = False
     if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != FILES[name]:
-        path.unlink()  # a damaged or edited cached copy: download it again
-    if not path.exists():
+        try:
+            path.unlink()  # a damaged or edited cached copy: download it again
+        except OSError:
+            in_memory = True  # it cannot be deleted (read-only cache): download into memory (review r2 S3-1)
+    if in_memory or not path.exists():
         blob, err = None, None
         for attempt in range(2):  # one retry after a short wait: a transient network error should not fail CI
             try:
@@ -81,12 +87,14 @@ def fetch(name):
         digest = hashlib.sha256(blob).hexdigest()
         if digest != FILES[name]:
             unavailable(f"{name}: SHA-256 {digest} differs from the fixed one")
+        if in_memory:
+            return io.BytesIO(blob)
         try:
             tmp = path.with_suffix(".part")
             tmp.write_bytes(blob)
             tmp.replace(path)
-        except OSError as e:
-            unavailable(f"cache folder {folder} is not writable: {e}")
+        except OSError:
+            return io.BytesIO(blob)  # a read-only cache: use the verified bytes in memory (review r2 S3-2)
     return path
 
 

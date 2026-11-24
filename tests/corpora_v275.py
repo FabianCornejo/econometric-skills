@@ -32,6 +32,14 @@ MIXED = {  # review-mixed-samples: the mean is of the 64 base-sample rows, the r
         'Base inconsistente: a média foi tirada da amostra-base (64), não do conjunto de estimação (111).',  # review r1 S2-5
         "As 64 ex-colônias são um subgrupo dos 111; o 'índice médio' deveria ser 7,21, e a previsão 8,46.",  # review r1 S2-5
         'A previsão no índice médio deveria usar 7,21, a média nos 111 países da regressão.',  # review r1 S2-5
+        "O 'índice médio' de 6,52 não é a média dos países usados na regressão: é de um grupo menor, as 64 ex-colônias.",  # review r2
+        'A média vem da amostra-base de AJR (64 países), mas os coeficientes foram estimados com 111; para prever no país médio, use a média dos 111.',  # review r2
+        'Prever no valor médio exige que o valor médio seja calculado nos dados do ajuste; aqui não é.',  # review r2
+        'Há um descasamento: regressão com N=111 e média com N=64.',  # review r2
+        'The 6.52 average is from the 64-country base sample, not from the 111 countries in the regression.',  # review r2
+        'Média e coeficientes saíram de conjuntos de países diferentes.',  # review r2
+        'Para o país médio da regressão, o índice é cerca de 7,21 e o log previsto, cerca de 8,45.',  # review r2
+        "A frase 'índice médio' é enganosa: a média citada é das ex-colônias da amostra-base, que é só parte dos países da regressão.",  # review r2
     ],
     "bad": [
         "O coeficiente de 0,53 é estatisticamente significativo; a previsão está correta.",
@@ -59,6 +67,18 @@ MIXED = {  # review-mixed-samples: the mean is of the 64 base-sample rows, the r
         'Use uma subamostra das ex-colônias para checar a robustez do coeficiente.',  # review r1 S3-1
         'Recomendo estimar também em outras amostras (por década) e reportar o R².',  # review r1 S3-1
         'O resultado deveria ser checado num subconjunto de países africanos; fora isso, ok.',  # review r1 S3-1
+        'Regressão com 111 países, média de 6,52 nas 64 ex-colônias e previsão de 8,09: tudo consistente com AJR.',  # review r2
+        'Os 111 países incluem as 64 ex-colônias de AJR; a previsão de 8,09 está correta.',  # review r2
+        'Recomendo repetir a regressão em um subgrupo de ex-colônias para checar a robustez.',  # review r2
+        'Estime também em um subconjunto sem a África para ver se o 0,53 se mantém.',  # review r2
+        'Os países vão de 3,5 a 10 no índice, uma amplitude de 6,5; a previsão de 8,09 está certa.',  # review r2
+        'Cada ponto do índice eleva o PIB per capita em cerca de 70% (exp(0,53) − 1); com 7,2 pontos de diferença entre extremos o efeito é enorme. A previsão confere.',  # review r2
+        'Não há incoerência entre os números; a previsão está certa.',  # review r2
+        'A média de 6,52 é baixa comparada à de 7,2 da OCDE, mas a previsão está certa.',  # r2 follow-up probe
+        'Os 64 países da amostra-base são ex-colônias; os 111 incluem outras, e a previsão confere.',  # r2 follow-up probe
+        'O subgrupo das ex-colônias tem média menor, o que é esperado.',  # r2 follow-up probe
+        'A mesma amostra de AJR foi usada, então está tudo certo.',  # r2 follow-up probe
+        'Usaram a amostra-base, o que é correto.',  # r2 follow-up probe
     ],
 }
 
@@ -90,6 +110,13 @@ JPROB = {  # review-j-prob-cdf: Prob = 0.967 is P(chi2 <= J); the p-value is 0.0
         "A 'Prob' é a função de distribuição do qui-quadrado: o p-valor fica em 3,3%, e as restrições são rejeitadas.",  # review r1 S2-5
         'Prob = 0,967 significa que 96,7% da distribuição está abaixo de J; sobram 3,3% na cauda, rejeição a 5%.',  # review r1 S2-5
         'The reported Prob is P(chi2 <= J); the p-value is 0.033.',  # review r1 S2-5
+        'Prob = 0,967 é P(J ≤ 10,5); o p-valor é 0,033 e rejeitamos a 5%.',  # review r2
+        'A coluna Prob dá a área à esquerda de J; a área à direita, o p-valor, é 0,033.',  # review r2
+        'O teste rejeita: χ²(4) = 10,5 tem p ≈ 0,033.',  # review r2
+        'A interpretação está invertida: valores de Prob próximos de 1 indicam rejeição.',  # review r2
+        'Hansen e Singleton reportam a probabilidade de o qui-quadrado ser menor que J; então 0,967 implica rejeição a 5% (p = 0,033).',  # review r2
+        'Em vez de 0,967, o nível de significância observado é 0,033.',  # review r2
+        'The p-value is 1 - 0.967 = 0.033; the restrictions are rejected.',  # review r2
     ],
     "bad": [
         "Com p-valor de 0,967 não rejeitamos as restrições; a conclusão está correta.",
@@ -113,6 +140,17 @@ JPROB = {  # review-j-prob-cdf: Prob = 0.967 is P(chi2 <= J); the p-value is 0.0
         "Compare com o teste de Hansen robusto.",
         "O J de Sargan e o de Hansen coincidem sob homocedasticidade.",
         "Prob 0,967: não rejeita a 5%.",
+        'A estatística J tem função de distribuição qui-quadrado com 4 graus de liberdade; com Prob 0,967 as restrições não são rejeitadas.',  # review r2
+        'Sob a nula, J segue um qui-quadrado (função de distribuição com 4 gl), e a Prob de 0,967 confirma o modelo.',  # review r2
+        'Como complemento, reporte também o teste de Hansen robusto; a conclusão está correta.',  # review r2
+        'A distribuição acumulada dos resíduos parece normal; com Prob 0,967 o modelo é bem especificado.',  # review r2
+        'J/gl = 2,6; cerca de 33,3% dos momentos são redundantes, mas a Prob 0,967 indica que o modelo é aceito.',  # review r2
+        'O valor crítico a 1% é 13,28, e com 9,49 a 5% de referência a Prob de 0,967 mostra não rejeição.',  # review r2
+        'A função de distribuição do J é qui-quadrado; não rejeita.',  # r2 follow-up probe
+        'O p-valor reportado de 0,967 é alto, então o modelo passa.',  # r2 follow-up probe
+        'A cauda direita da distribuição é longa, mas Prob 0,967 confirma o modelo.',  # r2 follow-up probe
+        'Prob 0,967 > 0,05, não rejeitamos.',  # r2 follow-up probe
+        '3,3 é o valor de J/gl esperado.',  # r2 follow-up probe
     ],
 }
 
@@ -144,6 +182,12 @@ HAND2SLS = {  # review-2sls-by-hand: the OLS SE of the second step is wrong (0.1
         'A variância está mal calculada porque usa os resíduos do segundo estágio, não os estruturais.',  # review r1 S2-5
         'The SE of 0.13 is too small; with IV2SLS it is 0.154.',  # review r1 S2-5
         'Os erros-padrão reportados são viesados para baixo: rode o IV2SLS.',  # review r1 S2-5
+        'O erro-padrão de 0,13 está subestimado porque o MQO do segundo passo usa resíduos calculados com os valores previstos.',  # review r2
+        'Os EPs do segundo estágio manual não levam em conta que o regressor foi estimado; o EP válido (2SLS) é 0,154.',  # review r2
+        'A inferência do segundo passo é inválida: use o estimador 2SLS completo.',  # review r2
+        'O t de 7,5 está inflado: o desvio-padrão correto é maior.',  # review r2
+        'The reported SE ignores the first-stage estimation; the proper 2SLS SE is about 0.154.',  # review r2
+        'Rodar o MQO nos valores ajustados dá σ̂ errado, pois os resíduos usam x̂ e não x; use IV2SLS.',  # review r2
     ],
     "bad": [
         "O instrumento precisa satisfazer a exclusão: a mortalidade afeta o PIB só pelas instituições?",
@@ -168,6 +212,20 @@ HAND2SLS = {  # review-2sls-by-hand: the OLS SE of the second step is wrong (0.1
         "A interpretação causal depende da validade do instrumento.",
         "Use o modelo em primeiras diferenças.",
         'A inferência não depende do método de estimação; o resultado está certo.',  # review r1 S3-1
+        'O MQO simples seria viesado pela endogeneidade; o procedimento em dois passos resolve isso e o efeito é preciso.',  # review r2
+        'Com instrumento fraco o 2SLS é viesado em direção ao MQO; reporte o F do primeiro estágio.',  # review r2
+        'A mortalidade não serve como instrumento se afeta o PIB por outros canais, como as doenças.',  # review r2
+        'Verifique a heterocedasticidade nos resíduos do segundo estágio com um teste de White.',  # review r2
+        'The sample of 64 countries is too small for strong conclusions.',  # review r2
+        'O primeiro estágio tem R² de 0,15, o que é aceitável; o efeito é preciso.',  # review r2
+        'O efeito pode estar mal calculado se a mortalidade tiver erro de medida; fora isso o EP está ok.',  # review r2
+        'O EP de 0,13 é razoável e o efeito é preciso.',  # r2 follow-up probe
+        'Isso se deve ao instrumento fraco, viesado.',  # r2 follow-up probe
+        'O erro de medida é de 0,15 pontos.',  # r2 follow-up probe
+        'Os erros-padrão são robustos, então tudo bem.',  # r2 follow-up probe
+        'O 2SLS de 0,94 é maior que o MQO de 0,52.',  # r2 follow-up probe
+        'Se o EP for robusto, tudo bem.',  # r2 follow-up probe
+        'O resultado se mantém com 0,15 de R² no primeiro estágio.',  # r2 follow-up probe
     ],
 }
 

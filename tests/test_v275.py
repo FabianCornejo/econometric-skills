@@ -87,6 +87,7 @@ check("interpretation-rules.md: a v2.7.5 section, the last one, with the six rul
           "by hand", "0.1255", "0.1541", "iv_report",                       # (d)
           "boundary", "Self and Liang", "Andrews", "½χ²(0) + ½χ²(1)",       # (e)
           "does **not** hold for a GARCH(1,1)",                             # (e), review r1 S2-3
+          "when every other parameter is identified under the null",       # (e), review r2 S3-4
           "prior", "unit root", "point mass",                               # (f)
           "initial condition", "0.90", "0.49", "AutoReg", "ts_identify")),  # (g)
       sec[:200])
@@ -97,7 +98,7 @@ rc = (SK / "references" / "review-checklist.md").read_text(encoding="utf-8")
 check("review-checklist.md: the checklist asks the four v2.7.5 questions",
       rc.count("v2.7.5") == 4 and all(w in rc for w in ("IV second stage run by hand with OLS", "Prob(J) is the CDF",
                                                           "null on the boundary of the parameter space",
-                                                          "Do the numbers set side by side", "does the prior give mass",
+                                                          "Do the numbers set side by side", "does the prior give support to the region",
                                                           "exact likelihood on a sample that starts far from the mean")))
 ts = (SK / "references" / "time-series.md").read_text(encoding="utf-8")
 vo = (SK / "references" / "volatility.md").read_text(encoding="utf-8")
