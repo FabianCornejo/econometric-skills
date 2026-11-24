@@ -387,5 +387,18 @@ check("v2.7.4 review r1 N2: a missing stratum is counted in dropped_rows (3) and
 okr, msg = raises(lambda: sv.cox(s74.assign(x=np.nan), "x", "t", "e", show=False), "no row is left")
 check("v2.7.4 review r1 N3: every row dropped gives a clear ValueError", okr, msg)
 
+
+# review r2 B1 of v2.7.4: ph_test with a df that is not the one given to cox raises instead of using the wrong rows
+res_cc2, _ = sv.cox(cc74, "x + z", "t", "e", show=False)
+for lab_, df_ in (("the df before dropna", s74_nx), ("the same df sorted by duration", cc74.sort_values("t")),
+                  ("a shorter df", cc74.iloc[:100])):
+    okr, msg = raises(lambda: sv.ph_test(res_cc2, df_, "t", "e", show=False), "not the data frame given to cox")
+    check(f"v2.7.4 r2 B1: ph_test with {lab_} raises ValueError", okr, msg)
+try:
+    sv.ph_test(res_cc2, cc74, "t", "e", show=False); same_ok = True
+except Exception:                                                    # noqa: BLE001
+    same_ok = False
+check("v2.7.4 r2 B1: ph_test with the df given to cox runs (the other side of the check)", same_ok)
+
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

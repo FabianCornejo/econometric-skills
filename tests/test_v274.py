@@ -88,6 +88,12 @@ BAD = [  # answers that miss it: generic Granger caveats, other checks, or the p
     'A amostra de 240 meses é suficiente para o teste.',
     'O relatório ignora a não estacionariedade das séries.',
     'Ignorar a quebra estrutural é o problema principal.',
+    'A conclusão confunde precedência preditiva com causalidade; falta o teste de estacionariedade, ausente no relatório.',  # review r2 S3
+    'Os intervalos de confiança não incluídos no relatório impedem avaliar o efeito.',  # review r2 S3
+    'O número de defasagens foi omitido no relatório; sem ele não dá para avaliar o teste.',  # review r2 S3
+    'The report omits the lag selection criterion.',  # review r2 S3
+    'A análise de impulso-resposta está ausente.',  # review r2 S3
+    'Os resíduos ignoram choques de oferta? Não sabemos; faltam testes de diagnóstico.',  # review r2 S3
 ]
 pat = re.compile(PAT, re.I)
 check("review-var-omitted: the grader accepts each of the right answers (Python)",

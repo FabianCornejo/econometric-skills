@@ -266,10 +266,19 @@ def ph_test(res, df: pd.DataFrame, duration: str, event: str, transform: str = "
     of time. A significant correlation means the hazard ratio changes over time.
     Remedies: stratify on that variable, interact it with time, or split the period.
     v2.7.4: uses the rows the Cox fit used (a row with a missing covariate is left out, as in cox); before, it
-    dropped only rows with a missing duration or event and failed with "operands could not be broadcast"."""
+    dropped only rows with a missing duration or event and failed with "operands could not be broadcast". df must be
+    the one given to cox (same rows, same order); another df raises ValueError instead of using the wrong rows."""
     pos = getattr(res, "rows_used", None)               # set by cox (positions in its df)
-    if pos is not None and len(pos) and int(np.max(pos)) < len(df):
-        d = df.iloc[pos]
+    if pos is not None:
+        # review r2 B1: positions only mean something in the df given to cox; check the rows before using them
+        same = len(pos) == 0 or int(np.max(pos)) < len(df)
+        if same:
+            d = df.iloc[pos]
+            same = (np.array_equal(d[duration].astype(float).to_numpy(), np.asarray(res.model.endog, float))
+                    and np.array_equal(d[event].astype(int).to_numpy(), np.asarray(res.model.status).astype(int)))
+        if not same:
+            raise ValueError("ph_test: df is not the data frame given to cox (the same rows in the same order): pass "
+                             "that df, before any filter, sort or dropna")
     else:
         d = df.dropna(subset=[duration, event])
     sch = np.asarray(res.schoenfeld_residuals)

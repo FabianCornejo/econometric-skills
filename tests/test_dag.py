@@ -147,7 +147,7 @@ check("v2.7.4 latent parent M of the mediator that causes y: 'and collider', M n
       "observed closes it", r_ == COLL + "M ... -> y)" and "M (unobserved)" in c_ and NOT_ID in c_, (r_, c_))
 r_, c_ = role_rec(base74 + "; M -> Tenure; M -> Y", "Tenure")
 check("v2.7.4 same graph with M observed: case (a), control the mediator together with M",
-      r_ == COLL + "M ... -> y)" and c_.endswith("control v together with M") and "unobserved" not in c_, (r_, c_))
+      r_ == COLL + "M ... -> y)" and c_.endswith("control Tenure together with M and the adjustment set") and "unobserved" not in c_, (r_, c_))
 for lab_, e_ in (("W -> Tenure only", base74 + "; W -> Tenure"), ("Age -> Tenure (Age in the set)", base74 + "; Age -> Tenure"),
                  ("X -> D -> Tenure only", base74 + "; X -> D; D -> Tenure")):
     r_, _ = role_rec(e_, "Tenure")
@@ -160,7 +160,7 @@ check("v2.7.4 G2 (X -> W -> Tenure, W <- U -> Y, U latent): Tenure marked throug
       r_ == COLL + "W ... -> y)" and G_FORM in c_ and "W closes the path" in c_, (r_, c_))
 r_, c_ = role_rec(base74 + "; U -> Tenure; U -> Wo; Wo -> Y", "Tenure", ["U"])
 check("v2.7.4 G3 (U -> Tenure, U -> Wo -> Y, U latent): case (a), the observed Wo closes the path (review r1 S2: the "
-      "old text said 'not identified')", r_ == COLL + "U ... -> y)" and c_.endswith("control v together with Wo")
+      "old text said 'not identified')", r_ == COLL + "U ... -> y)" and c_.endswith("control Tenure together with Wo and the adjustment set")
       and NOT_ID not in c_, (r_, c_))
 g4 = "X -> M1; M1 -> M2; M2 -> Y; X -> Y; U -> M1; U -> Y"
 r1_, c1_ = role_rec(g4, "M1", ["U"])
@@ -196,6 +196,47 @@ b_wo = np.linalg.lstsq(np.column_stack([np.ones(nn), x3, age3, ten3, wo3]), y3, 
 b_no = np.linalg.lstsq(np.column_stack([np.ones(nn), x3, age3, ten3]), y3, rcond=None)[0][1]
 check("v2.7.4 simulation of G3: controlling Tenure and Wo gives the direct effect (1, within 0.01); Tenure alone does not",
       abs(b_wo - 1) < 0.01 and abs(b_no - 1) > 0.1, (round(b_wo, 4), round(b_no, 4)))
+
+
+# --- review r2 of v2.7.4 -------------------------------------------------------------------------------------------
+c_s1 = dag.classify_controls(dag.DAG("X -> M; M -> Y; X -> Y; U -> X; U -> Y; C -> M; C -> Y", latent=["U"]), "X", "Y")
+check("v2.7.4 r2 S1: with no valid adjustment set (U -> X, U -> Y latent) no direct-effect recipe is given for the "
+      "mediator", c_s1.loc["M", "role"] == "mediator (x -> v -> y)"
+      and "not identified by adjustment (no valid set)" in c_s1.loc["M", "recommendation"]
+      and "together with" not in c_s1.loc["M", "recommendation"], c_s1.loc["M"].to_dict())
+g4p = "; ".join([base74] + [f"U{i} -> Tenure; U{i} -> W{i}; W{i} -> Y" for i in range(1, 5)])
+r_, c_ = role_rec(g4p, "Tenure", [f"U{i}" for i in range(1, 5)])
+check("v2.7.4 r2 S2: four latent paths closed only by all of W1..W4 (a set of 4): case (a) with the four, not 'nothing "
+      "closes it'", c_.endswith("control Tenure together with W1, W2, W3, W4 and the adjustment set"), c_)
+g16 = "; ".join([base74, "U -> Tenure; U -> Z; Z -> Y"] + [f"A{i:02d} -> Y" for i in range(15)])
+r_, c_ = role_rec(g16, "Tenure", ["U"])
+check("v2.7.4 r2 S2: 15 irrelevant predictors of y named before Z (16 candidates, above the old cap of 15) do not hide Z: case (a) with Z only",
+      c_.endswith("control Tenure together with Z and the adjustment set"), c_)
+r_, c_ = role_rec(base74 + "; C -> Tenure; C -> Y; X -> D; D -> Tenure; D -> Y", "Tenure")
+check("v2.7.4 r2 N1: case (b) names only the variables affected by x ('C, D closes the path, but D is affected by x')",
+      "C, D closes the path, but D is affected by x" in c_, c_)
+r_, c_ = role_rec("X -> M; M -> Y; U -> M; U -> Y", "M", ["U"])
+check("v2.7.4 r2 N2: when every causal path goes through the mediator, case (c) says the graph has no direct effect",
+      NOT_ID in c_ and "the graph has no direct effect" in c_, c_)
+r_, c_ = role_rec(base74 + "; M -> Tenure; M -> Y", "Tenure", ["M"])
+check("v2.7.4 r2 N2: with a direct path x -> y, the 'no direct effect' note does not appear", "no direct effect" not in c_, c_)
+# the exact search against brute force on random graphs (all subsets of the allowed set, not the shortcut)
+import itertools as _it
+rng_g = np.random.default_rng(7407)
+agree, tried = 0, 0
+for _ in range(300):
+    nodes = [f"n{i}" for i in range(7)]
+    edges = [(nodes[i], nodes[j]) for i in range(7) for j in range(i + 1, 7) if rng_g.random() < 0.3]
+    lat = [n_ for n_ in nodes[2:5] if rng_g.random() < 0.3]
+    gg = dag.DAG(edges + [(n_, None) for n_ in nodes], latent=lat)
+    a_, b_ = nodes[0], nodes[6]
+    allowed = sorted(gg.observed - {a_, b_})
+    brute = any(dag.d_separated(gg, a_, b_, set(W)) for k in range(len(allowed) + 1) for W in _it.combinations(allowed, k))
+    got = dag._closing_set(gg, a_, b_, set(), allowed)
+    tried += 1
+    agree += (got is not None) == brute and (got is None or dag.d_separated(gg, a_, b_, set(got)))
+check("v2.7.4 r2 S2: _closing_set finds a separator exactly when brute force over all subsets does (300 random graphs)",
+      agree == tried, (agree, tried))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
