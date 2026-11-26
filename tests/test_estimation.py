@@ -731,6 +731,81 @@ except ValueError as err:
 check("v2.8.0 gmm: moments that turn NaN in the search -> ValueError naming theta and suggesting bounds",
       "NaN or inf at theta" in nan_msg and "bounds" in nan_msg, nan_msg)
 
+# review r2, S1-2: the Jacobian check compared the whole matrix, so a wrong column in small units hid behind a
+# large one (regressor in units of 1e-4, second column x 2: accepted, SE 172.7 instead of 345.3). Now per column.
+r_j = np.random.default_rng(0)
+zj, vj = r_j.standard_normal((400, 3)), r_j.standard_normal(400)
+xj = zj.sum(1) + vj
+Xj = np.column_stack([np.ones(400), 1e-4 * xj])
+Zj = np.column_stack([np.ones(400), zj])
+yj = 1 + 2.0 * xj + 0.5 * vj + r_j.standard_normal(400)
+jac_j = lambda th, y, X, Z: -(Z.T @ X) / len(y)
+
+
+def _jac_col2(th, y, X, Z):
+    D = -(Z.T @ X) / len(y)
+    D[:, 1] *= 2.0
+    return D
+
+
+try:
+    est.gmm(_lin_moments, [0.0, 0.0], args=(yj, Xj, Zj), jacobian=_jac_col2, show=False)
+    col_msg = ""
+except ValueError as err:
+    col_msg = str(err)
+gj_ok = est.gmm(_lin_moments, [0.0, 0.0], args=(yj, Xj, Zj), jacobian=jac_j, show=False)
+gj_num = est.gmm(_lin_moments, [0.0, 0.0], args=(yj, Xj, Zj), show=False)
+check("v2.8.0 gmm (r2 S1-2): a Jacobian with one wrong column in small units is refused and the message names "
+      "the column; the right one is accepted with the SEs of the numerical fit (rel <= 1e-6)",
+      "column 1" in col_msg and "disagrees" in col_msg
+      and np.allclose(gj_ok["table"]["se"], gj_num["table"]["se"], rtol=1e-6, atol=0), col_msg)
+
+# S2-3 and the steps: a parameter of order 1e-4 (an exponential rate). The right analytic Jacobian was refused
+# (finite-difference step with an absolute floor), and without a Jacobian the fit moved by 1.4e-4 (estimate) and
+# 0.3% (SE). Reference: the same moments with theta in units of 1e-4 (lam = 1e4 theta, a parameter near 2).
+x_r = np.random.default_rng(0).exponential(1e4, size=2000)
+mom_r = lambda th, x: np.column_stack([x - 1 / th[0], x ** 2 - 2 / th[0] ** 2])
+jac_r = lambda th, x: np.array([[1 / th[0] ** 2], [4 / th[0] ** 3]])
+g_rn = est.gmm(mom_r, [2e-4], args=(x_r,), show=False)
+g_ra = est.gmm(mom_r, [2e-4], args=(x_r,), jacobian=jac_r, show=False)
+g_rl = est.gmm(lambda la, x: mom_r(np.asarray(la) * 1e-4, x), [2.0], args=(x_r,), show=False)
+eq_r = [(g["params"].iloc[0] / (g_rl["params"].iloc[0] * 1e-4) - 1, g["table"]["se"].iloc[0] /
+         (g_rl["table"]["se"].iloc[0] * 1e-4) - 1) for g in (g_rn, g_ra)]
+check("v2.8.0 gmm (r2 S2-3): theta of order 1e-4: the right analytic Jacobian is accepted, and with or without it "
+      "the estimate and SE equal those with theta rescaled to order 1 (rel <= 1e-7 and 1e-5)",
+      all(abs(a) < 1e-7 and abs(b) < 1e-5 for a, b in eq_r), eq_r)
+
+# S2-1: a NaN at a trial step of the search is recoverable (the trust region shrinks); it raised ValueError from a
+# start of 2e-4 (the search tried theta = 0, where 1/theta is undefined)
+g_s1 = est.gmm(mom_r, [1e-4], args=(x_r,), show=False)
+check("v2.8.0 gmm (r2 S2-1): start 2e-4 with x - 1/theta converges to the same estimate as a start of 1e-4 "
+      "(rel <= 1e-8), no error", g_rn["converged"] and abs(g_rn["params"].iloc[0] / g_s1["params"].iloc[0] - 1) < 1e-8,
+      (g_rn["params"].iloc[0], g_s1["params"].iloc[0]))
+
+# S2-2: the check stays inside the bounds (log theta with theta0 = 1e-6 next to a lower bound of 1e-8 raised)
+x_g = np.random.default_rng(0).gamma(2.0, 1.0, size=1000)
+mom_g = lambda th, x: np.column_stack([np.log(x) - np.log(th[0]), x / th[0] - 2.0])
+jac_g = lambda th, x: np.array([[-1 / th[0]], [-np.mean(x) / th[0] ** 2]])
+g_b1 = est.gmm(mom_g, [1e-6], args=(x_g,), jacobian=jac_g, bounds=[(1e-8, None)], show=False)
+g_b2 = est.gmm(mom_g, [0.5], args=(x_g,), jacobian=jac_g, bounds=[(1e-8, None)], show=False)
+check("v2.8.0 gmm (r2 S2-2): analytic Jacobian, start 1e-6 next to the bound 1e-8: no error, same estimate as "
+      "from 0.5 (rel <= 1e-8)", g_b1["converged"] and abs(g_b1["params"].iloc[0] / g_b2["params"].iloc[0] - 1) < 1e-8,
+      (g_b1["params"].iloc[0], g_b2["params"].iloc[0]))
+lo_b, hi_b = np.array([1e-6]), np.array([np.inf])
+fd_b = est._fd_column(lambda t: mom_g(t, x_g).mean(0), np.array([1e-6]), 0, 1e-6 * 6e-6, lo_b, hi_b)
+check("v2.8.0 gmm: at a lower bound the finite difference is one-sided (second order) and equals the analytic "
+      "derivative (rel <= 1e-6)", np.allclose(fd_b, jac_g(np.array([1e-6]), x_g)[:, 0], rtol=1e-6, atol=0), fd_b)
+
+# a disagreement where the finite differences are themselves unstable is a warning, not a refusal (decision of
+# 2026-11-26): moments read from a table with a resolution of 1e-5 near the size of the step
+q_t = lambda t: np.round(t * 1e5) / 1e5
+x_t = np.random.default_rng(3).normal(2, 1, 400)
+mom_t = lambda th, x: np.column_stack([x - q_t(th[0]), x ** 2 - q_t(th[0]) ** 2 - 1])
+g_t = est.gmm(mom_t, [2.000003], args=(x_t,), jacobian=lambda th, x: np.array([[-1.0], [-2 * th[0]]]), show=False)
+check("v2.8.0 gmm: Jacobian disagreeing with unstable finite differences -> warning 'not conclusive', no refusal",
+      any(w["level"] == "warning" and "not conclusive" in w["message"] for w in g_t["warnings"]),
+      [w["message"] for w in g_t["warnings"]])
+
 
 # ---------------------------------------------------------------------------------------------
 # lr_test: normal linear regression, where LR = n log(SSR_r / SSR_u) exactly at the MLE
