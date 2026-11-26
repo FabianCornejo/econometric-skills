@@ -434,6 +434,26 @@ check("divergence (r2 S2-5): KL(Pareto(1) || Exp(1)) is infinite -> NaN with a w
       "log 3 + 1/6 (rel 1e-10)", np.isnan(dpe["kl_pq"]) and any("not computed" in w["message"] for w in dpe["warnings"])
       and near(dp3["kl_pq"], np.log(3) + 1 / 6, 1e-10 * (np.log(3) + 1 / 6)), (dpe["kl_pq"], dp3["kl_pq"]))
 # the LLR moments of n_for_error / sprt_design (the same integral as the KL, fixed with it)
+# review r3, S1-4: Gamma(0.01) has 5.9e-4 of its mass below the smallest double, where ppf underflows to 0 and the
+# integrand was set to 0: KL lost 1.5% and B, C came out negative, without warning. Now NaN with a warning; B and C
+# never negative (Hoelder: rho <= 1). Control: Gamma(0.05) || Gamma(0.1) still equals the closed form.
+try:
+    dg1 = sq.divergence(stats.gamma(0.01), stats.gamma(0.02), show=False)
+    g1_ok = (all(np.isnan(dg1[k_]) for k_ in ("kl_pq", "kl_qp", "chernoff", "bhattacharyya"))
+             and any("not computed" in w["message"] for w in dg1["warnings"]))
+except Exception as e_:
+    dg1, g1_ok = repr(e_), False
+check("divergence (r3 S1-4): Gamma(0.01) || Gamma(0.02): KL both ways, Chernoff and Bhattacharyya are NaN with a "
+      "warning (KL was 1.5% low and B, C negative, silently)", g1_ok, dg1 if not g1_ok else None)
+try:
+    dg2 = sq.divergence(stats.gamma(0.05), stats.gamma(0.1), show=False)
+    g2_ok = near(dg2["kl_pq"], _kl_gamma(0.05, 0.1), 1e-10 * _kl_gamma(0.05, 0.1)) and dg2["bhattacharyya"] >= 0 \
+        and dg2["chernoff"] >= dg2["bhattacharyya"] and not dg2["warnings"]
+except Exception as e_:
+    dg2, g2_ok = repr(e_), False
+check("divergence (r3 S1-4): Gamma(0.05) || Gamma(0.1) (mass below the smallest double 7e-17): KL equals the closed "
+      "form (rel 1e-10), 0 <= B <= C, no warning", g2_ok, dg2 if not g2_ok else None)
+
 sg = sq.sprt_design(stats.gamma(0.1), stats.gamma(1.0), n_sim=200, seed=1, show=False)
 check("sprt_design: Gamma(0.1) vs Exp(1): kl_10 = KL(f1 || f0) closed form (rel 1e-10)",
       near(sg["kl_10"], _kl_gamma(1.0, 0.1), 1e-10 * _kl_gamma(1.0, 0.1)), sg["kl_10"])

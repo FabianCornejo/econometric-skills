@@ -148,10 +148,23 @@ def _expect_under(h, d):
     quantile scale those are mild singularities at u = 0 or 1. The lower half uses ppf(u), the upper half isf(v),
     v = 1 - u, so the right tail keeps its precision; pieces between 1e-12, 1e-9, 1e-6, 1e-3 and 1/2 on each side.
     Returns (value, reliable): not reliable when quad warns on an outermost piece (a divergent tail, e.g. KL of a
-    Cauchy against a normal) or its error estimate exceeds 1e-8 of max(1, |value|)."""
+    Cauchy against a normal), its error estimate exceeds 1e-8 of max(1, |value|), or the mass that ppf/isf put
+    exactly on a finite edge (the probability between the edge and the next representable number, where the
+    quantile underflows to the edge and h is not computed) times |h| next to the edge exceeds 1e-6 of |value|:
+    Gamma(0.01) has 6e-4 of its mass below 5e-324 and its KL lost 1.5% without warning (v2.8.0 review r3, S1-4);
+    Beta(0.5, 0.5) has 6.7e-9 within one ulp of 1 (3e-7 of its KL: still reliable, the documented precision)."""
     import warnings as _w
     val = err = 0.0
     ok = True
+    lost = 0.0
+    a, b = d.support()
+    with np.errstate(all="ignore"):
+        for edge, nxt, mass in ((a, np.nextafter(a, np.inf), d.cdf), (b, np.nextafter(b, -np.inf), d.sf)):
+            if np.isfinite(edge):
+                mz = float(mass(nxt))
+                if mz > 0:
+                    he = h(float(nxt))
+                    lost += mz * (abs(he) if np.isfinite(he) else np.inf)
     for inv in (d.ppf, d.isf):
         g = (lambda u, inv=inv: h(float(inv(u))))
         for i, (lo_, hi_) in enumerate(zip(_U_EDGES[:-1], _U_EDGES[1:])):
@@ -162,7 +175,8 @@ def _expect_under(h, d):
                 ok = False
             val += v
             err += e
-    ok = bool(ok and np.isfinite(val) and np.isfinite(err) and err <= 1e-8 * max(1.0, abs(val)))
+    ok = bool(ok and np.isfinite(val) and np.isfinite(err) and err <= 1e-8 * max(1.0, abs(val))
+              and lost <= 1e-6 * max(abs(val), 1e-14))
     return float(val), ok
 
 
@@ -248,7 +262,9 @@ def divergence(p, q, show: bool = True) -> dict:
            converge (e.g. the infinite KL of a Cauchy against a normal) is NaN with a warning, never a guess.
            Precision is limited by rounding in the densities: about eps * |location| / scale relative, and, when a
            density is infinite at an edge of a bounded support, by the mass within one ulp of that edge
-           (KL(Beta(0.5, 0.5) || Beta(2, 2)): 3e-7).
+           (KL(Beta(0.5, 0.5) || Beta(2, 2)): 3e-7); when more than 1e-6 of a value would come from that mass
+           (Gamma(0.01) has 5.9e-4 of it below the smallest double) the value is NaN with a warning, and so are
+           Bhattacharyya and C if log rho > 0 (rho <= 1 by Hoelder).
     Uses in this skill: KL(f0 || f1) and KL(f1 || f0) are the expected log-likelihood-ratio steps of an SPRT under
     each hypothesis (sprt_design) and Stein's exponents of the error of a fixed-sample test; C is the exponent of the
     smallest attainable average error with equal priors, P_e(n) ~ exp(-n C) (Chernoff 1952); JS is symmetric and
@@ -292,7 +308,11 @@ def divergence(p, q, show: bool = True) -> dict:
 
         (j1, ok1), (j2, ok2) = half(p, q), half(q, p)
         js = 0.5 * (j1 + j2) if ok1 and ok2 else float("nan")
-    bhat = -_log_rho(p, q, 0.5)
+    # Hoelder: rho(phi) = integral p^phi q^(1-phi) <= 1 for phi in [0, 1], so log rho <= 0 and B, C >= 0; a positive
+    # log rho is an integration failure (Gamma(0.01) against Gamma(0.02) gave B = -0.61 and C = -0.56 without
+    # warning, exact 0.059 and 0.060; v2.8.0 review r3, S1-4)
+    lr_half = _log_rho(p, q, 0.5)
+    bhat = float("nan") if lr_half > 1e-9 else -lr_half
     if np.isnan(bhat):
         chern = phi = float("nan")
     else:
@@ -302,7 +322,7 @@ def divergence(p, q, show: bool = True) -> dict:
 
         def lr(ph):
             v = _log_rho(p, q, ph)
-            if np.isnan(v):
+            if np.isnan(v) or v > 1e-9:
                 seen_nan.append(ph)
                 return np.inf
             return v
@@ -319,9 +339,9 @@ def divergence(p, q, show: bool = True) -> dict:
     bad = [nm for nm, v in (("KL(p||q)", kl_pq), ("KL(q||p)", kl_qp), ("JS", js), ("Chernoff", chern),
                             ("Bhattacharyya", bhat)) if np.isnan(v)]
     if bad:
-        warns.append(_finding("warning", f"{', '.join(bad)} not computed: the numerical integral did not converge or "
-                              "gave a negative KL (a KL is infinite when p has much heavier tails than q, e.g. Cauchy "
-                              "against normal)", "compute the divergence in closed form, or check the tails of p and q; "
+        warns.append(_finding("warning", f"{', '.join(bad)} not computed: the numerical integral did not converge, "
+                              "lost mass at an edge where the quantile underflows, or broke KL >= 0 or rho <= 1 (a "
+                              "KL is infinite when p has much heavier tails than q, e.g. Cauchy against normal)", "compute the divergence in closed form, or check the tails of p and q; "
                               "do not use the NaN values"))
     if np.isfinite(kl_pq) and np.isfinite(kl_qp) and np.isfinite(chern) and np.isfinite(bhat):
         upper = kl_pq * kl_qp / (kl_pq + kl_qp) if kl_pq + kl_qp > 0 else 0.0
