@@ -962,6 +962,68 @@ check("v2.8.0 gmm (r2 S2-1): start 2e-4 with x - 1/theta converges to the same e
       "(rel <= 1e-8), no error", g_rn["converged"] and abs(g_rn["params"].iloc[0] / g_s1["params"].iloc[0] - 1) < 1e-8,
       (g_rn["params"].iloc[0], g_s1["params"].iloc[0]))
 
+# review r3, S2-5: finite differences that are exactly 0 at both steps are no reference. GMM for a median (an
+# indicator moment) with a kernel-density Jacobian, the main reason to pass one, was refused as a "clear"
+# disagreement; a subgradient at a kink at theta0 too. Now a warning, and the rank test (which differentiates the
+# contributions numerically: 0 for step functions) is not computed, with a notice; a true zero column with noise
+# of 1e-20 in the analytic one passes silently.
+r_md = np.random.default_rng(0)
+y_md = r_md.standard_normal(400)
+z_md = np.column_stack([np.ones(400), r_md.standard_normal(400)])
+mom_md = lambda t: ((y_md <= t[0]) - 0.5)[:, None] * z_md
+jac_md = lambda t: (stats.gaussian_kde(y_md)(t[0])[0] * z_md.mean(0))[:, None]
+md_res = []
+for th0_ in (0.1, 0.0):
+    try:
+        g_md = est.gmm(mom_md, [th0_], jacobian=jac_md, steps="one-step", show=False)
+        frac = float(np.mean(y_md <= g_md["params"].iloc[0]))
+        md_res.append((0.45 <= frac <= 0.55,
+                       any("finite differences of the mean moment are 0" in w["message"] for w in g_md["warnings"]),
+                       np.isnan(g_md["rank_p"]) and any("rank test of the Jacobian was not computed" in w["message"]
+                                                         for w in g_md["warnings"]),
+                       not any("may not be identified" in w["message"] for w in g_md["warnings"])))
+    except Exception as e_:
+        md_res.append(repr(e_)[:120])
+check("v2.8.0 gmm (r3 S2-5): GMM for a median with a kernel-density jacobian, started at 0.1 and at 0: accepted, "
+      "estimate between the 45% and 55% sample quantiles, a 'not checked' warning, the rank test not computed (with "
+      "its notice, no 'may not be identified')", all(r_ == (True, True, True, True) for r_ in md_res), md_res)
+r_kk = np.random.default_rng(1)
+e_kk = r_kk.standard_normal(300)
+mom_kk = lambda t: np.column_stack([np.abs(t[0] - 0.3) + 0.0 * e_kk, e_kk + 1.0 - t[0]])
+jac_kk = lambda t: np.array([[1.0], [-1.0]])          # a subgradient of |theta - 0.3| at 0.3
+try:
+    g_kk = est.gmm(mom_kk, [0.3], jacobian=jac_kk, steps="one-step", show=False)
+    kk_ok = any("not checked in column(s) [0]" in w["message"] for w in g_kk["warnings"])
+except Exception as e_:
+    kk_ok, g_kk = False, repr(e_)[:120]
+check("v2.8.0 gmm (r3 S2-5): a subgradient at a kink at theta0 (|theta - 0.3| started at 0.3): not refused, a 'not "
+      "checked' warning", kk_ok, g_kk if not kk_ok else None)
+r_zc = np.random.default_rng(2)
+zz_ = r_zc.standard_normal((300, 3)); xz_ = zz_.sum(1) + r_zc.standard_normal(300); yz_ = 2 * xz_ + r_zc.standard_normal(300)
+mom_zc = lambda t: (yz_ - t[0] * xz_)[:, None] * zz_
+jac_zc = lambda t: np.column_stack([-(zz_ * xz_[:, None]).mean(0), np.full(3, 1e-20)])
+g_zc = est.gmm(mom_zc, [1.0, 0.5], jacobian=jac_zc, show=False)
+check("v2.8.0 gmm (r3 S3): a parameter outside the moments, with noise of 1e-20 in its analytic column: no jacobian "
+      "warning (the column moves the moments by less than rounding), and the 'may not be identified' warning",
+      not any("jacobian" in w["message"] for w in g_zc["warnings"])
+      and any("may not be identified" in w["message"] for w in g_zc["warnings"]),
+      [w["message"][:70] for w in g_zc["warnings"]])
+
+# the other side: a wrong entry where the true Jacobian is a structural 0 (each moment depends on one parameter;
+# the user's has 0.5 off the diagonal) is still refused: that 0 is flat over a large step on both sides
+r_sz = np.random.default_rng(3)
+zsz = r_sz.standard_normal((400, 2)); x1sz = zsz[:, 0] + r_sz.standard_normal(400); x2sz = zsz[:, 1] + r_sz.standard_normal(400)
+y1sz, y2sz = x1sz + r_sz.standard_normal(400), x2sz + r_sz.standard_normal(400)
+mom_sz = lambda t: np.column_stack([zsz[:, 0] * (y1sz - t[0] * x1sz), zsz[:, 1] * (y2sz - t[1] * x2sz)])
+jac_sz = lambda t: np.array([[-(zsz[:, 0] * x1sz).mean(), 0.5], [0.5, -(zsz[:, 1] * x2sz).mean()]])
+try:
+    est.gmm(mom_sz, [0.5, 0.5], jacobian=jac_sz, show=False)
+    sz_msg = "accepted"
+except ValueError as e_:
+    sz_msg = str(e_)
+check("v2.8.0 gmm (r3 S2-5): a non-zero entry where the true Jacobian is a structural 0 is still refused",
+      "disagrees with finite differences" in sz_msg, sz_msg[:120])
+
 # S2-2: the check stays inside the bounds (log theta with theta0 = 1e-6 next to a lower bound of 1e-8 raised)
 x_g = np.random.default_rng(0).gamma(2.0, 1.0, size=1000)
 mom_g = lambda th, x: np.column_stack([np.log(x) - np.log(th[0]), x / th[0] - 2.0])

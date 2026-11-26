@@ -600,9 +600,9 @@ def _gmm_rank_test(G_of, th, lags, h=None):
     well-scaled one to 1e-6 and does not depend on the random starts of the search; with 3e4 and a small statistic
     (~1) the finite differences leave ~1e-5 (with exact derivatives 1e-7). Centre such a regressor.
     Returns (stat, df, ac1, capped); (nan, df, nan, False) when the moments are not finite next to the estimate;
-    capped is True when the candidate subspaces passed their cap (the statistic is then an upper bound). ac1 is the largest
-    absolute first-order autocorrelation among the columns of vec(dg_i/dtheta') that vary: the persistence that
-    makes the test over-reject (v2.8.0 review r2, S2-4; sizes measured in references/estimation-theory.md
+    capped is True when the candidate subspaces passed their cap (the statistic is then an upper bound). ac1 is the
+    largest absolute first-order autocorrelation among the columns of vec(dg_i/dtheta') that vary: the persistence
+    that makes the test over-reject (v2.8.0 review r2, S2-4; sizes measured in references/estimation-theory.md
     section 7)."""
     th = np.asarray(th, float)
     h = _steps(th) if h is None else np.asarray(h, float)
@@ -779,18 +779,26 @@ def _fd_column(fun, th, j, h, lo, hi):
     return np.full(np.shape(fun(th)), np.nan)
 
 
-def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=None):
+def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=None, g_scale=0.0):
     """Compares a user Jacobian with finite differences at theta0, column by column (review r2, S1-2: on the whole
-    matrix, a wrong column in small units hid behind a large one). The step is gmm's response-scale step at theta0
-    (steps0; review r3, S2-2) and stays inside the bounds (S2-2, S2-3). Refuses only when the disagreement is clear: gap above tol of the column's
-    largest entry AND the finite differences reliable there (steps h and h/4 agree to ref_tol of that scale);
-    otherwise a disagreement is a warning (the reference itself is unstable: a kink, an undefined neighbourhood).
-    Returns {"refuse", "warn", "col", "gap", "ref_err"}."""
+    matrix, a wrong column in small units hid behind a large one). The step is gmm's step at theta0 (chosen by
+    stability, steps0; review r3, S2-2) and stays inside the bounds (S2-2, S2-3). Refuses only when the
+    disagreement is clear: gap above tol of the column's largest entry AND the finite differences reliable there
+    (steps h and h/4 agree to ref_tol of that scale); otherwise a disagreement is a warning (the reference itself
+    is unstable: a kink, an undefined neighbourhood). Differences that are 0 at both steps, up to rounding (|d| h
+    <= 4 eps g_scale, g_scale the root mean square of the contributions at theta0), are no reference (v2.8.0
+    review r3, S2-5): moments that are step functions (an indicator, as in GMM for a quantile) or a kink at
+    theta0 give 0 there while the right Jacobian (a density estimate, a subgradient) is not. When the moment
+    moves over a step H = 1e4 h on either side (it is not a structural zero, which stays flat on both sides and
+    is still compared), those entries are left out of the comparison and give a warning, never a refusal; the
+    other entries of the column are still checked. An entry of the user's that also moves the moments by less
+    than rounding (a true zero with noise) passes silently.
+    Returns {"refuse", "warn", "col", "gap", "ref_err", "flat"} (flat: the columns whose differences are 0)."""
     th0 = np.asarray(th0, float)
     steps0 = _gmm_pilot_steps(th0, th0) if steps0 is None else np.asarray(steps0, float)
     tiny = np.finfo(float).tiny
-    out = {"refuse": False, "warn": None, "col": None, "gap": 0.0, "ref_err": 0.0}
-    unchecked = []
+    out = {"refuse": False, "warn": None, "col": None, "gap": 0.0, "ref_err": 0.0, "flat": []}
+    unchecked, flat = [], []
     for j in range(len(th0)):
         h = steps0[j]
         d1 = _fd_column(gbar, th0, j, h, lo, hi)
@@ -799,7 +807,31 @@ def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=No
         if not (np.all(np.isfinite(d1)) and np.all(np.isfinite(d2))):
             unchecked.append(j)
             continue
-        scale = max(float(np.max(np.abs(d1))), float(np.max(np.abs(du))), tiny)
+        res = 4 * np.finfo(float).eps * g_scale                     # rounding of the moments over the step
+        dead = (np.abs(d1) * h <= res) & (np.abs(d2) * h / 4 <= res)
+        if np.any(dead):
+            # a structural zero (the moment does not depend on theta_j) stays flat on both sides over a much larger
+            # step H; a step function or a kink moves on at least one side. Only the latter is no reference.
+            H = 1e4 * h
+            g0_ = gbar(th0)
+            moves = np.zeros(len(d1), bool)
+            for sgn in (1.0, -1.0):
+                e_ = np.zeros_like(th0)
+                e_[j] = sgn * H
+                if lo[j] <= th0[j] + sgn * H <= hi[j]:
+                    with np.errstate(all="ignore"):
+                        gH = gbar(th0 + e_)
+                    moves |= ~np.isfinite(gH) | (np.abs(gH - g0_) > res)
+            dead = dead & moves
+        if np.any(dead & (np.abs(du) * h > res)):
+            flat.append(j)
+        keep = ~dead
+        if not keep.any():
+            continue
+        d1, d2, du = d1[keep], d2[keep], du[keep]
+        # floor: the smallest derivative that moves the moments by more than rounding over the step (a true zero
+        # column with noise in the analytic one is not a disagreement; review r3, S3)
+        scale = max(float(np.max(np.abs(d1))), float(np.max(np.abs(du))), res / h, tiny)
         gap = float(np.max(np.abs(du - d1))) / scale
         ref_err = float(np.max(np.abs(d1 - d2))) / scale
         if gap > tol and (out["col"] is None or gap > out["gap"]):
@@ -811,6 +843,11 @@ def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=No
     elif unchecked and out["col"] is None:
         out["warn"] = (f"jacobian not checked in column(s) {unchecked}: the moments are not finite next to theta0 "
                        "(within the bounds)")
+    out["flat"] = flat
+    if flat and out["col"] is None and out["warn"] is None:
+        out["warn"] = (f"jacobian not checked in column(s) {flat}: the finite differences of the mean moment are "
+                       "0 at theta0 (up to rounding) where your jacobian is not; the moments may be step functions "
+                       "(indicators, quantiles) or have a kink at theta0, where finite differences are no reference")
     return out
 
 
@@ -868,10 +905,11 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
     m x k Jacobian of the MEAN moment (rows = moments, columns = parameters). It is checked once at theta0,
     column by column, against finite differences inside the bounds: refused when a column clearly disagrees
     (e.g. transposed, or one column wrong), a warning when the finite differences are unstable or zero there (a
-    kink, a step function). Without it, central differences whose step is chosen per parameter by stability
-    (among scales |theta|, |theta0|, 1 and that of the response, the one where steps h and h/2 agree best): it
-    depends neither on the units of theta nor on how far theta0 is from the estimate. A trial step of the search where
-    the moments are NaN is skipped (the trust region shrinks); theta0 and the estimate must be finite.
+    kink, a step function; the rank test is then not computed). Without it, central differences whose step is
+    chosen per parameter by stability (among scales |theta|, |theta0|, 1 and that of the response, the one where
+    steps h and h/2 agree best): it depends neither on the units of theta nor on how far theta0 is from the
+    estimate. A trial step of the search where the moments are NaN is skipped (the trust region shrinks); theta0
+    and the estimate must be finite.
     steps    "two-step" (default): first step with `weight` (identity if None; the first step depends on
              the units of the moments: scale them), then W = S^-1 at the first-step estimate; "iterated":
              repeat until the estimate stops moving (Hansen, Heaton and Yaron 1996); "one-step": `weight`
@@ -956,13 +994,16 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
         return _jacobian(gbar, th, _gmm_steps(G_raw, th, theta0))
 
     warns = []
+    flat_cols = []
     if jacobian is not None:
-        chk = _gmm_check_jacobian(gbar, D_user(theta0), theta0, lo, hi, steps0=_gmm_steps(G_raw, theta0, theta0))
+        chk = _gmm_check_jacobian(gbar, D_user(theta0), theta0, lo, hi, steps0=_gmm_steps(G_raw, theta0, theta0),
+                                  g_scale=float(np.sqrt(np.mean(G0 ** 2))))
         if chk["refuse"]:
             raise ValueError(f"jacobian disagrees with finite differences at theta0 in column {chk['col']} "
                              f"({names[chk['col']]}): largest gap {chk['gap']:.3g} of that column's largest entry, "
                              f"while the finite differences agree with themselves to {chk['ref_err']:.1g}; check it, "
                              "and its orientation (rows = moments, columns = parameters)")
+        flat_cols = chk["flat"]
         if chk["warn"]:
             warns.append(_finding("warning", chk["warn"],
                                   "the jacobian you passed was used; check it at theta0, or run without it and compare"))
@@ -1059,7 +1100,12 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                     "warning", f"{names[j]} = {th[j]:.6g} is within one SE ({se[j]:.3g}) of its {side} bound {b:g}",
                     "near a bound the t-ratio, the CI and the chi2 references of J, Wald and LR are not valid "
                     "(Andrews 1999); report the bound as binding and use a boundary-aware test or a bootstrap"))
-    rank_stat, rank_df, rank_ac1, rank_capped = _gmm_rank_test(G_of, th, hac_lags, _gmm_steps(G_raw, th, theta0))
+    if flat_cols:
+        # the rank test differentiates each contribution numerically: with step-function moments those differences
+        # are 0 and the statistic would say "not identified" for any data (v2.8.0 review r3, S2-5)
+        rank_stat, rank_df, rank_ac1, rank_capped = float("nan"), m - k + 1, float("nan"), False
+    else:
+        rank_stat, rank_df, rank_ac1, rank_capped = _gmm_rank_test(G_of, th, hac_lags, _gmm_steps(G_raw, th, theta0))
     if rank_df is None:
         rank_df = m - k + 1
     if rank_capped:
@@ -1068,7 +1114,13 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
             "not depend on the parameters: the statistic is an upper bound and may overstate identification",
             "check identification also by the criterion over a grid of the parameters"))
     rank_p = float(stats.chi2.sf(rank_stat, rank_df))              # nan when the test was not computed
-    if not np.isfinite(rank_p):
+    if not np.isfinite(rank_p) and flat_cols:
+        warns.append(_finding(
+            "notice", "the rank test of the Jacobian was not computed: it differentiates the moments numerically, and "
+            "their finite differences are 0 (step functions or a kink)",
+            "judge identification by your jacobian (its rank and size relative to the SEs) and by the criterion over "
+            "a grid of the parameters"))
+    elif not np.isfinite(rank_p):
         warns.append(_finding(
             "notice", "the rank test of the Jacobian was not computed: the moments are undefined next to the estimate",
             "check identification by the criterion over a grid of the parameters"))
