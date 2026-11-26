@@ -523,7 +523,7 @@ def _gmm_steps(G, th, th0):
 
     Candidate scales s: |theta_j|, |theta0_j|, 1 and the response scale tau_j = rms(g_i) / rms(dg_i/dtheta_j) (the
     change in theta_j that moves the contributions by their own size, with the derivative from the pilot step). For
-    each, the derivative of the mean moment with h = eps^(1/3) s and with h/2; the step kept is the one whose two
+    each, the per-observation derivatives with h = eps^(1/3) s and with h/2; the step kept is the one whose two
     estimates agree best (rounding grows and truncation shrinks as h falls, and their disagreement tracks the error).
     A single scale failed somewhere: relative to theta with theta0 far from the estimate (a rate of 2e-4 started at
     1: Jacobian off by 7.6e-3, the estimate by 1.4e-4); relative to the estimate when it is 0 by chance (a slope at
@@ -563,8 +563,11 @@ def _gmm_steps(G, th, th0):
             qs = []
             for sc in sorted(set(c for c in cands if np.isfinite(c) and c > 0)):
                 h = eps3 * sc
-                _, d1 = diff(h)
-                _, d2 = diff(h / 2)
+                # agreement of the per-observation derivatives, which the rank test uses: on the mean the rounding
+                # noise of a residual that cancels large terms (an offset of 1e4) averages out, and the mean picked a
+                # step 3000x too small for the rank test (review r4 cycle)
+                d1, _ = diff(h)
+                d2, _ = diff(h / 2)
                 if d1 is None or d2 is None or not (np.all(np.isfinite(d1)) and np.all(np.isfinite(d2))):
                     continue
                 den = max(float(np.max(np.abs(d1))), float(np.max(np.abs(d2))))
@@ -594,11 +597,13 @@ def _gmm_rank_test(G_of, th, lags, h=None):
     truncated kernel made the variance indefinite and the statistic negative; review r1). A direction in which the
     derivatives do not vary (variance ~0) but whose mean is not 0 is identified exactly: the statistic is inf.
     Moments that do not depend on some parameters (a block structure, a parameter outside the moments) are handled
-    exactly: the minimum is taken also inside each moment's null space, where that moment is dropped (search in
-    _gmm_rank_search; v2.8.0 review r3). A parameter outside all moments gives 0.
+    exactly within the search budget: the minimum is taken also inside each moment's null space, where that moment
+    is dropped (search in _gmm_rank_search; v2.8.0 reviews r3 and r4). A parameter outside all moments gives 0.
     Precision: with a regressor stored with an offset up to 1e4, with or without HAC lags, the statistic matches the
     well-scaled one to 1e-6 and does not depend on the random starts of the search; with 3e4 and a small statistic
-    (~1) the finite differences leave ~1e-5 (with exact derivatives 1e-7). Centre such a regressor.
+    (~1) the finite differences leave ~1e-5 (with exact derivatives 1e-7), and 1e5 matches to 1e-5. A regressor in
+    units of 1e9 (a scale within one moment) gives the same statistic as in units of 1. Centre a regressor with a
+    large offset.
     Returns (stat, df, ac1, capped); (nan, df, nan, False) when the moments are not finite next to the estimate;
     capped is True when the candidate subspaces passed their cap (the statistic is then an upper bound). ac1 is the
     largest absolute first-order autocorrelation among the columns of vec(dg_i/dtheta') that vary: the persistence
@@ -633,12 +638,15 @@ def _gmm_rank_test(G_of, th, lags, h=None):
     return best, m - k + 1, ac1, capped
 
 
-# Singular-value ratio under which a moment's derivative matrix (n x k, preconditioned coordinates) is taken not to
-# move in a direction. Measured on both sides (development repository, claude/desenho-r3-v2.8.0.md, P0): finite-
-# difference noise in a structural null direction <= 1.3e-10 (nonlinear moments in theta1 * s + theta2, s from 1e-8
-# to 1e8); genuine directions >= 6.7e-6 with a regressor offset of 1e6, where the fit itself already breaks.
+# Singular-value ratio under which a moment's derivative matrix (n x k, each column divided by its own root mean square,
+# so the ratio does not depend on the units of the parameters within the moment) is taken not to move in a direction.
+# Measured on both sides (development repository, claude/desenho-r3-v2.8.0.md, P0, and desenho-r4): finite-difference
+# noise in a structural null direction <= 1.3e-10; genuine directions >= 6.7e-6 with a regressor offset of 1e6, where
+# the fit itself already breaks. The columns are equilibrated per moment because a global scale (v2.8.0 review r4,
+# S1-a) took a regressor in units of 1e9 for a null direction and gave "not identified" (5.97 instead of 153.9).
 _RANK_NULL_TOL = 1e-8
 _RANK_MAX_SUBSPACES = 200
+_RANK_BUDGET_S = 30.0
 
 
 def _gmm_rank_search(Di, Dbar, Om, M2):
@@ -647,35 +655,70 @@ def _gmm_rank_search(Di, Dbar, Om, M2):
     The minimum is discontinuous where a moment stops depending on c: next to such a direction the moment's share is
     n mean^2 / variance of its derivative along c, whatever the distance, and in it the moment does not move and has
     no share. So the infimum lies on a set of measure zero (the moment's structural null space) that a search over all
-    directions does not find (v2.8.0 review r3: a block of moments that does not depend on theta1 hid the weak
-    identification of theta2, 140.6 instead of 5.64; k = 3 gave 176 instead of 0.54; a parameter outside the moments
-    crashed). The search therefore runs on candidates: the whole space and every non-trivial intersection of the
-    moments' null spaces, where the moments that vanish are dropped explicitly (none left: the statistic is 0).
-    Directions are searched in preconditioned coordinates c = T u with T'AT = I, A = sum_j M2_jj / tr M2_jj: a
-    regressor stored with a large offset made a valley of width ~1/offset in c, and the result depended on the random
-    starts (review r3, S2-1); in u it is the same statistic on a well-scaled sphere."""
+    directions does not find (v2.8.0 review r3: a block of moments in theta1 alone hid the weak identification of
+    theta2, 140.6 instead of 5.64; k = 3 gave 176 instead of 0.54; a parameter outside the moments crashed). The
+    search therefore runs on candidates: the whole space and every non-trivial intersection of the moments' null
+    spaces (each judged with that moment's columns equilibrated: review r4, S1-a), where the moments that vanish are
+    dropped explicitly (none left: the statistic is 0). Inside each candidate the directions are searched in
+    coordinates preconditioned by A = sum_j M2_jj / tr M2_jj restricted to it: a regressor stored with a large offset
+    made a valley of width ~1/offset, and the result depended on the random starts (review r3, S2-1). The candidates
+    beyond the whole space are searched from the largest down within a budget of _RANK_BUDGET_S seconds and
+    _RANK_MAX_SUBSPACES subspaces (fixed-effects designs with group dummies have many; review r4, S2-b); past either,
+    capped is True and the statistic is an upper bound."""
+    import time as _time
     n, m, k = Di.shape
     M2j = [M2[j, :, j, :] for j in range(m)]
     tr = np.array([np.trace(B) for B in M2j])
     dead = ~(tr > 0)                                                 # a moment that does not depend on theta at all
     A = sum(M2j[j] / tr[j] for j in range(m) if not dead[j]) if (~dead).any() else np.eye(k)
-    ev, Q = np.linalg.eigh((A + A.T) / 2)
-    T = Q / np.sqrt(np.maximum(ev, max(float(ev.max()), np.finfo(float).tiny) * 1e-14))
-    DT = [Di[:, j, :] @ T for j in range(m)]                        # n x k: moment j's derivatives, u coordinates
+    A = (A + A.T) / 2
     tol = _RANK_NULL_TOL
-    top = np.zeros(m)
+    Dj = [Di[:, j, :] for j in range(m)]                             # n x k, original coordinates
+
+    def eq_null(j, S):
+        # orthonormal basis (in the coordinates of S) of the directions of span(S) along which moment j does not move,
+        # judged with the columns of Dj S equilibrated (each divided by its root mean square; a zero column is null)
+        B = Dj[j] @ S
+        sc = np.sqrt(np.mean(B ** 2, axis=0))
+        live_c = sc > 0
+        d = S.shape[1]
+        if not live_c.any():
+            return np.eye(d)
+        Be = B[:, live_c] / sc[live_c]
+        _, sv, vt = np.linalg.svd(Be, full_matrices=True)
+        sv = np.concatenate([sv, np.zeros(Be.shape[1] - len(sv))])
+        null_e = vt.T[:, sv <= tol * sv[0]]                          # in equilibrated coordinates of the live columns
+        basis = []
+        for v in null_e.T:
+            a_ = np.zeros(d)
+            a_[live_c] = v / sc[live_c]
+            basis.append(a_)
+        for i in np.flatnonzero(~live_c):
+            e_ = np.zeros(d)
+            e_[i] = 1.0
+            basis.append(e_)
+        if not basis:
+            return np.zeros((d, 0))
+        return np.linalg.qr(np.column_stack(basis))[0]
+
+    # the scale of each moment for the "does it move along c" test: the largest singular value of its equilibrated
+    # matrix and the column scales, so the test is the same relative singular value as in eq_null
+    colsc = [np.sqrt(np.diag(M2j[j])) for j in range(m)]
+    topeq = np.zeros(m)
     for j in range(m):
         if not dead[j]:
-            top[j] = np.linalg.norm(DT[j], 2)
+            lc = colsc[j] > 0
+            topeq[j] = np.linalg.norm(Dj[j][:, lc] / colsc[j][lc], 2) / np.sqrt(n)
 
-    def null_in(j, S):
-        # orthonormal basis (in the coordinates of S) of the directions of span(S) along which moment j does not move
-        _, sv, vt = np.linalg.svd(DT[j] @ S, full_matrices=True)
-        sv = np.concatenate([sv, np.zeros(S.shape[1] - len(sv))])
-        return vt.T[:, sv <= tol * top[j]]
+    def moves(j, c):
+        if dead[j]:
+            return False
+        lc = colsc[j] > 0
+        ce = np.linalg.norm(colsc[j][lc] * c[lc])
+        return np.linalg.norm(Dj[j] @ c) / np.sqrt(n) > tol * topeq[j] * ce if ce > 0 else False
 
     def dropped_on(S):
-        return frozenset(j for j in range(m) if dead[j] or np.linalg.norm(DT[j] @ S, 2) <= tol * top[j])
+        return frozenset(j for j in range(m) if dead[j] or eq_null(j, S).shape[1] == S.shape[1])
 
     eye = np.eye(k)
     cands = [(eye, dropped_on(eye))]
@@ -686,7 +729,7 @@ def _gmm_rank_search(Di, Dbar, Om, M2):
         for j in range(m):
             if j in drop:
                 continue
-            a = null_in(j, S)
+            a = eq_null(j, S)
             if a.shape[1] == 0 or a.shape[1] == S.shape[1]:
                 continue
             Sn = np.linalg.qr(S @ a)[0]
@@ -700,17 +743,16 @@ def _gmm_rank_search(Di, Dbar, Om, M2):
             cands.append((Sn, dropped_on(Sn)))
             queue.append(len(cands) - 1)
 
-    def wald(u, drop):
+    def wald(c, drop):
         # Each moment is standardized by its own scale along c (root of the uncentred second moment of its derivative)
         # before any cut, so the cuts are scale-free per moment (review r2, S1-1); the Wald is invariant to that
-        # diagonal rescaling. A moment whose derivative along c is below tol of its largest one does not move along c.
-        u = np.asarray(u, float)
-        nu = np.linalg.norm(u)
-        if not np.isfinite(nu) or nu == 0:
+        # diagonal rescaling.
+        c = np.asarray(c, float)
+        nc = np.linalg.norm(c)
+        if not np.isfinite(nc) or nc == 0:
             return np.inf
-        u = u / nu
-        c = T @ u
-        live = np.array([j not in drop and np.linalg.norm(DT[j] @ u) > tol * top[j] for j in range(m)])
+        c = c / nc
+        live = np.array([j not in drop and moves(j, c) for j in range(m)])
         if not live.any():
             return 0.0                                              # no moment moves along c: D c = 0
         V = np.einsum("iajb,a,b->ij", Om, c, c)[np.ix_(live, live)]
@@ -729,24 +771,71 @@ def _gmm_rank_search(Di, Dbar, Om, M2):
             return np.inf                                           # a recombination of moments does
         return float(n * np.sum(proj[keep] ** 2 / ev_[keep]))
 
+    def precond(S):
+        # basis of span(S) in which the average second moment of the derivatives is the identity
+        As = S.T @ A @ S
+        ev, Q = np.linalg.eigh((As + As.T) / 2)
+        return S @ (Q / np.sqrt(np.maximum(ev, max(float(ev.max()), np.finfo(float).tiny) * 1e-14)))
+
+    # valleys: where a moment's mean derivative cancels (Dbar_j c = 0) its share drops from n mean^2 / var to ~0 over a
+    # width ~ (its smallest relative dependence); a moment that depends on theta2 through 1e-9 theta2 w makes a valley
+    # 1e-9 wide that no grid finds (review r4, S3-2: the statistic was overstated and hid a weak theta2). Each such
+    # hyperplane is searched too, the moment kept (it may still vary there), and k = 2 polishes around its direction.
+    hyper = []
+    if k >= 2:
+        for j in range(m):
+            row = Dbar[j]
+            if dead[j] or not np.any(row):
+                continue
+            H = np.linalg.svd(row[None, :], full_matrices=True)[2][1:].T          # k x (k - 1), orthonormal
+            P = H @ H.T
+            if any(np.max(np.abs(p - P)) < 1e-12 for p in projs):
+                continue
+            projs.append(P)
+            hyper.append(H)
+
     rng = np.random.default_rng(0)
     best = np.inf
+    t_start = _time.time()
+    cands = cands[:1] + [(H, frozenset(j for j in range(m) if dead[j])) for H in hyper] + cands[1:]
+    n_hyper = len(hyper)
+    order = [0] + list(range(1, 1 + n_hyper)) + sorted(range(1 + n_hyper, len(cands)),
+                                                        key=lambda i: -cands[i][0].shape[1])
     # the Wald is inf along directions in which a moment moves deterministically: BFGS then differences inf and warns
     # (RuntimeWarning, noise in the user's console; review r2); the values it returns are still compared
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        for S, drop in cands:
+        for idx in order:
+            if idx > 0 and _time.time() - t_start > _RANK_BUDGET_S:
+                capped = True
+                break
+            S, drop = cands[idx]
+            Pm = precond(S)
             d = S.shape[1]
-            f = (lambda a, S=S, drop=drop: wald(S @ np.atleast_1d(np.asarray(a, float)), drop))
+            f = (lambda a, Pm=Pm, drop=drop: wald(Pm @ np.atleast_1d(np.asarray(a, float)), drop))
             if d == 1:
                 val = f([1.0])
+                if k == 2:
+                    # polish around the direction: the valley may sit slightly off the plane (the moment's variance and
+                    # its correlation with the others); bracket +-1e-3 rad, rescaled to (0, 1)
+                    c0 = Pm[:, 0] / np.linalg.norm(Pm[:, 0])
+                    a0 = float(np.arctan2(c0[1], c0[0]))
+                    res = optimize.minimize_scalar(
+                        lambda q, a0=a0, drop=drop: wald(np.array([np.cos(a0 - 1e-3 + 2e-3 * q),
+                                                                   np.sin(a0 - 1e-3 + 2e-3 * q)]), drop),
+                        bounds=(0.0, 1.0), method="bounded", options={"xatol": 1e-12})
+                    val = min(val, float(res.fun))
             elif d == 2:
                 g2 = (lambda t, f=f: f([np.cos(t), np.sin(t)]))
                 grid = np.linspace(0.0, np.pi, 361)
                 vals = [g2(t) for t in grid]
                 i = int(np.argmin(vals))
-                res = optimize.minimize_scalar(g2, bounds=(grid[max(i - 1, 0)], grid[min(i + 1, 360)]),
-                                               method="bounded", options={"xatol": 1e-10})
+                # the bracket rescaled to (0, 1): the bounded method's tolerance is relative to |x| (sqrt(eps) |x|),
+                # 2e-8 rad next to pi/2, wider than the valley of a parameter in units of 1e8 (review r4, S1-a;
+                # same lesson as v2.6.1)
+                lo_, hi_ = grid[max(i - 1, 0)], grid[min(i + 1, 360)]
+                res = optimize.minimize_scalar(lambda q, f=g2, lo_=lo_, hi_=hi_: f(lo_ + (hi_ - lo_) * q),
+                                               bounds=(0.0, 1.0), method="bounded", options={"xatol": 1e-12})
                 val = min(float(res.fun), float(vals[i]))
             else:
                 # the statistic does not depend on |u|: unconstrained minimisation, from the axes and random starts
@@ -779,7 +868,26 @@ def _fd_column(fun, th, j, h, lo, hi):
     return np.full(np.shape(fun(th)), np.nan)
 
 
-def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=None, g_scale=0.0):
+def _gmm_probe_moves(gbar, th0, j, h, lo, hi, gs):
+    """Which mean moments move when theta_j is pushed outward from theta0, geometrically (1e4 h, 1e6 h, 1e8 h and the
+    scale of the parameter, max(|theta0_j|, 1)), inside the bounds; each moment on its own scale gs (by more than
+    4 eps). A structural zero stays flat everywhere; a step function or a kink moves somewhere (v2.8.0 review r4)."""
+    res = 4 * np.finfo(float).eps
+    th0 = np.asarray(th0, float)
+    with np.errstate(all="ignore"):
+        g0_ = np.asarray(gbar(th0), float) / gs
+        moves = np.zeros(len(g0_), bool)
+        for H in (1e4 * h, 1e6 * h, 1e8 * h, max(abs(th0[j]), 1.0)):
+            for sgn in (1.0, -1.0):
+                e_ = np.zeros_like(th0)
+                e_[j] = sgn * H
+                if lo[j] <= th0[j] + sgn * H <= hi[j]:
+                    gH = np.asarray(gbar(th0 + e_), float) / gs
+                    moves |= ~np.isfinite(gH) | (np.abs(gH - g0_) > res)
+    return moves
+
+
+def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=None, g_scale=1.0):
     """Compares a user Jacobian with finite differences at theta0, column by column (review r2, S1-2: on the whole
     matrix, a wrong column in small units hid behind a large one). The step is gmm's step at theta0 (chosen by
     stability, steps0; review r3, S2-2) and stays inside the bounds (S2-2, S2-3). Refuses only when the
@@ -807,30 +915,28 @@ def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=No
         if not (np.all(np.isfinite(d1)) and np.all(np.isfinite(d2))):
             unchecked.append(j)
             continue
-        res = 4 * np.finfo(float).eps * g_scale                     # rounding of the moments over the step
+        # each moment (row) on the scale of its own contributions at theta0, so the units of one moment do not hide
+        # another (review r4, S1-b: with rms(G0) over all moments a Poisson block of 1e12 swallowed a wrong sign in a
+        # unit-scale block; moments in units of 1e10 did the same)
+        gs = np.asarray(g_scale, float) * np.ones(len(d1))
+        gs = np.where(np.isfinite(gs) & (gs > 0), gs, 1.0)
+        d1, d2, du = d1 / gs, d2 / gs, du / gs
+        res = 4 * np.finfo(float).eps                               # rounding of a moment over the step, its scale
         dead = (np.abs(d1) * h <= res) & (np.abs(d2) * h / 4 <= res)
         if np.any(dead):
-            # a structural zero (the moment does not depend on theta_j) stays flat on both sides over a much larger
-            # step H; a step function or a kink moves on at least one side. Only the latter is no reference.
-            H = 1e4 * h
-            g0_ = gbar(th0)
-            moves = np.zeros(len(d1), bool)
-            for sgn in (1.0, -1.0):
-                e_ = np.zeros_like(th0)
-                e_[j] = sgn * H
-                if lo[j] <= th0[j] + sgn * H <= hi[j]:
-                    with np.errstate(all="ignore"):
-                        gH = gbar(th0 + e_)
-                    moves |= ~np.isfinite(gH) | (np.abs(gH - g0_) > res)
-            dead = dead & moves
+            # a structural zero (the moment does not depend on theta_j) stays flat on both sides however far one looks;
+            # a step function or a kink moves somewhere. Probe outward geometrically up to the scale of the parameter
+            # (a fixed 1e4 h found no data point with few observations and refused a right kernel-density Jacobian;
+            # review r4, S2-a)
+            dead = dead & _gmm_probe_moves(gbar, th0, j, h, lo, hi, gs)
         if np.any(dead & (np.abs(du) * h > res)):
             flat.append(j)
         keep = ~dead
         if not keep.any():
             continue
         d1, d2, du = d1[keep], d2[keep], du[keep]
-        # floor: the smallest derivative that moves the moments by more than rounding over the step (a true zero
-        # column with noise in the analytic one is not a disagreement; review r3, S3)
+        # floor: the smallest derivative that moves a moment by more than rounding over the step (a true zero column
+        # with noise in the analytic one is not a disagreement; review r3, S3)
         scale = max(float(np.max(np.abs(d1))), float(np.max(np.abs(du))), res / h, tiny)
         gap = float(np.max(np.abs(du - d1))) / scale
         ref_err = float(np.max(np.abs(d1 - d2))) / scale
@@ -991,16 +1097,41 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                              f"columns = parameters); it returned shape {Du.shape}")
         return Du
 
-    def D_of(th):
+    step_cache = {}
+
+    def D_of(th, final=False):
         if jacobian is not None:
             return D_user(th)
-        return _jacobian(gbar, th, _gmm_steps(G_raw, th, theta0))
+        # the steps are chosen again only when a parameter has moved by a factor of 2 (or changed sign, or left 0)
+        # since they were last chosen, and always at the estimate: choosing them takes ~10 evaluations of the moments
+        # per parameter, and at every Jacobian of the search a fit made 6x as many calls (review r4, S3-1)
+        th = np.asarray(th, float)
+        ref = step_cache.get("th")
+        if final or ref is None or np.any((np.abs(th) > 2 * np.abs(ref)) | (np.abs(th) < 0.5 * np.abs(ref))
+                                          | (np.sign(th) != np.sign(ref))):
+            step_cache["th"], step_cache["h"] = th.copy(), _gmm_steps(G_raw, th, theta0)
+        return _jacobian(gbar, th, step_cache["h"])
 
     warns = []
     flat_cols = []
+    gs0 = np.sqrt(np.mean(G0 ** 2, axis=0))
+    gs0 = np.where(np.isfinite(gs0) & (gs0 > 0), gs0, 1.0)
+    if jacobian is None:
+        # step-function moments (indicators, quantiles) have numerical derivatives of exactly 0: the fit stayed at
+        # theta0 with SE 0 and converged=True (v2.8.0 review r4, S2-e). A column that is 0 at theta0 but whose moments
+        # move further out is such a function; one that never moves is a parameter outside the moments (rank test).
+        h0 = _gmm_steps(G_raw, theta0, theta0)
+        D0 = _jacobian(gbar, theta0, h0)
+        for j in range(k):
+            if not np.any(D0[:, j]) and np.any(_gmm_probe_moves(gbar, theta0, j, h0[j], lo, hi, gs0)):
+                raise ValueError(f"the moments do not change when {names[j]} moves a little from its start, but do "
+                                 "further out: they "
+                                 "are step functions (indicators, quantiles), whose numerical derivatives are 0; pass "
+                                 "jacobian= (e.g. a kernel density estimate times the instruments) and a start "
+                                 "inside the data")
     if jacobian is not None:
         chk = _gmm_check_jacobian(gbar, D_user(theta0), theta0, lo, hi, steps0=_gmm_steps(G_raw, theta0, theta0),
-                                  g_scale=float(np.sqrt(np.mean(G0 ** 2))))
+                                  g_scale=gs0)
         if chk["refuse"]:
             raise ValueError(f"jacobian disagrees with finite differences at theta0 in column {chk['col']} "
                              f"({names[chk['col']]}): largest gap {chk['gap']:.3g} of that column's largest entry, "
@@ -1065,7 +1196,7 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                                       "report the two-step estimate, or raise maxiter and check the starting values"))
     Gh = G_of(th)
     g = Gh.mean(0)
-    D = D_of(th)
+    D = D_of(th, final=True)
     S = _gmm_S(Gh, hac_lags, kernel, center)
     Sinv_fin, s_min, ok = _gmm_inv(S)
     S_pd_ok &= ok
@@ -1107,6 +1238,11 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                     "warning", f"{names[j]} = {th[j]:.6g} is within one SE ({se[j]:.3g}) of its {side} bound {b:g}",
                     "near a bound the t-ratio, the CI and the chi2 references of J, Wald and LR are not valid "
                     "(Andrews 1999); report the bound as binding and use a boundary-aware test or a bootstrap"))
+    if flat_cols and np.array_equal(th, np.clip(theta0, np.nextafter(lo, np.inf), np.nextafter(hi, -np.inf))):
+        warns.append(_finding(
+            "warning", "the estimate is exactly theta0: with step-function moments the search could not move from the "
+            "start (the mean moment is flat between data points)",
+            "start inside the data (e.g. at a sample quantile) and compare with a grid of the criterion"))
     if flat_cols:
         # the rank test differentiates each contribution numerically: with step-function moments those differences
         # are 0 and the statistic would say "not identified" for any data (v2.8.0 review r3, S2-5)
@@ -1117,8 +1253,9 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
         rank_df = m - k + 1
     if rank_capped:
         warns.append(_finding(
-            "notice", f"the rank test searched only the first {_RANK_MAX_SUBSPACES} subspaces in which some moments do "
-            "not depend on the parameters: the statistic is an upper bound and may overstate identification",
+            "notice", f"the rank test did not search every subspace in which some moments do not depend on the "
+            f"parameters (past {_RANK_MAX_SUBSPACES} subspaces or {_RANK_BUDGET_S:g} s; designs with many group "
+            "dummies have many): the statistic is an upper bound and may overstate identification",
             "check identification also by the criterion over a grid of the parameters"))
     rank_p = float(stats.chi2.sf(rank_stat, rank_df))              # nan when the test was not computed
     if not np.isfinite(rank_p) and flat_cols:

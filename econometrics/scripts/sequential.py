@@ -149,8 +149,9 @@ def _expect_under(h, d):
     v = 1 - u, so the right tail keeps its precision; pieces between 1e-12, 1e-9, 1e-6, 1e-3 and 1/2 on each side.
     Returns (value, reliable): not reliable when quad warns on an outermost piece (a divergent tail, e.g. KL of a
     Cauchy against a normal), its error estimate exceeds 1e-8 of max(1, |value|), or the mass that ppf/isf put
-    exactly on a finite edge (the probability between the edge and the next representable number, where the
-    quantile underflows to the edge and h is not computed) times |h| next to the edge exceeds 1e-6 of |value|:
+    exactly on a finite edge where the density is infinite (the probability between the edge and the next
+    representable number, where the quantile underflows to the edge and h is not computed) times |h| next to the
+    edge exceeds 1e-6 of |value|:
     Gamma(0.01) has 6e-4 of its mass below 5e-324 and its KL lost 1.5% without warning (v2.8.0 review r3, S1-4);
     Beta(0.5, 0.5) has 6.7e-9 within one ulp of 1 (3e-7 of its KL: still reliable, the documented precision)."""
     import warnings as _w
@@ -160,7 +161,10 @@ def _expect_under(h, d):
     a, b = d.support()
     with np.errstate(all="ignore"):
         for edge, nxt, mass in ((a, np.nextafter(a, np.inf), d.cdf), (b, np.nextafter(b, -np.inf), d.sf)):
-            if np.isfinite(edge):
+            # only where the density itself is infinite or undefined at the edge: there h is not computed and the
+            # mass is lost; at a finite density (an exponential shifted to 1e9) the integrand at the edge is right
+            # (review r4, S2-c: expon(loc=1e9) gave a false NaN)
+            if np.isfinite(edge) and not np.isfinite(d.logpdf(edge)):
                 mz = float(mass(nxt))
                 if mz > 0:
                     he = h(float(nxt))
@@ -265,8 +269,9 @@ def divergence(p, q, show: bool = True) -> dict:
            (KL(Beta(0.5, 0.5) || Beta(2, 2)): 3e-7); when more than 1e-6 of a value would come from that mass
            (Gamma(0.01) has 5.9e-4 of it below the smallest double) the value is NaN with a warning, and so are
            Bhattacharyya and C if log rho > 0 (rho <= 1 by Hoelder). Time: seconds per continuous pair (2.6 s
-           for two normals, 5.6 to 7 s for a noncentral chi-square or a gamma, 12.8 s for t(1.5) against t(3), 23 s
-           for genhyperbolic; 2 CPUs), the price of the quantile scale; avoid it inside loops over many pairs.
+           for two normals, 5.6 to 7 s for a noncentral chi-square or a gamma, 12.8 s for t(1.5) against t(3), up to
+           ~30 s for genhyperbolic or families shifted far from 0; 2 CPUs), the price of the quantile scale; avoid it
+           inside loops over many pairs.
     Uses in this skill: KL(f0 || f1) and KL(f1 || f0) are the expected log-likelihood-ratio steps of an SPRT under
     each hypothesis (sprt_design) and Stein's exponents of the error of a fixed-sample test; C is the exponent of the
     smallest attainable average error with equal priors, P_e(n) ~ exp(-n C) (Chernoff 1952); JS is symmetric and

@@ -680,6 +680,70 @@ g5 = est.gmm(_lin_moments, [0.0, 0.0, 0.0], args=(y5, X5, Z5), weight=np.diag(1 
 check("v2.8.0 gmm (r3): exogenous regressor stored as w + 1e5: rank statistic equal to the well-scaled minimum Wald "
       "(rel 1e-5), not treated as a null direction", abs(g5["rank_stat"] / ref_i0 - 1) < 1e-5, (g5["rank_stat"], ref_i0))
 
+# review r4, S1-a: a regressor in units S inside one equation (the reviewer's design: equation 1 with t1 (S x1) + t2 w,
+# strong instruments; equation 2 with a weak t2). A global scale took the small direction for a null one from
+# S = 1e9 on: "not identified", 5.97 instead of 153.9. Reference: the minimum Wald with the exact derivatives in units
+# of 1 (the statistic does not depend on the units of theta), over a 3601-point grid plus a refinement.
+r_s = np.random.default_rng(5)
+zas, zbs, zcs, zds = (r_s.standard_normal(500) for _ in range(4))
+X1s = zas + r_s.standard_normal(500); ws = zbs + r_s.standard_normal(500)
+y1s = X1s + ws + r_s.standard_normal(500)
+vs_ = 0.02 * zcs + r_s.standard_normal(500); y2s = vs_ + r_s.standard_normal(500)
+Dis = np.stack([np.column_stack([-zas * X1s, -zbs * X1s, 0 * zcs, 0 * zds]),
+                np.column_stack([-zas * ws, -zbs * ws, -zcs * vs_, -zds * vs_])], axis=2)
+def _wald_s(c):
+    d = Dis @ c
+    d = d[:, ~np.all(d == 0, axis=0)]
+    mu = d.mean(0)
+    return 500 * mu @ np.linalg.solve(np.atleast_2d(np.cov(d.T, bias=True)), mu)
+gr_s = np.linspace(0, np.pi, 3601)
+vs_g = [_wald_s(np.array([np.cos(a), np.sin(a)])) for a in gr_s]
+i_s = int(np.argmin(vs_g))
+ref_s = min(min(vs_g), optimize.minimize_scalar(lambda a: _wald_s(np.array([np.cos(a), np.sin(a)])),
+                                                bounds=(gr_s[max(i_s - 1, 0)], gr_s[min(i_s + 1, 3600)]),
+                                                method="bounded").fun)
+sc_bad = []
+for S_ in (1.0, 1e8, 1e9, 1e10):
+    mom_s = lambda t, S_=S_: np.column_stack([zas * (y1s - t[0] * (S_ * X1s) - t[1] * ws),
+                                              zbs * (y1s - t[0] * (S_ * X1s) - t[1] * ws),
+                                              zcs * (y2s - t[1] * vs_), zds * (y2s - t[1] * vs_)])
+    st_ = est._gmm_rank_test(mom_s, np.array([1.0 / S_, 1.0]), None)[0]
+    if not abs(st_ / ref_s - 1) < 1e-6:
+        sc_bad.append((S_, st_))
+check("v2.8.0 gmm (r4 S1-a): a regressor in units of 1, 1e8, 1e9 and 1e10 within one equation: rank statistic equal to "
+      "the minimum Wald with exact derivatives (rel 1e-6; it was 5.97 instead of 153.9 from 1e9, 176.6 at 1e8)",
+      not sc_bad and 150 < ref_s < 160, (sc_bad, ref_s))
+# review r4, S3-2: a strong moment that depends on theta2 through eps * theta2 * w (w correlated with its instrument)
+# makes a valley of width ~eps in the directions; a grid missed it and overstated the statistic (5.70, 5.73 for eps
+# 1e-7, 1e-6; with the per-moment null spaces, 9.8 for 1e-9). Reference: the weak block alone, as above.
+r_e = np.random.default_rng(1)
+z1e = r_e.standard_normal(500); x1e = z1e + r_e.standard_normal(500); y1e = x1e + r_e.standard_normal(500)
+z2e, z3e = r_e.standard_normal(500), r_e.standard_normal(500)
+x2e = 0.02 * z2e + r_e.standard_normal(500); y2e = 0.5 * x2e + r_e.standard_normal(500)
+we = r_e.standard_normal(500) + z1e
+dwe = -np.column_stack([z2e * x2e, z3e * x2e])
+ref_e = float(500 * dwe.mean(0) @ np.linalg.solve(np.cov(dwe.T, bias=True), dwe.mean(0)))
+eps_bad = []
+for eps_ in (1e-9, 1e-7, 1e-6, 1e-3):
+    st_ = est._gmm_rank_test(lambda t, eps_=eps_: np.column_stack([z1e * (y1e - t[0] * x1e - eps_ * t[1] * we),
+                                                                    z2e * (y2e - t[1] * x2e), z3e * (y2e - t[1] * x2e)]),
+                             np.array([1.0, 0.5]), None)[0]
+    if not abs(st_ / ref_e - 1) < 1e-4:
+        eps_bad.append((eps_, st_))
+check("v2.8.0 gmm (r4 S3-2): a strong moment that depends on theta2 through eps theta2 w, eps 1e-9 to 1e-3: rank "
+      "statistic equal to the weak block's Wald (rel 1e-4; the valley is ~eps wide)", not eps_bad, (eps_bad, ref_e))
+# review r4, S2-b: the search has a budget; past it the notice says the statistic is an upper bound
+_bud = est._RANK_BUDGET_S
+est._RANK_BUDGET_S = 0.0
+try:
+    gb0 = est.gmm(lambda t: np.column_stack([z1b * (y1b - t[0] * x1b), z2b * (y2b - t[1] * x2b),
+                                             z3b * (y2b - t[1] * x2b)]), [0.5, 0.2], show=False)
+finally:
+    est._RANK_BUDGET_S = _bud
+check("v2.8.0 gmm (r4 S2-b): with the search budget spent, the statistic is an upper bound (here the whole-space value, "
+      "above the weak block's 5.64) and a notice says so", gb0["rank_stat"] >= ref_weak * (1 - 1e-9)
+      and any("upper bound" in w["message"] for w in gb0["warnings"]), (gb0["rank_stat"], ref_weak))
+
 r_u = np.random.default_rng(0)
 zu = r_u.standard_normal((300, 3)); xu = zu.sum(1) + r_u.standard_normal(300); yu = 2 * xu + r_u.standard_normal(300)
 un_res = []
@@ -978,7 +1042,8 @@ check("v2.8.0 gmm (r3 S2-2): theta of order 1e-4 started at theta0 = 1: estimate
       "rescaled to order 1 (rel <= 1e-7 and 1e-5)", g_r1["converged"] and abs(eq_r1[0]) < 1e-7 and abs(eq_r1[1]) < 1e-5,
       eq_r1)
 # (b) exactly identified IV whose slope estimate is 0 up to rounding (the error is made orthogonal to the
-# instrument in the sample), started at (1, 1): SEs against the robust IV formula written here,
+# instrument in the sample), started at (0, 0) (r4: from (1, 1) the old relative steps passed too): SEs against
+# the robust IV formula written here,
 # V = (Z'X)^-1 (sum e_i^2 z_i z_i') (X'Z)^-1
 r_z = np.random.default_rng(4)
 nz = 800
@@ -989,13 +1054,14 @@ Xz = np.column_stack([np.ones(nz), xz])
 ez = r_z.standard_normal(nz) * (1 + 0.5 * np.abs(zz))
 ez = ez - Zz @ np.linalg.lstsq(Zz, ez, rcond=None)[0]
 yz = 3.0 + ez
-g_z = est.gmm(_lin_moments, [1.0, 1.0], args=(yz, Xz, Zz), show=False)
+g_z = _gmm_or_failed(_lin_moments, [0.0, 0.0], args=(yz, Xz, Zz), show=False)
 bz = np.linalg.solve(Zz.T @ Xz, Zz.T @ yz)
 uz = yz - Xz @ bz
 Az = np.linalg.inv(Zz.T @ Xz)
 Vz = Az @ (Zz.T * uz ** 2) @ Zz @ Az.T
 se_z = np.sqrt(np.diag(Vz))
-check("v2.8.0 gmm (r3 S2-2): slope estimated at 0 up to rounding (|b| < 1e-12), started at (1, 1): estimates and "
+check("v2.8.0 gmm (r3 S2-2, r4 S3-5): slope estimated at 0 up to rounding (|b| < 1e-12), started at (0, 0) (where "
+      "steps relative to theta fail): estimates and "
       "SEs equal the IV closed form (abs 1e-10, rel 1e-7)", abs(bz[1]) < 1e-12
       and np.allclose(g_z["params"], bz, rtol=0, atol=1e-10)
       and np.allclose(g_z["table"]["se"], se_z, rtol=1e-7, atol=0), (bz, g_z["params"].tolist(), g_z["table"]["se"].tolist(), se_z))
@@ -1068,6 +1134,65 @@ except ValueError as e_:
     sz_msg = str(e_)
 check("v2.8.0 gmm (r3 S2-5): a non-zero entry where the true Jacobian is a structural 0 is still refused",
       "disagrees with finite differences" in sz_msg, sz_msg[:120])
+
+# review r4, S1-b: one rounding floor for all moments (rms of all contributions at theta0) let a wrong sign pass
+# silently when one block of moments was far larger than another (a Poisson block at theta0 = 10: rms 1e12; a block
+# in units of 1e12). Each moment is now on its own scale: refused in both.
+r_fs = np.random.default_rng(0)
+xfs = r_fs.standard_normal(1000); yfs = r_fs.poisson(np.exp(0.3 * xfs)).astype(float)
+wfs = np.exp(0.5) + r_fs.standard_normal(1000)
+mom_fs = lambda t: np.column_stack([yfs - np.exp(t[0] * xfs), (yfs - np.exp(t[0] * xfs)) * xfs, wfs - np.exp(t[1]),
+                                    (wfs - np.exp(t[1])) * xfs])
+def _jac_fs(t, sg):
+    mu = np.exp(t[0] * xfs)
+    return np.array([[-(mu * xfs).mean(), 0], [-(mu * xfs * xfs).mean(), 0], [0, -sg * np.exp(t[1])],
+                     [0, -sg * np.exp(t[1]) * xfs.mean()]])
+r_mu = np.random.default_rng(1)
+xmu = r_mu.standard_normal(500) + 1; wmu = r_mu.standard_normal(500) + np.exp(0.5)
+mom_mu = lambda t: np.column_stack([1e12 * (xmu - t[0]), wmu - np.exp(t[1]), 1e12 * (xmu ** 2 - t[0] ** 2 - 1)])
+jac_mu = lambda t: np.array([[-1e12, 0], [0, +np.exp(t[1])], [-2e12 * t[0], 0]])       # wrong sign in column 1
+fs_res = []
+for lab_, f_, j_, t0_ in (("Poisson block at theta0 = 10", mom_fs, lambda t: _jac_fs(t, -1.0), [10.0, 0.0]),
+                          ("moments in units of 1e12", mom_mu, jac_mu, [1.0, 0.5])):
+    try:
+        est.gmm(f_, t0_, jacobian=j_, show=False)
+        fs_res.append((lab_, "accepted"))
+    except ValueError as e_:
+        fs_res.append((lab_, "refused" if "disagrees with finite differences" in str(e_) else str(e_)[:60]))
+ok_fs = _gmm_or_failed(mom_fs, [10.0, 0.0], jacobian=lambda t: _jac_fs(t, 1.0), show=False)
+check("v2.8.0 gmm (r4 S1-b): a wrong sign in a small block next to a block 1e12 larger is refused (a Poisson block at "
+      "theta0 = 10, and moments in units of 1e12); the right Jacobian at theta0 = 10 is accepted (estimate 0.2574, "
+      "0.5341)", all(v == "refused" for _, v in fs_res)
+      and np.allclose(ok_fs["params"], [0.2574, 0.5341], atol=1e-4), (fs_res, list(ok_fs["params"])))
+
+# review r4, S2-a: the probe for "step function or structural zero" went out a fixed 1e4 h: with 15 or 30
+# observations and a start away from the data it found no data point and refused a right kernel-density Jacobian.
+# Now it probes up to the scale of the parameter: a warning, never a refusal; with an estimate left exactly at theta0,
+# a warning that the search could not move.
+md_small = []
+for n_, t0_ in ((15, 1e-3), (15, 2.0), (30, 1e-3), (30, 2.0), (60, 1e-3)):
+    r_ = np.random.default_rng(0)
+    ys_ = r_.standard_normal(n_); zs_ = np.column_stack([np.ones(n_), r_.standard_normal(n_)])
+    try:
+        g_ = est.gmm(lambda t, ys_=ys_, zs_=zs_: ((ys_ <= t[0]) - 0.5)[:, None] * zs_, [t0_],
+                     jacobian=lambda t, ys_=ys_, zs_=zs_: (stats.gaussian_kde(ys_)(t[0])[0] * zs_.mean(0))[:, None],
+                     steps="one-step", show=False)
+        stuck = g_["params"].iloc[0] == t0_
+        md_small.append(any("not checked" in w["message"] for w in g_["warnings"])
+                        and (not stuck or any("exactly theta0" in w["message"] for w in g_["warnings"])))
+    except ValueError as e_:
+        md_small.append(str(e_)[:60])
+check("v2.8.0 gmm (r4 S2-a): GMM for a median with 15 to 60 observations, started at 1e-3 or 2: the kernel-density "
+      "jacobian is accepted with a 'not checked' warning (it was refused), and an estimate left at theta0 is flagged",
+      all(v is True for v in md_small), md_small)
+# review r4, S2-e: without a jacobian the same moments returned theta0 with SE 0 and converged=True
+try:
+    est.gmm(mom_md, [0.1], steps="one-step", show=False)
+    nj_msg = "no error"
+except ValueError as e_:
+    nj_msg = str(e_)
+check("v2.8.0 gmm (r4 S2-e): step-function moments without a jacobian stop with a message that asks for one (they "
+      "returned theta0 with SE 0)", "step functions" in nj_msg and "jacobian=" in nj_msg, nj_msg[:120])
 
 # S2-2: the check stays inside the bounds (log theta with theta0 = 1e-6 next to a lower bound of 1e-8 raised)
 x_g = np.random.default_rng(0).gamma(2.0, 1.0, size=1000)

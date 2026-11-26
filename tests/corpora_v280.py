@@ -495,3 +495,41 @@ PEEK["bad"] += [
         "Não há problema de optional stopping; a confiança de 95% está correta.",
         "Stopping early reduces statistical power, which is the only consequence of peeking.",
     ]
+
+# v2.8.0 review r4 (S2-d): the reviewer's adversarial set (claude/scripts/v280/r4_revisor/p11_graders.py in the
+# development repository), used to adjust the graders. Left out, still missed: "Each daily check is another draw at
+# 0.05; stopping at the first crossing makes the reported p meaningless as a p-value." (no rate, no named error)
+GMM["good"] += [
+        "Use `est.gmm` com os momentos da equação de Euler. Evite `est.gmm` com steps='one-step' para o teste J: o J só vale com o peso eficiente (o default two-step).",
+        "Don't use est.gmm with steps='one-step' if you want Hansen's J; call est.gmm(euler, [0.99, 2.0], args=(R, c, Z)) with the default two-step weight.",
+        "Não use o est.gmm sem bounds em gamma; chame est.gmm(momentos, [0.99, 2], bounds=[(0, 1.5), (0, None)]) e leia j_p.",
+        "A função é `gmm`, em `econometrics/scripts/estimation.py`: passe uma função que devolve a matriz n x m dos momentos.",
+        "Chame `gmm(momentos, theta0, ...)` do módulo de estimação da skill (scripts/estimation.py); o J de Hansen vem em j_stat e j_p.",
+        "Na skill, a rotina de GMM genérico (gmm, no arquivo estimation.py) faz isso: from estimation import gmm as gmm_fit.",
+        "import estimation as E\nres = E.gmm(euler, [0.99, 2.0], args=(R, cg, Z), hac_lags=4)\nO teste J de sobreidentificação tem m − k = 3 graus de liberdade.",
+    ]
+GMM["bad"] += [
+        "A skill não tem estimation.gmm; use o IVGMM do linearmodels ou o pacote gmm do R.",
+        "Não existe `est.gmm(` nesta versão da skill: escreva o seu próprio GMM com scipy.optimize.",
+        "O estimation.gmm não estima equações de Euler não lineares; use statsmodels.sandbox.regression.gmm.GMM.",
+        "estimation.gmm is only for linear IV, so for a CRRA Euler equation use statsmodels' GMM class.",
+        "There is no est.gmm( function in the skill; I'd write the moment conditions in R with gmm::gmm.",
+        "I would not use estimation.gmm here: the right tool is linearmodels.IVGMM.",
+        "Esqueça o estimation.gmm; o correto é o pacote momentfit do R.",
+    ]
+PEEK["good"] += [
+        "Isso é um caso clássico de múltiplas comparações ao longo do tempo: com 9 testes diários, a chance de ao menos um p < 0,05 sob H0 é bem maior que 5%; o p = 0,041 não pode ser lido como um p-valor nominal. O certo seria um desenho sequencial pré-registrado (O'Brien-Fleming).",
+        "A conclusão não se sustenta: parar quando p < 0,05 após checagens diárias faz a probabilidade de declarar efeito sem efeito ficar perto de 20%, não 5%.",
+        "O peeking não é o único problema, mas é o principal: o alfa efetivo com 9 olhadas fica perto de 20%.",
+        "The error rate isn't 5%: with nine looks, the chance of a spurious win is about 20%.",
+    ]
+PEEK["bad"] += [
+        "O peeking é irrelevante aqui, pois p = 0,041 < 0,05; a conclusão está correta, com 95% de confiança.",
+        "Peeking is irrelevant here since p < 0.05 at day 9; the conclusion is valid.",
+        "Optional stopping matters only for Bayesian tests; the frequentist p = 0.041 is fine.",
+        "Não vejo problema de parada opcional: o teste de proporções é exato e o p-valor vale.",
+        "There is no optional stopping concern because they fixed alpha at 0.05; the 95% confidence statement stands.",
+        "A parada opcional não altera o p-valor final; o relatório está correto.",
+        "O alfa não aumenta por olhar todo dia, pois cada teste diário é independente; a conclusão vale.",
+        "Peeking would inflate the type I error only if they had stopped on day 1; stopping on day 9 is fine.",
+    ]

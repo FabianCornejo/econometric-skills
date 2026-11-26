@@ -454,6 +454,17 @@ except Exception as e_:
 check("divergence (r3 S1-4): Gamma(0.05) || Gamma(0.1) (mass below the smallest double 7e-17): KL equals the closed "
       "form (rel 1e-10), 0 <= B <= C, no warning", g2_ok, dg2 if not g2_ok else None)
 
+# review r4, S2-c: the edge-mass rule counted the mass within one ulp of a finite edge even where the density is
+# finite there: an exponential shifted to 1e9 gave a false NaN. KL(Exp(loc, 1) || Exp(loc, s)) = log s + 1/s - 1.
+try:
+    dsh = sq.divergence(stats.expon(loc=1e9), stats.expon(loc=1e9, scale=1.01), show=False)
+    sh_ref = np.log(1.01) + 1 / 1.01 - 1
+    sh_ok = near(dsh["kl_pq"], sh_ref, 1e-6 * sh_ref) and np.isfinite(dsh["js"])
+except Exception as e_:
+    dsh, sh_ok = repr(e_), False
+check("divergence (r4 S2-c): KL(Exp(loc 1e9) || Exp(loc 1e9, scale 1.01)) = log 1.01 + 1/1.01 - 1 (rel 1e-6) and JS "
+      "finite (they were NaN)", sh_ok, dsh if not sh_ok else None)
+
 sg = sq.sprt_design(stats.gamma(0.1), stats.gamma(1.0), n_sim=200, seed=1, show=False)
 check("sprt_design: Gamma(0.1) vs Exp(1): kl_10 = KL(f1 || f0) closed form (rel 1e-10)",
       near(sg["kl_10"], _kl_gamma(1.0, 0.1), 1e-10 * _kl_gamma(1.0, 0.1)), sg["kl_10"])
