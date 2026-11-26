@@ -339,6 +339,13 @@ for p_ in (1, 2, 4, 6):
           np.allclose(g_["table"]["se"].to_numpy(), ga_["table"]["se"].to_numpy(), rtol=1e-7, atol=0))
     gp, sgp, bp, sbp, *_ = paper[p_]
     gd = es.gmm(hs_moments, [1.0, 0.99], args=a_, center=False, show=False)  # H-S: identity first step, S uncentered
+    if p_ == 2:   # review r2, S2-4: lag-1 autocorrelation of the derivatives 0.53
+        gl_ = es.gmm(hs_moments, [1.0, 0.99], args=a_, center=False, hac_lags=4, show=False)
+        pers = lambda g: any("persistent" in w["message"] for w in g["warnings"])
+        check("H-S 1982 NLAG 2: without lags the rank test's rejection gets the persistence warning (lag-1 "
+              "autocorrelation of the derivatives about 0.53); with 4 Bartlett lags it still rejects (p < 1e-4) "
+              "and the warning goes", pers(gd) and 0.45 < gd["used"]["rank_test_ac1"] < 0.6
+              and gl_["rank_p"] < 1e-4 and not pers(gl_), (gd["used"]["rank_test_ac1"], gl_["rank_p"]))
     check(f"H-S 1982 NLAG {p_} (qualitative, other data): gamma within one of the paper's SEs, beta within one SE, "
           "J does not reject at 5%",
           abs(gd["params"].iloc[0] - gp) < sgp and abs(gd["params"].iloc[1] - bp) < sbp and gd["j_p"] > 0.05,

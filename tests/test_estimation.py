@@ -402,7 +402,7 @@ check("v2.8.0 gmm: Euler equation, same SEs and J as NonlinearIVGMM (rel <= 1e-6
       and abs(ge["j"] / sm_res.jtest()[0] - 1) < 1e-6, (ge["table"]["se"].to_numpy(), sm_res.bse))
 check("v2.8.0 gmm: Euler equation with n = 4998: the rank test rejects rank < 2 (p < 1e-10) and there is no "
       "identification warning", ge["rank_p"] < 1e-10
-      and not any("identif" in w["message"] for w in ge["warnings"]), ge["rank_p"])
+      and not any("may not be identified" in w["message"] for w in ge["warnings"]), ge["rank_p"])
 
 # Monte Carlo: 400 samples of 900 months, two instrument lags (5 moments), default options.
 # Bands fixed before running: coverage of the 95% CI in [0.92, 0.98] (MC SE 1.1%); size of J at 5% in [0.02, 0.085]
@@ -610,6 +610,59 @@ for off_ in (1e3, 1e4):
         it_bad.append((off_, ri["params"].iloc[2], it_ref["params"].iloc[2], dse))
 check("v2.8.0 gmm (r2): iterated GMM with an exogenous offset of 1e3 and 1e4: same slope (abs <= 1e-6) and SE "
       "(rel <= 1e-5) as with no offset, and no 'S is not positive definite' warning", not it_bad, it_bad)
+
+# review r2, S2-4: with persistent derivatives the rank test over-rejects (size 0.21 at a lag-1 autocorrelation of 0.5
+# without lags, 0.39 at 0.9 with 4 lags; claude/medicoes-v2.8.0.md M7). Warning when the largest lag-1 autocorrelation
+# of vec(dg_i/dtheta') passes 0.4 (no lags) or 0.6 (lags) and the statistic divided by the AR(1) long-run variance
+# factor the kernel misses no longer rejects. used["rank_test_ac1"] against np.corrcoef on the lagged columns.
+def _ar_p(r, n, rho, k):
+    e = r.standard_normal((n + 200, k))
+    x = np.zeros_like(e)
+    for t in range(1, n + 200):
+        x[t] = rho * x[t - 1] + e[t]
+    return x[200:]
+
+
+def _persist_fit(rho, pi, lags, seed, n=240):
+    r = np.random.default_rng(seed)
+    z = _ar_p(r, n, rho, 3)
+    x = pi * z.sum(1) + _ar_p(r, n, rho, 1)[:, 0] + 1.0
+    X, Z = np.column_stack([np.ones(n), x]), np.column_stack([np.ones(n), z])
+    y = x + r.standard_normal(n)
+    return est.gmm(_lin_moments, [0.0, 1.0], args=(y, X, Z), hac_lags=lags, steps="one-step", show=False), X, Z
+
+
+per_h0, Xp, Zp = _persist_fit(0.9, 0.0, None, 1)
+Dp = -(Zp[:, :, None] * Xp[:, None, :]).reshape(240, -1)
+ac_ref = max(abs(np.corrcoef(Dp[1:, j], Dp[:-1, j])[0, 1]) for j in range(Dp.shape[1]) if Dp[:, j].std() > 0)
+pw = lambda g: any(w["level"] == "warning" and "persistent" in w["message"] for w in g["warnings"])
+check("v2.8.0 gmm (r2 S2-4): AR(0.9) instruments and regressor, irrelevant instruments, no lags: the rank test "
+      "rejects but gets the persistence warning; used['rank_test_ac1'] equals the lag-1 autocorrelation computed "
+      "by np.corrcoef (abs 0.01)", per_h0["rank_p"] < 0.05 and pw(per_h0)
+      and abs(per_h0["used"]["rank_test_ac1"] - ac_ref) < 0.01, (per_h0["rank_p"], per_h0["used"]["rank_test_ac1"], ac_ref))
+per_iid, _, _ = _persist_fit(0.0, 0.3, None, 1)
+per_mod, _, _ = _persist_fit(0.5, 0.3, 4, 1)
+check("v2.8.0 gmm (r2 S2-4): strong instruments with iid data, and with AR(0.5) data and 4 lags: rejects, no "
+      "persistence warning", per_iid["rank_p"] < 0.05 and not pw(per_iid) and per_mod["rank_p"] < 0.05
+      and not pw(per_mod), (per_iid["rank_p"], per_mod["rank_p"], per_mod["used"]["rank_test_ac1"]))
+check("v2.8.0 gmm (r2 S2-4): the Euler equation simulated with n = 4998 (lag-1 autocorrelation about 0.4, p 1e-193) "
+      "gets no persistence warning: divided by the long-run factor the statistic still rejects", not pw(ge), ge["rank_p"])
+
+# review r2, S3: a year-like regressor next to the constant makes the Wald inf near an axis; BFGS then printed 15
+# RuntimeWarnings to the user's console (the reviewer's e5.py, seed 0)
+r_y = np.random.default_rng(0)
+yr_ = r_y.integers(2018, 2021, 600).astype(float)
+z1y, z2y, vy = r_y.standard_normal(600), r_y.standard_normal(600), r_y.standard_normal(600)
+xy_ = 0.4 * z1y + 0.3 * z2y + vy
+yy_ = 1 + 0.1 * (yr_ - 2019) + 2 * xy_ + 0.5 * vy + r_y.standard_normal(600)
+with warnings.catch_warnings(record=True) as rec_y:
+    warnings.simplefilter("always")
+    gy_ = est.gmm(_lin_moments, [0.0, 0.0, 0.0], args=(yy_, np.column_stack([np.ones(600), yr_, xy_]),
+                                                       np.column_stack([np.ones(600), yr_, z1y, z2y])), show=False)
+check("v2.8.0 gmm (r2 S3): rank test with a year-like regressor (k = 3): no RuntimeWarning reaches the user, and the "
+      "statistic is finite and rejects", not any(issubclass(q.category, RuntimeWarning) for q in rec_y)
+      and np.isfinite(gy_["rank_stat"]) and gy_["rank_p"] < 0.05,
+      ([str(q.message)[:60] for q in rec_y], gy_["rank_stat"]))
 
 # S2-2: k >= 3 in seconds (k = 5, m = 10, n = 2000 took 397 s), and the minimum over directions against an
 # independent optimizer (Powell from 40 random starts on the Wald of D(c) computed here)

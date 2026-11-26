@@ -44,6 +44,7 @@ import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 ALPHA = 0.05
 _MAX_BLOCK = 2_000_000          # draws per simulation block (memory)
 _SIM_BUDGET = 50_000_000        # n_for_error: largest n_sim x n drawn per step of the search (time; v2.8.0 review r1)
+_SIM_N_CAP = 1_000_000          # n_for_error: largest n the simulated search tries
 
 
 def _sv():
@@ -635,6 +636,10 @@ def _amr_size(z, K, two_sided, npt=None):
         return float(2 * stats.norm.sf(z) if two_sided else stats.norm.sf(z))
     if npt is None:
         npt = 401 if two_sided else 1201
+    if int(npt) != npt or npt < 3 or npt % 2 == 0:
+        raise ValueError("npt must be an odd integer >= 3 (Simpson's rule; an even grid gave a wrong size without "
+                         "warning, v2.8.0 review r2)")
+    npt = int(npt)
     lo_c = (lambda k: -z * np.sqrt(k)) if two_sided else (lambda k: -9.0 * np.sqrt(k))
     x = np.linspace(lo_c(1), z, npt)
     f = stats.norm.pdf(x)
@@ -661,8 +666,9 @@ def peeking_size(looks: int = 10, alpha: float = ALPHA, two_sided: bool = True, 
 
     Under H0 the z statistics at information fractions k/K are a scaled Brownian motion (corr(Z_i, Z_j) =
     sqrt(i/j), i < j). The size is computed exactly by the recursion of Armitage, McPherson and Rowe (1969): the
-    density of the running sum is carried from look to look by numerical integration (against a grid ten times finer,
-    up to 50 looks: within 6e-9 two-sided and 3e-9 one-sided; v2.8.0 measurement), not by a simulation of data.
+    density of the running sum is carried from look to look by numerical integration (up to
+    50 looks, alpha from 0.001 to 0.2: within 7.4e-9 two-sided and 2.4e-9 one-sided against grids 10 and 5 times
+    finer; v2.8.0 review r2 measurement), not by a simulation of data.
     Classical values (Armitage, McPherson and Rowe 1969): about 8% with 2 looks, 14% with 5, 19% with 10 for alpha = 5% two-sided."""
     from reporting import _finding, _print_findings
     if int(looks) != looks or looks < 1 or looks > 50:
@@ -782,15 +788,25 @@ def n_for_error(dist0, dist1, alpha: float = ALPHA, beta: float = 0.10, simulate
                                   "rely on n_normal (at this n the sum of log ratios is close to normal) or lower n_sim"))
         else:
             lo_n = 1
-            while type2(hi) > beta and hi < 1_000_000 and n_sim * 2 * hi <= _SIM_BUDGET:
+            t_hi = type2(hi)
+            while t_hi > beta and hi < _SIM_N_CAP and n_sim * 2 * hi <= _SIM_BUDGET:
                 hi *= 2
-            while lo_n < hi:
-                mid = (lo_n + hi) // 2
-                if type2(mid) <= beta:
-                    hi = mid
-                else:
-                    lo_n = mid + 1
-            n_sim_res = int(lo_n)
+                t_hi = type2(hi)
+            if t_hi > beta:
+                # the doubling stopped at the cap or the budget before reaching beta: no n is returned (v2.8.0 review
+                # r2: the bisection then returned an n whose type II error was above beta, without warning)
+                warns.append(_finding("warning", f"the simulated type II error is still {t_hi:.3g} > beta = {beta} at "
+                                      f"n = {hi}, the largest n the search could try (cap {_SIM_N_CAP:.0e} or the "
+                                      f"budget of {_SIM_BUDGET:.0e} draws per step)",
+                                      "rely on n_normal with care, or lower n_sim to let the search go further"))
+            else:
+                while lo_n < hi:
+                    mid = (lo_n + hi) // 2
+                    if type2(mid) <= beta:
+                        hi = mid
+                    else:
+                        lo_n = mid + 1
+                n_sim_res = int(lo_n)
         if n_sim_res is not None and abs(n_sim_res - n_norm) > max(2, 0.2 * n_norm):
             warns.append(_finding("notice", f"the normal approximation ({n_norm}) and the simulation ({n_sim_res}) "
                                   "differ by more than 20%: the log-likelihood ratio is far from normal at this n",

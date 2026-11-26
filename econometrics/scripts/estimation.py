@@ -534,7 +534,10 @@ def _gmm_rank_test(G_of, th, lags, h=None):
     form (c x I)' Omega (c x I). With lags it always uses the Bartlett kernel, which is positive semidefinite (a
     truncated kernel made the variance indefinite and the statistic negative; review r1). A direction in which the
     derivatives do not vary (variance ~0) but whose mean is not 0 is identified exactly: the statistic is inf.
-    Returns (stat, df); (nan, df) when the moments are not finite next to the estimate."""
+    Returns (stat, df, ac1); (nan, df, nan) when the moments are not finite next to the estimate. ac1 is the largest
+    absolute first-order autocorrelation among the columns of vec(dg_i/dtheta') that vary: the persistence that
+    makes the test over-reject (v2.8.0 review r2, S2-4; sizes measured in references/estimation-theory.md
+    section 7)."""
     th = np.asarray(th, float)
     h = _steps(th) if h is None else np.asarray(h, float)
     k = len(th)
@@ -545,13 +548,19 @@ def _gmm_rank_test(G_of, th, lags, h=None):
             e[j] = h[j]
             cols.append((G_of(th + e) - G_of(th - e)) / (2 * h[j]))
     except ValueError:
-        return float("nan"), None
+        return float("nan"), None, float("nan")
     Di = np.stack(cols, axis=2)                                    # n x m x k
     n, m, _ = Di.shape
     if not np.all(np.isfinite(Di)):
-        return float("nan"), m - k + 1
+        return float("nan"), m - k + 1, float("nan")
     Dbar = Di.mean(0)
     flat = Di.reshape(n, m * k)                                    # column j*k + a: moment j, parameter a
+    Uc = flat - Dbar.reshape(1, m * k)
+    ss = np.sum(Uc ** 2, 0)
+    rms = np.sqrt(np.mean(flat ** 2, 0))
+    var_ok = ss > (1e-12 * rms) ** 2 * n
+    ac1 = float(np.max(np.abs(np.sum(Uc[1:, var_ok] * Uc[:-1, var_ok], 0) / ss[var_ok]))) if var_ok.any() and n > 2 \
+        else 0.0
     Om = _gmm_S(flat, lags, "bartlett", True).reshape(m, k, m, k)
     M2 = (flat.T @ flat / n).reshape(m, k, m, k)                   # uncentred second moments: the scale of D_i
 
@@ -584,7 +593,7 @@ def _gmm_rank_test(G_of, th, lags, h=None):
         return float(n * np.sum(proj[keep] ** 2 / ev[keep]))
 
     if k == 1:
-        return wald([1.0]), m
+        return wald([1.0]), m, ac1
     rng = np.random.default_rng(0)
     if k == 2:
         grid = np.linspace(0.0, np.pi, 361)
@@ -598,16 +607,21 @@ def _gmm_rank_test(G_of, th, lags, h=None):
         # the statistic does not depend on |c|: unconstrained minimisation over c, from the axes and random starts
         starts = [np.eye(k)[j] for j in range(k)] + [rng.standard_normal(k) for _ in range(3 * k)]
         best = np.inf
-        for c0 in starts:
-            f0 = wald(c0)
-            if not np.isfinite(f0):
-                continue
-            res = optimize.minimize(wald, c0, method="BFGS", options={"gtol": 1e-10 * max(1.0, f0), "maxiter": 400})
-            best = min(best, float(res.fun), f0)
-            res = optimize.minimize(wald, res.x, method="Nelder-Mead",
-                                    options={"xatol": 1e-9, "fatol": 1e-10, "maxiter": 200 * k})
-            best = min(best, float(res.fun))
-    return best, m - k + 1
+        # the Wald is inf along directions in which a moment does not vary: BFGS then differences inf and warns
+        # (RuntimeWarning, noise in the user's console; review r2); the values it returns are still compared
+        with warnings.catch_warnings(), np.errstate(invalid="ignore", over="ignore"):
+            warnings.simplefilter("ignore", RuntimeWarning)
+            for c0 in starts:
+                f0 = wald(c0)
+                if not np.isfinite(f0):
+                    continue
+                res = optimize.minimize(wald, c0, method="BFGS",
+                                        options={"gtol": 1e-10 * max(1.0, f0), "maxiter": 400})
+                best = min(best, float(res.fun), f0)
+                res = optimize.minimize(wald, res.x, method="Nelder-Mead",
+                                        options={"xatol": 1e-9, "fatol": 1e-10, "maxiter": 200 * k})
+                best = min(best, float(res.fun))
+    return best, m - k + 1, ac1
 
 
 def _fd_column(fun, th, j, h, lo, hi):
@@ -703,7 +717,7 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                    a test of the rank only: rejecting it does not show strong identification (it grows with n
                    under any alternative; not a first-stage F). NaN when the moments are undefined next to the estimate
       "used"       dict, keys ["steps", "first_weight", "hac_lags", "kernel", "center", "bounds", "n", "m", "k",
-                   "iterations", "converged", "rank_test_cov", "skill_version"]
+                   "iterations", "converged", "rank_test_cov", "rank_test_ac1", "skill_version"]
       "warnings"   list of dicts with keys ["level", "message", "action"]
 
     moments(theta, *args) returns the n x m matrix of moment contributions g_i(theta), one row per
@@ -902,7 +916,7 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                     "warning", f"{names[j]} = {th[j]:.6g} is within one SE ({se[j]:.3g}) of its {side} bound {b:g}",
                     "near a bound the t-ratio, the CI and the chi2 references of J, Wald and LR are not valid "
                     "(Andrews 1999); report the bound as binding and use a boundary-aware test or a bootstrap"))
-    rank_stat, rank_df = _gmm_rank_test(G_of, th, hac_lags, _gmm_steps(th, theta0))
+    rank_stat, rank_df, rank_ac1 = _gmm_rank_test(G_of, th, hac_lags, _gmm_steps(th, theta0))
     if rank_df is None:
         rank_df = m - k + 1
     rank_p = float(stats.chi2.sf(rank_stat, rank_df))              # nan when the test was not computed
@@ -915,6 +929,25 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
             "warning", f"the parameters may not be identified: the rank test of the Jacobian does not reject "
             f"rank < {k} (Cragg-Donald minimum Wald {rank_stat:.3g}, df {rank_df}, p = {rank_p:.3g})",
             "do not report the estimates or their SEs; add informative moments or fix a parameter from theory"))
+    # persistence of the derivatives (review r2, S2-4): with persistent dg_i/dtheta' the iid or short-HAC variance of
+    # the rank test is too small and its size is well above 5%. Warn when the largest lag-1 autocorrelation passes the
+    # cut AND the statistic, divided by the AR(1) factor of the long-run variance the kernel misses, no longer rejects
+    ac_cut = 0.4 if not hac_lags else 0.6
+    if np.isfinite(rank_p) and rank_p < alpha and np.isfinite(rank_ac1) and rank_ac1 >= ac_cut:
+        r_ = min(rank_ac1, 0.99)
+        L_ = int(hac_lags or 0)
+        f_res = ((1 + r_) / (1 - r_)) / (1 + 2 * sum((1 - j / (L_ + 1)) * r_ ** j for j in range(1, L_ + 1)))
+        p_defl = float(stats.chi2.sf(rank_stat / f_res, rank_df))
+        if p_defl >= alpha:
+            lag_txt_r = "without hac_lags" if not hac_lags else f"with hac_lags = {hac_lags}"
+            warns.append(_finding(
+                "warning", f"the rank test rejects rank < {k} (p = {rank_p:.3g}), but the derivatives of the moments "
+                f"are persistent (largest lag-1 autocorrelation {rank_ac1:.2f}) and it was computed {lag_txt_r}: its "
+                f"size can be well above 5% (with n = 240, about 0.20 at 0.5 without lags and 0.40 at 0.9 with 4 "
+                f"lags), and divided by the long-run variance factor it misses ({f_res:.3g}) the statistic gives "
+                f"p = {p_defl:.3g}; the rejection is not reliable evidence of identification",
+                "pass hac_lags (or more lags), and judge identification also by the precision of the estimates and by "
+                "the criterion over a grid of the parameters"))
     if n < 10 * m:
         warns.append(_finding("notice", f"{n} observations for {m} moments (< 10 per moment): S is estimated with "
                               "noise and J tends to over-reject",
@@ -930,6 +963,7 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
             "bounds": None if bounds is None else [tuple(b) if b is not None else None for b in bounds],
             "n": n, "m": m, "k": k, "iterations": it, "converged": conv,
             "rank_test_cov": "iid" if not hac_lags else f"Bartlett HAC with {hac_lags} lags",
+            "rank_test_ac1": None if not np.isfinite(rank_ac1) else float(rank_ac1),
             "skill_version": SKILL_VERSION}
     out = {"estimand": "theta", "method": method, "params": pd.Series(th, index=names), "table": tab,
            "cov": pd.DataFrame(V, index=names, columns=names), "j": J, "j_df": df_j, "j_p": j_p, "j_cdf": j_cdf,

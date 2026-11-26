@@ -430,6 +430,32 @@ sg = sq.sprt_design(stats.gamma(0.1), stats.gamma(1.0), n_sim=200, seed=1, show=
 check("sprt_design: Gamma(0.1) vs Exp(1): kl_10 = KL(f1 || f0) closed form (rel 1e-10)",
       near(sg["kl_10"], _kl_gamma(1.0, 0.1), 1e-10 * _kl_gamma(1.0, 0.1)), sg["kl_10"])
 
+# S3 (r2): when the doubling of the simulated search stops at its cap before the type II error reaches beta, no n is
+# returned (the bisection returned an n above beta, without warning). No realistic pair reaches this branch (the
+# reviewer found none; the normal approximation starts the search at 4 n_normal): forced here with a normal
+# approximation that is far too small (variance of the LLR 1e-12, so n_normal = 1 and the search starts at 8) and a cap
+# of 8, for N(0, 1) against N(0.2, 1), whose simulated n is about 210.
+_lm, _cap = sq._llr_moments, sq._SIM_N_CAP
+sq._llr_moments = lambda d0, d1, u: (0.0, 1e-12)
+sq._SIM_N_CAP = 8
+try:
+    nf_cap = sq.n_for_error(stats.norm(0, 1), stats.norm(0.2, 1), simulate=True, n_sim=2000, seed=5, show=False)
+finally:
+    sq._llr_moments, sq._SIM_N_CAP = _lm, _cap
+check("n_for_error (r2 S3): the simulated search stopped at its cap with type II above beta -> n_simulated None and a "
+      "warning (it returned n = 8)", nf_cap["n_simulated"] is None
+      and any(w["level"] == "warning" and "still" in w["message"] for w in nf_cap["warnings"]), nf_cap)
+
+# S3 (r2): Simpson's rule needs an odd grid; an even npt gave a wrong size without warning
+odd_ok = []
+for bad_npt in (400, 2, 3.5):
+    try:
+        sq._amr_size(stats.norm.isf(0.025), 5, True, npt=bad_npt)
+        odd_ok.append(False)
+    except ValueError:
+        odd_ok.append(True)
+check("peeking_size (r2 S3): an even, too small or non-integer npt is refused", all(odd_ok), odd_ok)
+
 # ------------------------------------------------------------------------------------------------- used keys
 check("all functions: 'used' carries the skill version and 'warnings' are dicts with level, message and action",
       all(r_["used"]["skill_version"] for r_ in (d, rm, sd, r3, pk[10], nf, it1))
