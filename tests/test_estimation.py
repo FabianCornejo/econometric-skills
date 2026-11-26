@@ -543,6 +543,74 @@ check("v2.8.0 gmm: derivatives constant across rows -> rank statistic inf, p = 0
       gd_["rank_stat"] == np.inf and gd_["rank_p"] == 0.0
       and not any("identif" in w["message"] for w in gd_["warnings"]), gd_["rank_stat"])
 
+# review r2, S1-1: the rank statistic is invariant to invertible recombinations of the moments. An exogenous w + off
+# is the moment of w plus off times the moment of the constant; an instrument times s is a rescaled moment. The cut
+# of eigenvalues used one scale for all moments and dropped the small one (off 1000 -> 39.8 instead of 78.1;
+# instrument x 1e-6 -> 0.17, p 0.92 and "may not be identified"). Reference: the same minimum Wald on the
+# well-scaled design (off 0, scale 1), computed here by Powell from 30 starts, which needs no cut.
+def _inv_design(off=0.0, s1=1.0, s2=1.0, seed=0, n=500):
+    r = np.random.default_rng(seed)
+    z1, z2, v = r.standard_normal(n), r.standard_normal(n), r.standard_normal(n)
+    w = r.integers(0, 3, n).astype(float)
+    x = 0.5 * z1 + v
+    y = 1 + 2 * x + 0.5 * v + r.standard_normal(n)
+    return y, np.column_stack([np.ones(n), w + off, x]), np.column_stack([np.ones(n), w + off, s1 * z1, s2 * z2])
+
+
+def _min_wald_ref(y, X, Z, lags=None):
+    d = -(X[:, None, :] * Z[:, :, None])          # n x m x k: d g_i / d theta' for g_i = (y - X theta) Z_i
+    nn = len(y)
+
+    def f(c):
+        c = c / np.linalg.norm(c)
+        u = d @ c
+        S = _cf_hac(u - u.mean(0), lags)
+        return nn * u.mean(0) @ np.linalg.solve(S, u.mean(0))
+    rr = np.random.default_rng(5)
+    return min(optimize.minimize(f, rr.standard_normal(X.shape[1]), method="Powell",
+                                 options={"xtol": 1e-10, "ftol": 1e-13}).fun for _ in range(30))
+
+
+def _cf_hac(U, lags):
+    S = U.T @ U / len(U)
+    for j in range(1, (lags or 0) + 1):
+        G = U[j:].T @ U[:-j] / len(U)
+        S = S + (1 - j / (lags + 1)) * (G + G.T)
+    return S
+
+
+y_i0, X_i0, Z_i0 = _inv_design()
+ref_i0 = _min_wald_ref(y_i0, X_i0, Z_i0)
+ref_i3 = _min_wald_ref(y_i0, X_i0, Z_i0, lags=3)
+inv_bad = []
+for off_, s1_, s2_ in [(0.0, 1.0, 1.0), (1e3, 1.0, 1.0), (3e3, 1.0, 1.0), (1e4, 1.0, 1.0), (0.0, 1e-6, 1.0),
+                       (0.0, 1.0, 1e6), (1e3, 1e-6, 1.0), (1e3, 1e-3, 1e4)]:
+    yi, Xi, Zi = _inv_design(off_, s1_, s2_)
+    for lg_, ref_ in ((None, ref_i0), (3, ref_i3)):
+        ri = est.gmm(_lin_moments, [0.0, 0.0, 0.0], args=(yi, Xi, Zi), weight=np.diag(1 / np.mean(Zi ** 2, 0)),
+                     hac_lags=lg_, steps="one-step", show=False)
+        if not abs(ri["rank_stat"] / ref_ - 1) < 1e-7 or any("identif" in w["message"] for w in ri["warnings"]):
+            inv_bad.append((off_, s1_, s2_, lg_, ri["rank_stat"], ref_))
+check("v2.8.0 gmm (r2 S1-1): rank statistic invariant to an exogenous offset (1e3 to 1e4), an instrument x 1e-6 or "
+      "x 1e6 and both together, with and without 3 HAC lags: equal to the well-scaled minimum Wald found by Powell "
+      "(rel <= 1e-7), never 'may not be identified'", not inv_bad and 50 < ref_i0 < 120, (inv_bad, ref_i0, ref_i3))
+
+# review r2 (finding before r1): with the offset, S of the moments looked singular on its own scale, was floored,
+# and the estimate moved (2.0486 at off 1000 against 2.0212). Iterated GMM is a fixed point and invariant to the
+# recombination: the estimate and SEs at off 1e3 and 1e4 equal those at off 0, without the positive-definiteness warning
+it_ref = est.gmm(_lin_moments, [0.0, 0.0, 0.0], args=(y_i0, X_i0, Z_i0), steps="iterated", tol=1e-12, show=False)
+it_bad = []
+for off_ in (1e3, 1e4):
+    yi, Xi, Zi = _inv_design(off_)
+    ri = est.gmm(_lin_moments, [0.0, 0.0, 0.0], args=(yi, Xi, Zi), weight=np.diag(1 / np.mean(Zi ** 2, 0)),
+                 steps="iterated", tol=1e-12, show=False)
+    dx = abs(ri["params"].iloc[2] - it_ref["params"].iloc[2])
+    dse = abs(ri["table"]["se"].iloc[2] / it_ref["table"]["se"].iloc[2] - 1)
+    if not (dx < 1e-6 and dse < 1e-5) or any("positive definite" in w["message"] for w in ri["warnings"]):
+        it_bad.append((off_, ri["params"].iloc[2], it_ref["params"].iloc[2], dse))
+check("v2.8.0 gmm (r2): iterated GMM with an exogenous offset of 1e3 and 1e4: same slope (abs <= 1e-6) and SE "
+      "(rel <= 1e-5) as with no offset, and no 'S is not positive definite' warning", not it_bad, it_bad)
+
 # S2-2: k >= 3 in seconds (k = 5, m = 10, n = 2000 took 397 s), and the minimum over directions against an
 # independent optimizer (Powell from 40 random starts on the Wald of D(c) computed here)
 r_k = np.random.default_rng(85)

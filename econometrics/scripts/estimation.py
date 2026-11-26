@@ -547,20 +547,31 @@ def _gmm_rank_test(G_of, th, lags):
     M2 = (flat.T @ flat / n).reshape(m, k, m, k)                   # uncentred second moments: the scale of D_i
 
     def wald(c):
+        # Each moment is standardized by its own scale along c (root of the uncentred second moment of its derivative)
+        # before any cut, so the cuts are scale-free per moment: a moment in small units, or one that is a large
+        # offset plus a small variation, keeps its directions (review r2, S1-1). The Wald is invariant to that
+        # diagonal rescaling, so the statistic itself does not change when nothing is cut.
         c = np.asarray(c, float)
         nc = np.linalg.norm(c)
         if not np.isfinite(nc) or nc == 0:
             return np.inf
         c = c / nc
         V = np.einsum("iajb,a,b->ij", Om, c, c)
-        ref = float(np.trace(np.einsum("iajb,a,b->ij", M2, c, c))) / m
         dm = Dbar @ c
-        ev, vec = np.linalg.eigh((V + V.T) / 2)
-        tol = 1e-12 * max(float(np.abs(ev).max()), ref, np.finfo(float).tiny)
-        proj = vec.T @ dm
-        keep = ev > tol
-        if np.any(np.abs(proj[~keep]) > 1e-6 * np.sqrt(max(ref, np.finfo(float).tiny))):
-            return np.inf                                          # the moments move deterministically along c
+        s = np.sqrt(np.maximum(np.einsum("iaib,a,b->i", M2, c, c), 0.0))
+        live = s > 0
+        if np.any(dm[~live] != 0):                                  # cannot happen (|mean| <= root mean square)
+            return np.inf
+        s = s[live]
+        Vs = V[np.ix_(live, live)] / np.outer(s, s)
+        ds = dm[live] / s
+        if np.any((np.diag(Vs) <= 1e-12) & (np.abs(ds) > 1e-6)):
+            return np.inf                                           # a moment moves deterministically along c
+        ev, vec = np.linalg.eigh((Vs + Vs.T) / 2)
+        proj = vec.T @ ds
+        keep = ev > 1e-12 * max(float(np.abs(ev).max()), 1.0)
+        if np.any(np.abs(proj[~keep]) > 1e-6):
+            return np.inf                                           # a recombination of moments does
         return float(n * np.sum(proj[keep] ** 2 / ev[keep]))
 
     if k == 1:
@@ -593,15 +604,22 @@ def _gmm_rank_test(G_of, th, lags):
 def _gmm_inv(S):
     """Inverse of a covariance that should be positive definite; (inverse, smallest eigenvalue, ok).
 
-    When S is not positive definite (a truncated kernel can give negative eigenvalues), its eigenvalues are
-    floored at 1e-10 times the largest absolute one before inverting, so the weight stays positive definite."""
-    ev, vec = np.linalg.eigh(S)
+    S is first put on the scale of its correlation matrix (each moment divided by its own standard deviation), so
+    the check and the floor do not depend on the units of the moments: a moment that is a large offset times a
+    constant plus a small variation made S look singular on its own scale and moved the estimate (v2.8.0 review r2;
+    the inverse is the same when nothing is floored). The smallest eigenvalue returned is that of the correlation
+    matrix. When it is not positive definite (a truncated kernel can give negative eigenvalues), the eigenvalues of
+    the correlation matrix are floored at 1e-10 times the largest absolute one, so the weight stays positive
+    definite."""
+    d = np.sqrt(np.abs(np.diag(S)))
+    d = np.where(d > 0, d, 1.0)
+    C = S / np.outer(d, d)
+    ev, vec = np.linalg.eigh((C + C.T) / 2)
     top = max(float(np.abs(ev).max()), np.finfo(float).tiny)
     ok = bool(ev.min() > 1e-12 * top)
-    if ok:
-        return np.linalg.inv(S), float(ev.min()), True
-    fl = np.maximum(ev, 1e-10 * top)
-    return (vec / fl) @ vec.T, float(ev.min()), False
+    fl = ev if ok else np.maximum(ev, 1e-10 * top)
+    inv = (vec / fl) @ vec.T / np.outer(d, d)
+    return (inv + inv.T) / 2, float(ev.min()), ok
 
 
 def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=None, hac_lags: int | None = None,
@@ -769,7 +787,12 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
     s_min_all = min(s_min_all, s_min)
     if not ok:                                   # the floored S, the one whose inverse was used
         S = np.linalg.inv(Sinv_fin)
-    A = np.linalg.pinv(D.T @ W @ D)
+    # pseudo-inverse on the scale of the parameters (Jacobi): a regressor stored with an offset makes D'WD
+    # ill-conditioned (1.4e16 at offset 1e4) and the plain pinv cut a direction, moving the SE by 0.2% (review r2)
+    M_dwd = D.T @ W @ D
+    q_dwd = np.sqrt(np.abs(np.diag(M_dwd)))
+    q_dwd = np.where(q_dwd > 0, q_dwd, 1.0)
+    A = np.linalg.pinv(M_dwd / np.outer(q_dwd, q_dwd)) / np.outer(q_dwd, q_dwd)
     V = A @ D.T @ W @ S @ W @ D @ A / n
     V = (V + V.T) / 2
     tab = _table(th, V, names, alpha)
@@ -817,8 +840,8 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                               "noise and J tends to over-reject",
                               "use fewer moments (fewer instrument lags) or report J with that caveat"))
     if not S_pd_ok:
-        warns.append(_finding("warning", f"S is not positive definite (smallest eigenvalue {s_min_all:.3g}): "
-                              "its eigenvalues were floored at 1e-10 of the largest",
+        warns.append(_finding("warning", f"S is not positive definite (smallest eigenvalue of its correlation matrix "
+                              f"{s_min_all:.3g}): those eigenvalues were floored at 1e-10 of the largest",
                               "use kernel='bartlett' (always positive semidefinite) or drop redundant moments"))
     lag_txt = "" if hac_lags is None else f", {kernel.capitalize()} HAC with {hac_lags} lags"
     method = f"GMM ({steps}{lag_txt})"
