@@ -587,17 +587,103 @@ for off_, s1_, s2_ in [(0.0, 1.0, 1.0), (1e3, 1.0, 1.0), (3e3, 1.0, 1.0), (1e4, 
                        (0.0, 1.0, 1e6), (1e3, 1e-6, 1.0), (1e3, 1e-3, 1e4)]:
     yi, Xi, Zi = _inv_design(off_, s1_, s2_)
     for lg_, ref_ in ((None, ref_i0), (3, ref_i3)):
-        if off_ >= 1e4 and lg_ is not None:
-            # with an offset of 1e4 and HAC the statistic differed between machines once in CI (84.1 against 80.7,
-            # not reproduced in the container; decision of 2026-11-26): the claim and this check stop at 3e3 there
-            continue
         ri = est.gmm(_lin_moments, [0.0, 0.0, 0.0], args=(yi, Xi, Zi), weight=np.diag(1 / np.mean(Zi ** 2, 0)),
                      hac_lags=lg_, steps="one-step", show=False)
         if not abs(ri["rank_stat"] / ref_ - 1) < 1e-7 or any("identif" in w["message"] for w in ri["warnings"]):
             inv_bad.append((off_, s1_, s2_, lg_, ri["rank_stat"], ref_))
-check("v2.8.0 gmm (r2 S1-1): rank statistic invariant to an exogenous offset (1e3 and 3e3 with and without 3 HAC "
-      "lags, 1e4 without), an instrument x 1e-6 or x 1e6 and both together: equal to the well-scaled minimum Wald found by Powell "
+check("v2.8.0 gmm (r2 S1-1, r3 S2-1): rank statistic invariant to an exogenous offset (1e3, 3e3 and 1e4, with and "
+      "without 3 HAC lags), an instrument x 1e-6 or x 1e6 and both together: equal to the well-scaled minimum Wald found by Powell "
       "(rel <= 1e-7), never 'may not be identified'", not inv_bad and 50 < ref_i0 < 120, (inv_bad, ref_i0, ref_i3))
+
+# review r3, S2-1: with an offset of 1e4 and HAC the search over directions got stuck in a valley of width ~1/offset
+# and the result depended on the random starts (2/12 seeds gave 84.35 instead of 80.66; once in CI). The search is now
+# in preconditioned coordinates: the statistic is the same for 12 seeds of the starts (the generator inside the search
+# is replaced for the call, then restored), at 1e4 with 3 lags and at 3e4 without lags, identified and not.
+_real_rng = np.random.default_rng
+seed_bad = []
+for off_, lg_, pi_ in [(1e4, 3, 0.5), (3e4, None, 0.5), (1e4, 3, 0.0)]:
+    r_ = _real_rng(0)
+    z1s, z2s, vs = r_.standard_normal(500), r_.standard_normal(500), r_.standard_normal(500)
+    ws = r_.integers(0, 3, 500).astype(float)
+    xs = pi_ * z1s + vs
+    ys = 1 + 2 * xs + 0.5 * vs + r_.standard_normal(500)
+    Xs, Zs = np.column_stack([np.ones(500), ws + off_, xs]), np.column_stack([np.ones(500), ws + off_, z1s, z2s])
+    ths = np.linalg.solve(Xs.T @ Xs, Xs.T @ ys)
+    Gs = lambda t, Xs=Xs, Zs=Zs, ys=ys: (ys - Xs @ t)[:, None] * Zs
+    vals_s = []
+    for sd_ in range(12):
+        np.random.default_rng = (lambda seed=None, sd_=sd_: _real_rng(1000 + sd_))
+        try:
+            vals_s.append(est._gmm_rank_test(Gs, ths, lg_, est._gmm_steps(ths, ths))[0])
+        finally:
+            np.random.default_rng = _real_rng
+    if not max(vals_s) - min(vals_s) <= 1e-8 * max(vals_s):
+        seed_bad.append((off_, lg_, pi_, min(vals_s), max(vals_s)))
+check("v2.8.0 gmm (r3 S2-1): rank statistic with an offset of 1e4 and 3 lags, and 3e4 without lags: the same for 12 "
+      "seeds of the search's random starts (rel 1e-8: the optimizer's tolerance; the valley gave 3%)", not seed_bad and np.random.default_rng is _real_rng, seed_bad)
+
+# review r3, S1-1/S1-3/S1-5/S1-2: moments that do not depend on some parameters. The minimum Wald lies in a moment's
+# null space, where that moment is dropped; a search over all directions missed it (block of moments in theta1 alone
+# and a weak block in theta2: 140.6 and no warning, instead of 5.64 and the warning; k = 3 with the strong moment in
+# theta1 + theta3: 176 instead of 0.54; a parameter outside the moments crashed with k = 1 and 3). Reference: the
+# Wald of the weak block alone, written here (k = 1: n dbar' Var^-1 dbar of d_i = -(z2, z3) x2).
+r_b = np.random.default_rng(1)
+z1b = r_b.standard_normal(500); x1b = z1b + r_b.standard_normal(500); y1b = x1b + r_b.standard_normal(500)
+z2b, z3b = r_b.standard_normal(500), r_b.standard_normal(500)
+x2b = 0.02 * z2b + r_b.standard_normal(500); y2b = 0.5 * x2b + r_b.standard_normal(500)
+dwb = -np.column_stack([z2b * x2b, z3b * x2b])
+ref_weak = float(500 * dwb.mean(0) @ np.linalg.solve(np.cov(dwb.T, bias=True), dwb.mean(0)))
+blk_bad = []
+for name_, mom_, th0_ in [
+        ("block", lambda t: np.column_stack([z1b * (y1b - t[0] * x1b), z2b * (y2b - t[1] * x2b), z3b * (y2b - t[1] * x2b)]),
+         [0.5, 0.2]),
+        ("sum", lambda t: np.column_stack([z1b * (y1b - (t[0] + t[1]) * x1b), z2b * (y2b - t[1] * x2b),
+                                           z3b * (y2b - t[1] * x2b)]), [0.5, 0.2]),
+        ("nonlinear", lambda t: np.column_stack([z1b * (y1b - np.exp(1e-4 * t[0] + t[1]) * x1b),
+                                                 z2b * (y2b - np.sin(t[1]) * x2b), z3b * (y2b - np.sin(t[1]) * x2b)]),
+         [-1000.0, 0.2])]:
+    gb_ = est.gmm(mom_, th0_, show=False)
+    # nonlinear case: the weak block's derivative is cos(theta2) times the linear one; the Wald does not change
+    ok_ = abs(gb_["rank_stat"] / ref_weak - 1) < 1e-6 and any("may not be identified" in w["message"]
+                                                                for w in gb_["warnings"])
+    if not ok_:
+        blk_bad.append((name_, gb_["rank_stat"], ref_weak))
+check("v2.8.0 gmm (r3 S1-1): a block of moments in theta1 alone (or in theta1 + theta2, or nonlinear in "
+      "1e-4 theta1 + theta2) and a weak block in theta2: rank statistic = Wald of the weak block alone (rel 1e-6), "
+      "p > 0.05 and the 'may not be identified' warning", not blk_bad and 5 < ref_weak < 6.5, (blk_bad, ref_weak))
+
+r_c = np.random.default_rng(2)
+zac, zbc = r_c.standard_normal(500), r_c.standard_normal(500)
+xac = zac + r_c.standard_normal(500); xbc = zbc + r_c.standard_normal(500)
+yac = xac + r_c.standard_normal(500); ybc = xbc + r_c.standard_normal(500)
+z2c, z3c = r_c.standard_normal(500), r_c.standard_normal(500)
+x2c = 0.02 * z2c + r_c.standard_normal(500); y2c = 0.5 * x2c + r_c.standard_normal(500)
+dwc = -np.column_stack([z2c * x2c, z3c * x2c])
+ref_k3 = float(500 * dwc.mean(0) @ np.linalg.solve(np.cov(dwc.T, bias=True), dwc.mean(0)))
+k3_vals = []
+for rot_ in (False, True):
+    mk3 = (lambda t, rot_=rot_: np.column_stack([zac * (yac - (t[0] + (t[2] if rot_ else 0.0)) * xac),
+                                                 zbc * (ybc - t[1] * xbc), z2c * (y2c - t[2] * x2c),
+                                                 z3c * (y2c - t[2] * x2c)]))
+    k3_vals.append(est._gmm_rank_test(mk3, np.array([1.0, 1.0, 0.1]), None)[0])
+check("v2.8.0 gmm (r3 S1-5): k = 3, weak block in theta3, strong moments in theta1 (or theta1 + theta3) and theta2: "
+      "rank statistic = Wald of the weak block alone (rel 1e-6; the search over all directions gave 176)",
+      all(abs(v / ref_k3 - 1) < 1e-6 for v in k3_vals) and ref_k3 < 2, (k3_vals, ref_k3))
+
+r_u = np.random.default_rng(0)
+zu = r_u.standard_normal((300, 3)); xu = zu.sum(1) + r_u.standard_normal(300); yu = 2 * xu + r_u.standard_normal(300)
+un_res = []
+for k_, mom_, th0_ in [(1, lambda t: (yu - 2.0 * xu)[:, None] * zu, [0.3]),
+                       (2, lambda t: (yu - t[0] * xu)[:, None] * zu, [1.0, 0.5]),
+                       (3, lambda t: (yu - t[0] * xu - t[1] * zu[:, 0])[:, None] * np.column_stack([zu, zu[:, 0] ** 2]),
+                        [1.0, 0.0, 0.5])]:
+    try:
+        gu_ = est.gmm(mom_, th0_, show=False)
+        un_res.append((k_, gu_["rank_stat"], any("may not be identified" in w["message"] for w in gu_["warnings"])))
+    except Exception as e_:
+        un_res.append((k_, repr(e_)[:80], False))
+check("v2.8.0 gmm (r3 S1-2): a parameter that does not enter the moments, k = 1, 2, 3: rank statistic 0 and the "
+      "'may not be identified' warning, no exception", all(v == 0.0 and w for _, v, w in un_res), un_res)
 
 # review r2 (finding before r1): with the offset, S of the moments looked singular on its own scale, was floored,
 # and the estimate moved (2.0486 at off 1000 against 2.0212). Iterated GMM is a fixed point and invariant to the

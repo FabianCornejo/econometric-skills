@@ -534,10 +534,14 @@ def _gmm_rank_test(G_of, th, lags, h=None):
     form (c x I)' Omega (c x I). With lags it always uses the Bartlett kernel, which is positive semidefinite (a
     truncated kernel made the variance indefinite and the statistic negative; review r1). A direction in which the
     derivatives do not vary (variance ~0) but whose mean is not 0 is identified exactly: the statistic is inf.
-    Precision: with a regressor stored with an offset of 1e4 or more and HAC lags the statistic differed by a few
-    percent between machines once (CI, not reproduced); up to 3e3 it matched the well-scaled one to 3e-7. Centre
-    such a regressor.
-    Returns (stat, df, ac1); (nan, df, nan) when the moments are not finite next to the estimate. ac1 is the largest
+    Moments that do not depend on some parameters (a block structure, a parameter outside the moments) are handled
+    exactly: the minimum is taken also inside each moment's null space, where that moment is dropped (search in
+    _gmm_rank_search; v2.8.0 review r3). A parameter outside all moments gives 0.
+    Precision: with a regressor stored with an offset up to 1e4, with or without HAC lags, the statistic matches the
+    well-scaled one to 1e-6 and does not depend on the random starts of the search; with 3e4 and a small statistic
+    (~1) the finite differences leave ~1e-5 (with exact derivatives 1e-7). Centre such a regressor.
+    Returns (stat, df, ac1, capped); (nan, df, nan, False) when the moments are not finite next to the estimate;
+    capped is True when the candidate subspaces passed their cap (the statistic is then an upper bound). ac1 is the largest
     absolute first-order autocorrelation among the columns of vec(dg_i/dtheta') that vary: the persistence that
     makes the test over-reject (v2.8.0 review r2, S2-4; sizes measured in references/estimation-theory.md
     section 7)."""
@@ -551,11 +555,11 @@ def _gmm_rank_test(G_of, th, lags, h=None):
             e[j] = h[j]
             cols.append((G_of(th + e) - G_of(th - e)) / (2 * h[j]))
     except ValueError:
-        return float("nan"), None, float("nan")
+        return float("nan"), None, float("nan"), False
     Di = np.stack(cols, axis=2)                                    # n x m x k
     n, m, _ = Di.shape
     if not np.all(np.isfinite(Di)):
-        return float("nan"), m - k + 1, float("nan")
+        return float("nan"), m - k + 1, float("nan"), False
     Dbar = Di.mean(0)
     flat = Di.reshape(n, m * k)                                    # column j*k + a: moment j, parameter a
     Uc = flat - Dbar.reshape(1, m * k)
@@ -566,65 +570,140 @@ def _gmm_rank_test(G_of, th, lags, h=None):
         else 0.0
     Om = _gmm_S(flat, lags, "bartlett", True).reshape(m, k, m, k)
     M2 = (flat.T @ flat / n).reshape(m, k, m, k)                   # uncentred second moments: the scale of D_i
+    best, capped = _gmm_rank_search(Di, Dbar, Om, M2)
+    return best, m - k + 1, ac1, capped
 
-    def wald(c):
+
+# Singular-value ratio under which a moment's derivative matrix (n x k, preconditioned coordinates) is taken not to
+# move in a direction. Measured on both sides (development repository, claude/desenho-r3-v2.8.0.md, P0): finite-
+# difference noise in a structural null direction <= 1.3e-10 (nonlinear moments in theta1 * s + theta2, s from 1e-8
+# to 1e8); genuine directions >= 6.7e-6 with a regressor offset of 1e6, where the fit itself already breaks.
+_RANK_NULL_TOL = 1e-8
+_RANK_MAX_SUBSPACES = 200
+
+
+def _gmm_rank_search(Di, Dbar, Om, M2):
+    """Minimum over directions c of the Wald statistic of E[dg_i/dtheta' c] = 0 (see _gmm_rank_test); (min, capped).
+
+    The minimum is discontinuous where a moment stops depending on c: next to such a direction the moment's share is
+    n mean^2 / variance of its derivative along c, whatever the distance, and in it the moment does not move and has
+    no share. So the infimum lies on a set of measure zero (the moment's structural null space) that a search over all
+    directions does not find (v2.8.0 review r3: a block of moments that does not depend on theta1 hid the weak
+    identification of theta2, 140.6 instead of 5.64; k = 3 gave 176 instead of 0.54; a parameter outside the moments
+    crashed). The search therefore runs on candidates: the whole space and every non-trivial intersection of the
+    moments' null spaces, where the moments that vanish are dropped explicitly (none left: the statistic is 0).
+    Directions are searched in preconditioned coordinates c = T u with T'AT = I, A = sum_j M2_jj / tr M2_jj: a
+    regressor stored with a large offset made a valley of width ~1/offset in c, and the result depended on the random
+    starts (review r3, S2-1); in u it is the same statistic on a well-scaled sphere."""
+    n, m, k = Di.shape
+    M2j = [M2[j, :, j, :] for j in range(m)]
+    tr = np.array([np.trace(B) for B in M2j])
+    dead = ~(tr > 0)                                                 # a moment that does not depend on theta at all
+    A = sum(M2j[j] / tr[j] for j in range(m) if not dead[j]) if (~dead).any() else np.eye(k)
+    ev, Q = np.linalg.eigh((A + A.T) / 2)
+    T = Q / np.sqrt(np.maximum(ev, max(float(ev.max()), np.finfo(float).tiny) * 1e-14))
+    DT = [Di[:, j, :] @ T for j in range(m)]                        # n x k: moment j's derivatives, u coordinates
+    tol = _RANK_NULL_TOL
+    top = np.zeros(m)
+    for j in range(m):
+        if not dead[j]:
+            top[j] = np.linalg.norm(DT[j], 2)
+
+    def null_in(j, S):
+        # orthonormal basis (in the coordinates of S) of the directions of span(S) along which moment j does not move
+        _, sv, vt = np.linalg.svd(DT[j] @ S, full_matrices=True)
+        sv = np.concatenate([sv, np.zeros(S.shape[1] - len(sv))])
+        return vt.T[:, sv <= tol * top[j]]
+
+    def dropped_on(S):
+        return frozenset(j for j in range(m) if dead[j] or np.linalg.norm(DT[j] @ S, 2) <= tol * top[j])
+
+    eye = np.eye(k)
+    cands = [(eye, dropped_on(eye))]
+    projs = [eye]
+    queue, capped = [0], False
+    while queue and not capped:
+        S, drop = cands[queue.pop(0)]
+        for j in range(m):
+            if j in drop:
+                continue
+            a = null_in(j, S)
+            if a.shape[1] == 0 or a.shape[1] == S.shape[1]:
+                continue
+            Sn = np.linalg.qr(S @ a)[0]
+            P = Sn @ Sn.T
+            if any(np.max(np.abs(p - P)) < 1e-8 for p in projs):
+                continue
+            if len(cands) >= _RANK_MAX_SUBSPACES:
+                capped = True
+                break
+            projs.append(P)
+            cands.append((Sn, dropped_on(Sn)))
+            queue.append(len(cands) - 1)
+
+    def wald(u, drop):
         # Each moment is standardized by its own scale along c (root of the uncentred second moment of its derivative)
-        # before any cut, so the cuts are scale-free per moment: a moment in small units, or one that is a large
-        # offset plus a small variation, keeps its directions (review r2, S1-1). The Wald is invariant to that
-        # diagonal rescaling, so the statistic itself does not change when nothing is cut.
-        c = np.asarray(c, float)
-        nc = np.linalg.norm(c)
-        if not np.isfinite(nc) or nc == 0:
+        # before any cut, so the cuts are scale-free per moment (review r2, S1-1); the Wald is invariant to that
+        # diagonal rescaling. A moment whose derivative along c is below tol of its largest one does not move along c.
+        u = np.asarray(u, float)
+        nu = np.linalg.norm(u)
+        if not np.isfinite(nu) or nu == 0:
             return np.inf
-        c = c / nc
-        V = np.einsum("iajb,a,b->ij", Om, c, c)
-        dm = Dbar @ c
-        s = np.sqrt(np.maximum(np.einsum("iaib,a,b->i", M2, c, c), 0.0))
-        live = s > 0
-        if np.any(dm[~live] != 0):                                  # cannot happen (|mean| <= root mean square)
-            return np.inf
-        s = s[live]
-        Vs = V[np.ix_(live, live)] / np.outer(s, s)
-        ds = dm[live] / s
+        u = u / nu
+        c = T @ u
+        live = np.array([j not in drop and np.linalg.norm(DT[j] @ u) > tol * top[j] for j in range(m)])
+        if not live.any():
+            return 0.0                                              # no moment moves along c: D c = 0
+        V = np.einsum("iajb,a,b->ij", Om, c, c)[np.ix_(live, live)]
+        dm = (Dbar @ c)[live]
+        s = np.sqrt(np.maximum(np.einsum("iaib,a,b->i", M2, c, c)[live], 0.0))
+        if not np.all(s > 0):
+            return np.inf                                           # cannot happen: live moments move along c
+        Vs = V / np.outer(s, s)
+        ds = dm / s
         if np.any((np.diag(Vs) <= 1e-12) & (np.abs(ds) > 1e-6)):
             return np.inf                                           # a moment moves deterministically along c
-        ev, vec = np.linalg.eigh((Vs + Vs.T) / 2)
-        proj = vec.T @ ds
-        keep = ev > 1e-12 * max(float(np.abs(ev).max()), 1.0)
+        ev_, vec_ = np.linalg.eigh((Vs + Vs.T) / 2)
+        proj = vec_.T @ ds
+        keep = ev_ > 1e-12 * max(float(np.abs(ev_).max()), 1.0)
         if np.any(np.abs(proj[~keep]) > 1e-6):
             return np.inf                                           # a recombination of moments does
-        return float(n * np.sum(proj[keep] ** 2 / ev[keep]))
+        return float(n * np.sum(proj[keep] ** 2 / ev_[keep]))
 
-    if k == 1:
-        return wald([1.0]), m, ac1
     rng = np.random.default_rng(0)
-    if k == 2:
-        grid = np.linspace(0.0, np.pi, 361)
-        vals = [wald([np.cos(a), np.sin(a)]) for a in grid]
-        i = int(np.argmin(vals))
-        res = optimize.minimize_scalar(lambda a: wald([np.cos(a), np.sin(a)]),
-                                       bounds=(grid[max(i - 1, 0)], grid[min(i + 1, 360)]), method="bounded",
-                                       options={"xatol": 1e-10})
-        best = min(float(res.fun), float(vals[i]))
-    else:
-        # the statistic does not depend on |c|: unconstrained minimisation over c, from the axes and random starts
-        starts = [np.eye(k)[j] for j in range(k)] + [rng.standard_normal(k) for _ in range(3 * k)]
-        best = np.inf
-        # the Wald is inf along directions in which a moment does not vary: BFGS then differences inf and warns
-        # (RuntimeWarning, noise in the user's console; review r2); the values it returns are still compared
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            for c0 in starts:
-                f0 = wald(c0)
-                if not np.isfinite(f0):
-                    continue
-                res = optimize.minimize(wald, c0, method="BFGS",
-                                        options={"gtol": 1e-10 * max(1.0, f0), "maxiter": 400})
-                best = min(best, float(res.fun), f0)
-                res = optimize.minimize(wald, res.x, method="Nelder-Mead",
-                                        options={"xatol": 1e-9, "fatol": 1e-10, "maxiter": 200 * k})
-                best = min(best, float(res.fun))
-    return best, m - k + 1, ac1
+    best = np.inf
+    # the Wald is inf along directions in which a moment moves deterministically: BFGS then differences inf and warns
+    # (RuntimeWarning, noise in the user's console; review r2); the values it returns are still compared
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        for S, drop in cands:
+            d = S.shape[1]
+            f = (lambda a, S=S, drop=drop: wald(S @ np.atleast_1d(np.asarray(a, float)), drop))
+            if d == 1:
+                val = f([1.0])
+            elif d == 2:
+                g2 = (lambda t, f=f: f([np.cos(t), np.sin(t)]))
+                grid = np.linspace(0.0, np.pi, 361)
+                vals = [g2(t) for t in grid]
+                i = int(np.argmin(vals))
+                res = optimize.minimize_scalar(g2, bounds=(grid[max(i - 1, 0)], grid[min(i + 1, 360)]),
+                                               method="bounded", options={"xatol": 1e-10})
+                val = min(float(res.fun), float(vals[i]))
+            else:
+                # the statistic does not depend on |u|: unconstrained minimisation, from the axes and random starts
+                val = np.inf
+                for a0 in [np.eye(d)[j] for j in range(d)] + [rng.standard_normal(d) for _ in range(3 * d)]:
+                    f0 = f(a0)
+                    if not np.isfinite(f0):
+                        continue
+                    res = optimize.minimize(f, a0, method="BFGS",
+                                            options={"gtol": 1e-10 * max(1.0, f0), "maxiter": 400})
+                    val = min(val, float(res.fun), f0)
+                    res = optimize.minimize(f, res.x, method="Nelder-Mead",
+                                            options={"xatol": 1e-9, "fatol": 1e-10, "maxiter": 200 * d})
+                    val = min(val, float(res.fun))
+            best = min(best, val)
+    return best, capped
 
 
 def _fd_column(fun, th, j, h, lo, hi):
@@ -919,9 +998,14 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                     "warning", f"{names[j]} = {th[j]:.6g} is within one SE ({se[j]:.3g}) of its {side} bound {b:g}",
                     "near a bound the t-ratio, the CI and the chi2 references of J, Wald and LR are not valid "
                     "(Andrews 1999); report the bound as binding and use a boundary-aware test or a bootstrap"))
-    rank_stat, rank_df, rank_ac1 = _gmm_rank_test(G_of, th, hac_lags, _gmm_steps(th, theta0))
+    rank_stat, rank_df, rank_ac1, rank_capped = _gmm_rank_test(G_of, th, hac_lags, _gmm_steps(th, theta0))
     if rank_df is None:
         rank_df = m - k + 1
+    if rank_capped:
+        warns.append(_finding(
+            "notice", f"the rank test searched only the first {_RANK_MAX_SUBSPACES} subspaces in which some moments do "
+            "not depend on the parameters: the statistic is an upper bound and may overstate identification",
+            "check identification also by the criterion over a grid of the parameters"))
     rank_p = float(stats.chi2.sf(rank_stat, rank_df))              # nan when the test was not computed
     if not np.isfinite(rank_p):
         warns.append(_finding(
