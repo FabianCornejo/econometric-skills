@@ -512,13 +512,72 @@ def _gmm_S(G, lags, kernel, center):
     return (S + S.T) / 2
 
 
-def _gmm_steps(th, th0):
-    """Central-difference steps for gmm, relative to the parameter: eps^(1/3) max(|theta|, |theta0|), 1 in place of
-    the scale when both are 0. The absolute floor of _steps (max(|theta|, 1)) gave a parameter of 2e-4 a step of 3%
-    of itself, moving the estimate by 1.4e-4 and the SE by 0.3% (v2.8.0 review r2); the fit is now equivariant to
-    the units of theta."""
+def _gmm_pilot_steps(th, th0):
+    """Pilot central-difference steps: eps^(1/3) max(|theta|, |theta0|), 1 in place of the scale when both are 0."""
     sc = np.maximum(np.abs(np.asarray(th, float)), np.abs(np.asarray(th0, float)))
     return np.finfo(float).eps ** (1 / 3) * np.where(sc > 0, sc, 1.0)
+
+
+def _gmm_steps(G, th, th0):
+    """Central-difference steps for gmm's derivatives, chosen per parameter by stability (v2.8.0 review r3, S2-2).
+
+    Candidate scales s: |theta_j|, |theta0_j|, 1 and the response scale tau_j = rms(g_i) / rms(dg_i/dtheta_j) (the
+    change in theta_j that moves the contributions by their own size, with the derivative from the pilot step). For
+    each, the derivative of the mean moment with h = eps^(1/3) s and with h/2; the step kept is the one whose two
+    estimates agree best (rounding grows and truncation shrinks as h falls, and their disagreement tracks the error).
+    A single scale failed somewhere: relative to theta with theta0 far from the estimate (a rate of 2e-4 started at
+    1: Jacobian off by 7.6e-3, the estimate by 1.4e-4); relative to the estimate when it is 0 by chance (a slope at
+    1e-14: off by 100%); the response scale with offsets (the residual is a cancellation of large terms) and far from
+    the estimate (terms that do not depend on theta inflate rms(g)). Measured against analytic Jacobians in eleven
+    designs (development repository, claude/desenho-r3-v2.8.0.md): best or tied everywhere. A candidate whose two
+    differences are exactly 0 (a step below the resolution of the moments) or not finite is skipped; among those
+    that agree about as well as the best (10x, or to 1e-11), the largest step is kept (less rounding); with none
+    left, the pilot eps^(1/3) max(|theta|, |theta0|) (1 when both are 0). G returns the n x m contributions."""
+    th = np.asarray(th, float)
+    th0 = np.asarray(th0, float)
+    k = len(th)
+    hp = _gmm_pilot_steps(th, th0)
+    out = hp.copy()
+    eps3 = np.finfo(float).eps ** (1 / 3)
+    with np.errstate(all="ignore"):                                 # a trial step outside the domain gives NaN
+        try:
+            g0 = np.asarray(G(th), float)
+        except (ValueError, FloatingPointError, OverflowError, ZeroDivisionError):
+            return hp
+        rg = float(np.sqrt(np.mean(g0 ** 2)))
+        for j in range(k):
+            def diff(h, j=j):
+                e = np.zeros(k)
+                e[j] = h
+                try:
+                    gp, gm = np.asarray(G(th + e), float), np.asarray(G(th - e), float)
+                except (ValueError, FloatingPointError, OverflowError, ZeroDivisionError):
+                    return None, None
+                return (gp - gm) / (2 * h), (gp.mean(0) - gm.mean(0)) / (2 * h)
+            cands = [abs(th[j]), abs(th0[j]), 1.0]
+            dobs, _ = diff(hp[j])
+            if dobs is not None:
+                rd = float(np.sqrt(np.mean(dobs ** 2)))
+                if np.isfinite(rd) and rd > 0 and np.isfinite(rg) and rg > 0:
+                    cands.append(rg / rd)
+            qs = []
+            for sc in sorted(set(c for c in cands if np.isfinite(c) and c > 0)):
+                h = eps3 * sc
+                _, d1 = diff(h)
+                _, d2 = diff(h / 2)
+                if d1 is None or d2 is None or not (np.all(np.isfinite(d1)) and np.all(np.isfinite(d2))):
+                    continue
+                den = max(float(np.max(np.abs(d1))), float(np.max(np.abs(d2))))
+                if den == 0:
+                    continue
+                qs.append((float(np.max(np.abs(d1 - d2))) / den, h))
+            if qs:
+                # among the steps that agree about as well as the best one (within 10x, or to 1e-11), the largest:
+                # truncation there is already negligible and a larger step rounds less (moments linear in theta,
+                # where every step is exact up to rounding and the smallest disagreement is chance)
+                qmin = min(q for q, _ in qs)
+                out[j] = max(h for q, h in qs if q <= max(10 * qmin, 1e-11))
+    return out
 
 
 def _gmm_rank_test(G_of, th, lags, h=None):
@@ -720,19 +779,20 @@ def _fd_column(fun, th, j, h, lo, hi):
     return np.full(np.shape(fun(th)), np.nan)
 
 
-def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5):
+def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=None):
     """Compares a user Jacobian with finite differences at theta0, column by column (review r2, S1-2: on the whole
-    matrix, a wrong column in small units hid behind a large one). The step is relative to |theta_j| and stays
-    inside the bounds (S2-2, S2-3). Refuses only when the disagreement is clear: gap above tol of the column's
+    matrix, a wrong column in small units hid behind a large one). The step is gmm's response-scale step at theta0
+    (steps0; review r3, S2-2) and stays inside the bounds (S2-2, S2-3). Refuses only when the disagreement is clear: gap above tol of the column's
     largest entry AND the finite differences reliable there (steps h and h/4 agree to ref_tol of that scale);
     otherwise a disagreement is a warning (the reference itself is unstable: a kink, an undefined neighbourhood).
     Returns {"refuse", "warn", "col", "gap", "ref_err"}."""
     th0 = np.asarray(th0, float)
+    steps0 = _gmm_pilot_steps(th0, th0) if steps0 is None else np.asarray(steps0, float)
     tiny = np.finfo(float).tiny
     out = {"refuse": False, "warn": None, "col": None, "gap": 0.0, "ref_err": 0.0}
     unchecked = []
     for j in range(len(th0)):
-        h = _gmm_steps(th0, th0)[j]
+        h = steps0[j]
         d1 = _fd_column(gbar, th0, j, h, lo, hi)
         d2 = _fd_column(gbar, th0, j, h / 4, lo, hi)
         du = Du[:, j]
@@ -806,10 +866,11 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
     observation (not their mean), e.g. for an Euler equation with instruments z_t:
     (beta * c_growth**(-gamma) * R - 1)[:, None] * Z. jacobian(theta, *args), optional, returns the
     m x k Jacobian of the MEAN moment (rows = moments, columns = parameters). It is checked once at theta0,
-    column by column, against finite differences with a step relative to the parameter and inside the bounds:
-    refused when a column clearly disagrees (e.g. transposed, or one column wrong), a warning when the finite
-    differences are themselves unstable there. Without it, central differences with steps relative to
-    max(|theta|, |theta0|), so the fit does not depend on the units of theta. A trial step of the search where
+    column by column, against finite differences inside the bounds: refused when a column clearly disagrees
+    (e.g. transposed, or one column wrong), a warning when the finite differences are unstable or zero there (a
+    kink, a step function). Without it, central differences whose step is chosen per parameter by stability
+    (among scales |theta|, |theta0|, 1 and that of the response, the one where steps h and h/2 agree best): it
+    depends neither on the units of theta nor on how far theta0 is from the estimate. A trial step of the search where
     the moments are NaN is skipped (the trust region shrinks); theta0 and the estimate must be finite.
     steps    "two-step" (default): first step with `weight` (identity if None; the first step depends on
              the units of the moments: scale them), then W = S^-1 at the first-step estimate; "iterated":
@@ -892,11 +953,11 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
     def D_of(th):
         if jacobian is not None:
             return D_user(th)
-        return _jacobian(gbar, th, _gmm_steps(th, theta0))
+        return _jacobian(gbar, th, _gmm_steps(G_raw, th, theta0))
 
     warns = []
     if jacobian is not None:
-        chk = _gmm_check_jacobian(gbar, D_user(theta0), theta0, lo, hi)
+        chk = _gmm_check_jacobian(gbar, D_user(theta0), theta0, lo, hi, steps0=_gmm_steps(G_raw, theta0, theta0))
         if chk["refuse"]:
             raise ValueError(f"jacobian disagrees with finite differences at theta0 in column {chk['col']} "
                              f"({names[chk['col']]}): largest gap {chk['gap']:.3g} of that column's largest entry, "
@@ -998,7 +1059,7 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                     "warning", f"{names[j]} = {th[j]:.6g} is within one SE ({se[j]:.3g}) of its {side} bound {b:g}",
                     "near a bound the t-ratio, the CI and the chi2 references of J, Wald and LR are not valid "
                     "(Andrews 1999); report the bound as binding and use a boundary-aware test or a bootstrap"))
-    rank_stat, rank_df, rank_ac1, rank_capped = _gmm_rank_test(G_of, th, hac_lags, _gmm_steps(th, theta0))
+    rank_stat, rank_df, rank_ac1, rank_capped = _gmm_rank_test(G_of, th, hac_lags, _gmm_steps(G_raw, th, theta0))
     if rank_df is None:
         rank_df = m - k + 1
     if rank_capped:

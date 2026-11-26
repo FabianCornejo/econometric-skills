@@ -614,7 +614,7 @@ for off_, lg_, pi_ in [(1e4, 3, 0.5), (3e4, None, 0.5), (1e4, 3, 0.0)]:
     for sd_ in range(12):
         np.random.default_rng = (lambda seed=None, sd_=sd_: _real_rng(1000 + sd_))
         try:
-            vals_s.append(est._gmm_rank_test(Gs, ths, lg_, est._gmm_steps(ths, ths))[0])
+            vals_s.append(est._gmm_rank_test(Gs, ths, lg_, est._gmm_steps(Gs, ths, ths))[0])
         finally:
             np.random.default_rng = _real_rng
     if not max(vals_s) - min(vals_s) <= 1e-8 * max(vals_s):
@@ -922,6 +922,38 @@ eq_r = [(g["params"].iloc[0] / (g_rl["params"].iloc[0] * 1e-4) - 1, g["table"]["
 check("v2.8.0 gmm (r2 S2-3): theta of order 1e-4: the right analytic Jacobian is accepted, and with or without it "
       "the estimate and SE equal those with theta rescaled to order 1 (rel <= 1e-7 and 1e-5)",
       all(abs(a) < 1e-7 and abs(b) < 1e-5 for a, b in eq_r), eq_r)
+
+# review r3, S2-2: steps relative to max(|theta|, |theta0|) brought the error back when theta0 is far from the
+# estimate (the usual start of 1: estimate off by 1.4e-4, SE by 3.4e-3); steps relative to the estimate would fail
+# when it is 0 by chance. The steps are now on the scale of the response. (a) rate of order 1e-4 started at 1.
+g_r1 = est.gmm(mom_r, [1.0], args=(x_r,), bounds=[(1e-12, None)], show=False)
+eq_r1 = (g_r1["params"].iloc[0] / (g_rl["params"].iloc[0] * 1e-4) - 1,
+         g_r1["table"]["se"].iloc[0] / (g_rl["table"]["se"].iloc[0] * 1e-4) - 1)
+check("v2.8.0 gmm (r3 S2-2): theta of order 1e-4 started at theta0 = 1: estimate and SE equal those with theta "
+      "rescaled to order 1 (rel <= 1e-7 and 1e-5)", g_r1["converged"] and abs(eq_r1[0]) < 1e-7 and abs(eq_r1[1]) < 1e-5,
+      eq_r1)
+# (b) exactly identified IV whose slope estimate is 0 up to rounding (the error is made orthogonal to the
+# instrument in the sample), started at (1, 1): SEs against the robust IV formula written here,
+# V = (Z'X)^-1 (sum e_i^2 z_i z_i') (X'Z)^-1
+r_z = np.random.default_rng(4)
+nz = 800
+zz = r_z.standard_normal(nz)
+xz = zz + r_z.standard_normal(nz)
+Zz = np.column_stack([np.ones(nz), zz])
+Xz = np.column_stack([np.ones(nz), xz])
+ez = r_z.standard_normal(nz) * (1 + 0.5 * np.abs(zz))
+ez = ez - Zz @ np.linalg.lstsq(Zz, ez, rcond=None)[0]
+yz = 3.0 + ez
+g_z = est.gmm(_lin_moments, [1.0, 1.0], args=(yz, Xz, Zz), show=False)
+bz = np.linalg.solve(Zz.T @ Xz, Zz.T @ yz)
+uz = yz - Xz @ bz
+Az = np.linalg.inv(Zz.T @ Xz)
+Vz = Az @ (Zz.T * uz ** 2) @ Zz @ Az.T
+se_z = np.sqrt(np.diag(Vz))
+check("v2.8.0 gmm (r3 S2-2): slope estimated at 0 up to rounding (|b| < 1e-12), started at (1, 1): estimates and "
+      "SEs equal the IV closed form (abs 1e-10, rel 1e-7)", abs(bz[1]) < 1e-12
+      and np.allclose(g_z["params"], bz, rtol=0, atol=1e-10)
+      and np.allclose(g_z["table"]["se"], se_z, rtol=1e-7, atol=0), (bz, g_z["params"].tolist(), g_z["table"]["se"].tolist(), se_z))
 
 # S2-1: a NaN at a trial step of the search is recoverable (the trust region shrinks); it raised ValueError from a
 # start of 2e-4 (the search tried theta = 0, where 1/theta is undefined)
