@@ -422,9 +422,17 @@ check("divergence: Bhattacharyya of Gamma(0.1) vs Exp(1) and Beta(0.5, 0.5) vs B
       "Bhattacharyya coefficient (rel 1e-10), Chernoff >= Bhattacharyya", all(b[0] for b in bh), bh)
 # Chernoff C = max over phi of -log rho(phi) >= the value at 1/2; the search read a NaN rho as a value and gave C < B
 cc = sq.divergence(stats.cauchy(0, 1), stats.cauchy(1e6, 1e3), show=False)
-check("divergence (r2 S2-5): Cauchy vs Cauchy(1e6, 1e3): Chernoff is NaN with a warning or >= Bhattacharyya (it was "
-      "7.493 < 7.717)", (np.isnan(cc["chernoff"]) and any("Chernoff" in w["message"] for w in cc["warnings"]))
-      or cc["chernoff"] >= cc["bhattacharyya"], (cc["chernoff"], cc["bhattacharyya"]))
+check("divergence (r2 S2-5): Cauchy vs Cauchy(1e6, 1e3): the Chernoff coefficient cannot be integrated for phi > 1/2, "
+      "so C is NaN with a warning (it was 7.493 < Bhattacharyya 7.717); Bhattacharyya stays finite",
+      np.isnan(cc["chernoff"]) and any("Chernoff" in w["message"] for w in cc["warnings"])
+      and np.isfinite(cc["bhattacharyya"]), (cc["chernoff"], cc["bhattacharyya"]))
+# the upper half of the quantile scale uses isf: a right tail that makes the KL infinite (Pareto(1) has no mean) is
+# NaN with a warning, and a finite one matches the closed form KL(Pareto(3) || Exp(1)) = log 3 - 4/3 + 3/2
+dpe = sq.divergence(stats.pareto(1.0), stats.expon(), show=False)
+dp3 = sq.divergence(stats.pareto(3.0), stats.expon(), show=False)
+check("divergence (r2 S2-5): KL(Pareto(1) || Exp(1)) is infinite -> NaN with a warning; KL(Pareto(3) || Exp(1)) = "
+      "log 3 + 1/6 (rel 1e-10)", np.isnan(dpe["kl_pq"]) and any("not computed" in w["message"] for w in dpe["warnings"])
+      and near(dp3["kl_pq"], np.log(3) + 1 / 6, 1e-10 * (np.log(3) + 1 / 6)), (dpe["kl_pq"], dp3["kl_pq"]))
 # the LLR moments of n_for_error / sprt_design (the same integral as the KL, fixed with it)
 sg = sq.sprt_design(stats.gamma(0.1), stats.gamma(1.0), n_sim=200, seed=1, show=False)
 check("sprt_design: Gamma(0.1) vs Exp(1): kl_10 = KL(f1 || f0) closed form (rel 1e-10)",

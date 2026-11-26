@@ -645,6 +645,11 @@ per_mod, _, _ = _persist_fit(0.5, 0.3, 4, 1)
 check("v2.8.0 gmm (r2 S2-4): strong instruments with iid data, and with AR(0.5) data and 4 lags: rejects, no "
       "persistence warning", per_iid["rank_p"] < 0.05 and not pw(per_iid) and per_mod["rank_p"] < 0.05
       and not pw(per_mod), (per_iid["rank_p"], per_mod["rank_p"], per_mod["used"]["rank_test_ac1"]))
+per_b, _, _ = _persist_fit(0.8, 0.3, 8, 0)
+check("v2.8.0 gmm (r2 S2-4): AR(0.8) data, informative instruments, 8 Bartlett lags (lag-1 autocorrelation 0.84, p "
+      "2.7e-4): deflated only by the long-run variance the 8 lags miss, the statistic still rejects -> no warning "
+      "(without the credit for the lags it would warn)", per_b["rank_p"] < 0.05 and per_b["used"]["rank_test_ac1"] >= 0.6
+      and not pw(per_b), (per_b["rank_p"], per_b["used"]["rank_test_ac1"]))
 check("v2.8.0 gmm (r2 S2-4): the Euler equation simulated with n = 4998 (lag-1 autocorrelation about 0.4, p 1e-193) "
       "gets no persistence warning: divided by the long-run factor the statistic still rejects", not pw(ge), ge["rank_p"])
 
@@ -846,6 +851,12 @@ check("v2.8.0 gmm (r2 S2-2): analytic Jacobian, start 1e-6 next to the bound 1e-
       (g_b1["params"].iloc[0], g_b2["params"].iloc[0]))
 lo_b, hi_b = np.array([1e-6]), np.array([np.inf])
 fd_b = est._fd_column(lambda t: mom_g(t, x_g).mean(0), np.array([1e-6]), 0, 1e-6 * 6e-6, lo_b, hi_b)
+# a moment undefined below its bound (NaN for theta < 0.5) and smooth at it: the difference must not step outside
+f_bd = lambda t: np.where(t[0] < 0.5, np.nan, np.array([1.0 - t[0] ** 2, 2.0 - 3 * t[0] ** 2]))
+fd_bd = est._fd_column(f_bd, np.array([0.5]), 0, 0.5 * 6.06e-6, np.array([0.5]), np.array([np.inf]))
+check("v2.8.0 gmm (r2 S2-2): at a lower bound below which the moments are undefined, the difference stays inside "
+      "(finite, equal to the analytic -2 theta and -6 theta, rel 1e-8)",
+      np.all(np.isfinite(fd_bd)) and np.allclose(fd_bd, [-1.0, -3.0], rtol=1e-8, atol=0), fd_bd)
 check("v2.8.0 gmm: at a lower bound the finite difference is one-sided (second order) and equals the analytic "
       "derivative (rel <= 1e-6)", np.allclose(fd_b, jac_g(np.array([1e-6]), x_g)[:, 0], rtol=1e-6, atol=0), fd_b)
 

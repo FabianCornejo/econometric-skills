@@ -312,7 +312,7 @@ def divergence(p, q, show: bool = True) -> dict:
         res = optimize.minimize_scalar(lr, bounds=(grid[max(i - 1, 0)] if i > 0 else 1e-9,
                                                    grid[min(i + 1, 18)] if i < 18 else 1 - 1e-9),
                                        method="bounded", options={"xatol": 1e-10})
-        cands = [(float(res.fun), float(res.x)), (vals[i], float(grid[i])), (-bhat, 0.5)]
+        cands = [(float(res.fun), float(res.x)), (vals[i], float(grid[i]))]     # the grid holds 1/2: C >= B
         best = min(cands)
         chern, phi = (float("nan"), float("nan")) if seen_nan else (-best[0], best[1])
     warns = []

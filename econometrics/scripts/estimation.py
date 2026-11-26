@@ -609,7 +609,7 @@ def _gmm_rank_test(G_of, th, lags, h=None):
         best = np.inf
         # the Wald is inf along directions in which a moment does not vary: BFGS then differences inf and warns
         # (RuntimeWarning, noise in the user's console; review r2); the values it returns are still compared
-        with warnings.catch_warnings(), np.errstate(invalid="ignore", over="ignore"):
+        with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             for c0 in starts:
                 f0 = wald(c0)
