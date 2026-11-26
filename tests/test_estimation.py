@@ -930,8 +930,22 @@ check("v2.8.0 gmm (r2 S1-2): a Jacobian with one wrong column in small units is 
 x_r = np.random.default_rng(0).exponential(1e4, size=2000)
 mom_r = lambda th, x: np.column_stack([x - 1 / th[0], x ** 2 - 2 / th[0] ** 2])
 jac_r = lambda th, x: np.array([[1 / th[0] ** 2], [4 / th[0] ** 3]])
-g_rn = est.gmm(mom_r, [2e-4], args=(x_r,), show=False)
-g_ra = est.gmm(mom_r, [2e-4], args=(x_r,), jacobian=jac_r, show=False)
+
+
+def _gmm_or_failed(*a, **kw):
+    """est.gmm, or a stand-in with NaN numbers when it raises, so the checks below fail one by one instead of
+    stopping the file (review r3, S3: two mutants were caught only by the exception)."""
+    try:
+        return est.gmm(*a, **kw)
+    except Exception as e_:                       # noqa: BLE001
+        print(f"  (gmm raised {type(e_).__name__}: {str(e_)[:100]})")
+        k_ = len(np.atleast_1d(a[1]))
+        return {"params": pd.Series(np.full(k_, np.nan)), "table": pd.DataFrame({"se": np.full(k_, np.nan)}),
+                "converged": False, "warnings": [], "rank_p": np.nan, "rank_stat": np.nan}
+
+
+g_rn = _gmm_or_failed(mom_r, [2e-4], args=(x_r,), show=False)
+g_ra = _gmm_or_failed(mom_r, [2e-4], args=(x_r,), jacobian=jac_r, show=False)
 g_rl = est.gmm(lambda la, x: mom_r(np.asarray(la) * 1e-4, x), [2.0], args=(x_r,), show=False)
 eq_r = [(g["params"].iloc[0] / (g_rl["params"].iloc[0] * 1e-4) - 1, g["table"]["se"].iloc[0] /
          (g_rl["table"]["se"].iloc[0] * 1e-4) - 1) for g in (g_rn, g_ra)]
@@ -942,7 +956,12 @@ check("v2.8.0 gmm (r2 S2-3): theta of order 1e-4: the right analytic Jacobian is
 # review r3, S2-2: steps relative to max(|theta|, |theta0|) brought the error back when theta0 is far from the
 # estimate (the usual start of 1: estimate off by 1.4e-4, SE by 3.4e-3); steps relative to the estimate would fail
 # when it is 0 by chance. The steps are now on the scale of the response. (a) rate of order 1e-4 started at 1.
-g_r1 = est.gmm(mom_r, [1.0], args=(x_r,), bounds=[(1e-12, None)], show=False)
+with warnings.catch_warnings(record=True) as rec_r1:
+    warnings.simplefilter("always")
+    g_r1 = _gmm_or_failed(mom_r, [1.0], args=(x_r,), bounds=[(1e-12, None)], show=False)
+check("v2.8.0 gmm (r3 S3): started at 1 the search tries steps where 1/theta is undefined: no RuntimeWarning reaches "
+      "the user (it printed the user's 'divide by zero' and a matmul 'invalid value')",
+      not any(issubclass(q.category, RuntimeWarning) for q in rec_r1), [str(q.message)[:60] for q in rec_r1])
 eq_r1 = (g_r1["params"].iloc[0] / (g_rl["params"].iloc[0] * 1e-4) - 1,
          g_r1["table"]["se"].iloc[0] / (g_rl["table"]["se"].iloc[0] * 1e-4) - 1)
 check("v2.8.0 gmm (r3 S2-2): theta of order 1e-4 started at theta0 = 1: estimate and SE equal those with theta "
@@ -973,7 +992,7 @@ check("v2.8.0 gmm (r3 S2-2): slope estimated at 0 up to rounding (|b| < 1e-12), 
 
 # S2-1: a NaN at a trial step of the search is recoverable (the trust region shrinks); it raised ValueError from a
 # start of 2e-4 (the search tried theta = 0, where 1/theta is undefined)
-g_s1 = est.gmm(mom_r, [1e-4], args=(x_r,), show=False)
+g_s1 = _gmm_or_failed(mom_r, [1e-4], args=(x_r,), show=False)
 check("v2.8.0 gmm (r2 S2-1): start 2e-4 with x - 1/theta converges to the same estimate as a start of 1e-4 "
       "(rel <= 1e-8), no error", g_rn["converged"] and abs(g_rn["params"].iloc[0] / g_s1["params"].iloc[0] - 1) < 1e-8,
       (g_rn["params"].iloc[0], g_s1["params"].iloc[0]))
@@ -1044,8 +1063,8 @@ check("v2.8.0 gmm (r3 S2-5): a non-zero entry where the true Jacobian is a struc
 x_g = np.random.default_rng(0).gamma(2.0, 1.0, size=1000)
 mom_g = lambda th, x: np.column_stack([np.log(x) - np.log(th[0]), x / th[0] - 2.0])
 jac_g = lambda th, x: np.array([[-1 / th[0]], [-np.mean(x) / th[0] ** 2]])
-g_b1 = est.gmm(mom_g, [1e-6], args=(x_g,), jacobian=jac_g, bounds=[(1e-8, None)], show=False)
-g_b2 = est.gmm(mom_g, [0.5], args=(x_g,), jacobian=jac_g, bounds=[(1e-8, None)], show=False)
+g_b1 = _gmm_or_failed(mom_g, [1e-6], args=(x_g,), jacobian=jac_g, bounds=[(1e-8, None)], show=False)
+g_b2 = _gmm_or_failed(mom_g, [0.5], args=(x_g,), jacobian=jac_g, bounds=[(1e-8, None)], show=False)
 check("v2.8.0 gmm (r2 S2-2): analytic Jacobian, start 1e-6 next to the bound 1e-8: no error, same estimate as "
       "from 0.5 (rel <= 1e-8)", g_b1["converged"] and abs(g_b1["params"].iloc[0] / g_b2["params"].iloc[0] - 1) < 1e-8,
       (g_b1["params"].iloc[0], g_b2["params"].iloc[0]))

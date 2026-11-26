@@ -976,8 +976,11 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
 
     def gbar(th):
         # no error inside the search: a trial step where the moments are undefined returns NaN and the trust region
-        # of least_squares shrinks (review r2, S2-1); theta0 and the estimate are checked by G_of
-        return G_raw(th).mean(0)
+        # of least_squares shrinks (review r2, S2-1); theta0 and the estimate are checked by G_of. Nor numpy's
+        # RuntimeWarnings of that step (the user's 1/theta at 0, then the matmul of NaN): noise in the user's console
+        # (review r3, S3)
+        with np.errstate(all="ignore"):
+            return G_raw(th).mean(0)
 
     def D_user(th):
         Du = np.asarray(jacobian(th, *args), float)
@@ -1024,7 +1027,11 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                                  "reached values where they are undefined; set bounds or other starting values")
             return rn * (L.T @ D)
 
-        res = optimize.least_squares(lambda th: rn * (L.T @ gbar(th)), start, jac=jac_fit, bounds=(lo, hi),
+        def resid(th):
+            with np.errstate(all="ignore"):
+                return rn * (L.T @ gbar(th))
+
+        res = optimize.least_squares(resid, start, jac=jac_fit, bounds=(lo, hi),
                                      method="trf", x_scale="jac", xtol=1e-12, ftol=1e-14, gtol=1e-12,
                                      max_nfev=200 * (k + 1))
         return res.x, bool(res.status > 0)
