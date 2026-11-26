@@ -264,7 +264,9 @@ def divergence(p, q, show: bool = True) -> dict:
            density is infinite at an edge of a bounded support, by the mass within one ulp of that edge
            (KL(Beta(0.5, 0.5) || Beta(2, 2)): 3e-7); when more than 1e-6 of a value would come from that mass
            (Gamma(0.01) has 5.9e-4 of it below the smallest double) the value is NaN with a warning, and so are
-           Bhattacharyya and C if log rho > 0 (rho <= 1 by Hoelder).
+           Bhattacharyya and C if log rho > 0 (rho <= 1 by Hoelder). Time: seconds per continuous pair (2.6 s
+           for two normals, 5.6 to 7 s for a noncentral chi-square or a gamma, 12.8 s for t(1.5) against t(3), 23 s
+           for genhyperbolic; 2 CPUs), the price of the quantile scale; avoid it inside loops over many pairs.
     Uses in this skill: KL(f0 || f1) and KL(f1 || f0) are the expected log-likelihood-ratio steps of an SPRT under
     each hypothesis (sprt_design) and Stein's exponents of the error of a fixed-sample test; C is the exponent of the
     smallest attainable average error with equal priors, P_e(n) ~ exp(-n C) (Chernoff 1952); JS is symmetric and
