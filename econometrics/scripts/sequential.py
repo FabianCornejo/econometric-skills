@@ -43,6 +43,7 @@ import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
 ALPHA = 0.05
 _MAX_BLOCK = 2_000_000          # draws per simulation block (memory)
+_SIM_BUDGET = 50_000_000        # n_for_error: largest n_sim x n drawn per step of the search (time; v2.8.0 review r1)
 
 
 def _sv():
@@ -101,9 +102,38 @@ def _vec(p):
     return p
 
 
-def _expect_cont(f, d_support_a, d_support_b, points=None):
-    val, err = integrate.quad(f, d_support_a, d_support_b, limit=500, epsabs=1e-13, epsrel=1e-11, points=points)
-    return val, err
+def _expect_cont(f, a, b, dists=()):
+    """Integral of f over (a, b), in pieces between break points of the distributions (v2.8.0 review r1).
+
+    quad over (-inf, inf) maps the line to a finite interval and can miss a narrow density far from 0 (N(100, 1) gave
+    a KL of 0); one piece spanning a heavy-tailed core (a Cauchy's spans +-3e11) misses a narrow density inside it.
+    Break points: the 1e-12, 1e-6, 0.5, 1 - 1e-6 and 1 - 1e-12 quantiles of each of `dists` within (a, b); finite
+    pieces between them, and the two tails beyond. Returns (value, reliable): reliable is False when quad's error
+    estimate exceeds 1e-8 of max(1, |value|), or when quad warns on a tail piece (a divergent tail, e.g. the infinite
+    KL of a Cauchy against a normal)."""
+    import warnings as _w
+    bp = set()
+    for d in dists:
+        for u in (1e-12, 1e-6):
+            bp.update((float(d.ppf(u)), float(d.isf(u))))
+        bp.add(float(d.median()))
+    bp = sorted(x for x in bp if np.isfinite(x) and a < x < b)
+    if not bp:
+        bp = [float(a), float(b)] if np.isfinite(a) and np.isfinite(b) else [0.0]
+    edges = ([a] if a < bp[0] else []) + bp + ([b] if bp[-1] < b else [])
+    val = err = 0.0
+    ok = True
+    for lo_, hi_ in zip(edges[:-1], edges[1:]):
+        tail = not (np.isfinite(lo_) and np.isfinite(hi_))
+        with _w.catch_warnings(record=True) as rec:
+            _w.simplefilter("always", integrate.IntegrationWarning)
+            v, e = integrate.quad(f, lo_, hi_, limit=500, epsabs=1e-13, epsrel=1e-11)
+        if tail and any(issubclass(r.category, integrate.IntegrationWarning) for r in rec):
+            ok = False
+        val += v
+        err += e
+    ok = bool(ok and np.isfinite(val) and np.isfinite(err) and err <= 1e-8 * max(1.0, abs(val)))
+    return float(val), ok
 
 
 def _kl_pair(p, q):
@@ -134,7 +164,10 @@ def _kl_pair(p, q):
     qa, qb = q.support()
     if a < qa or b > qb:
         return np.inf
-    return float(_expect_cont(f, a, b)[0])
+    val, ok = _expect_cont(f, a, b, (p, q))
+    if not ok or val < -1e-9 * max(1.0, abs(val)):      # KL >= 0 (Gibbs): a negative value is an integration failure
+        return float("nan")
+    return max(val, 0.0)
 
 
 def _log_rho(p, q, phi):
@@ -158,7 +191,9 @@ def _log_rho(p, q, phi):
         v = phi * p.logpdf(x) + (1 - phi) * q.logpdf(x)
         return float(np.exp(v)) if np.isfinite(v) else 0.0
 
-    val = _expect_cont(f, a, b)[0]
+    val, ok = _expect_cont(f, a, b, (p, q))
+    if not ok:
+        return float("nan")
     return float(np.log(val)) if val > 0 else -np.inf
 
 
@@ -175,8 +210,11 @@ def divergence(p, q, show: bool = True) -> dict:
       "warnings"         list of dicts with keys ["level", "message", "action"]
 
     p, q : two scipy frozen distributions of the same kind (both continuous or both discrete), or two probability
-           vectors over the same categories. Continuous cases are integrated numerically (scipy quad) over the
-           support; discrete ones are summed over the support (out to tails below 1e-17 when it is infinite).
+           vectors over the same categories. Continuous cases are integrated numerically (scipy quad), in pieces
+           between quantiles of both distributions (so a narrow density far from 0 is not missed); discrete ones are
+           summed over the support (out to tails below 1e-17 when it is infinite). A value whose integral does not
+           converge (e.g. the infinite KL of a Cauchy against a normal) is NaN with a warning, never a guess.
+           Precision is limited by rounding in the densities: about eps * |location| / scale relative.
     Uses in this skill: KL(f0 || f1) and KL(f1 || f0) are the expected log-likelihood-ratio steps of an SPRT under
     each hypothesis (sprt_design) and Stein's exponents of the error of a fixed-sample test; C is the exponent of the
     smallest attainable average error with equal priors, P_e(n) ~ exp(-n C) (Chernoff 1952); JS is symmetric and
@@ -221,20 +259,31 @@ def divergence(p, q, show: bool = True) -> dict:
                 out += 0.5 * fq * np.log(fq / fm)
             return out
 
-        js = float(_expect_cont(jsf, a, b)[0])
-    res = optimize.minimize_scalar(lambda ph: _log_rho(p, q, ph), bounds=(1e-9, 1 - 1e-9), method="bounded",
-                                   options={"xatol": 1e-10})
-    chern, phi = -float(res.fun), float(res.x)
+        js, js_ok = _expect_cont(jsf, a, b, (p, q))
+        js = float(js) if js_ok else float("nan")
     bhat = -_log_rho(p, q, 0.5)
+    if np.isnan(bhat):
+        chern = phi = float("nan")
+    else:
+        res = optimize.minimize_scalar(lambda ph: _log_rho(p, q, ph), bounds=(1e-9, 1 - 1e-9), method="bounded",
+                                       options={"xatol": 1e-10})
+        chern, phi = -float(res.fun), float(res.x)
     warns = []
-    if np.isfinite(kl_pq) and np.isfinite(kl_qp) and kl_pq + kl_qp > 0:
-        upper = kl_pq * kl_qp / (kl_pq + kl_qp)
+    bad = [nm for nm, v in (("KL(p||q)", kl_pq), ("KL(q||p)", kl_qp), ("JS", js), ("Chernoff", chern),
+                            ("Bhattacharyya", bhat)) if np.isnan(v)]
+    if bad:
+        warns.append(_finding("warning", f"{', '.join(bad)} not computed: the numerical integral did not converge or "
+                              "gave a negative KL (a KL is infinite when p has much heavier tails than q, e.g. Cauchy "
+                              "against normal)", "compute the divergence in closed form, or check the tails of p and q; "
+                              "do not use the NaN values"))
+    if np.isfinite(kl_pq) and np.isfinite(kl_qp) and np.isfinite(chern) and np.isfinite(bhat):
+        upper = kl_pq * kl_qp / (kl_pq + kl_qp) if kl_pq + kl_qp > 0 else 0.0
         tol = 1e-7 * max(1.0, upper)
         if not (bhat <= chern + tol and chern <= upper + tol and upper <= min(kl_pq, kl_qp) + tol):
             warns.append(_finding("warning", f"the divergences break the bound Bhattacharyya <= C <= KL KL/(KL + KL) "
                                   f"({bhat:.6g}, {chern:.6g}, {upper:.6g}): the numerical integration failed",
                                   "check the distributions (support, parameters) or compute the divergences in closed form"))
-    if not (np.isfinite(kl_pq) and np.isfinite(kl_qp)):
+    if np.isinf(kl_pq) or np.isinf(kl_qp):
         warns.append(_finding("notice", "one KL divergence is infinite: one distribution puts mass where the other has "
                               "none, so a single observation there settles the test",
                               "report it; the SPRT then stops at the first such observation"))
@@ -273,6 +322,22 @@ def _var_model(M, name):
     return A, Sig
 
 
+def _is_var_spec(M):
+    """A VAR is a dict, or a pair (A, Sigma); a transition matrix may also come as nested lists or tuples (review r1:
+    ((0.9, 0.1), (0.2, 0.8)) was taken for a VAR and crashed)."""
+    if isinstance(M, dict):
+        return True
+    if not isinstance(M, tuple):
+        return False
+    try:
+        arr = np.asarray(M, float)
+    except (ValueError, TypeError):
+        return True                                  # ragged: (A, Sigma) of different shapes
+    is_markov = (arr.ndim == 2 and arr.shape[0] == arr.shape[1] and arr.shape[0] >= 2 and np.all(arr >= 0)
+                 and np.all(np.abs(arr.sum(1) - 1) <= 1e-9))
+    return not is_markov
+
+
 def divergence_rate(P, Q, show: bool = True) -> dict:
     """KL divergence rate between two stationary processes, both ways: finite Markov chains or Gaussian VAR(1).
 
@@ -286,13 +351,14 @@ def divergence_rate(P, Q, show: bool = True) -> dict:
 
     Markov: P and Q are square transition matrices (rows sum to 1); the rate is sum_i pi_i sum_j P_ij log(P_ij/Q_ij)
     with pi the stationary distribution of P (QuantEcon, "Likelihood Ratio Processes"). VAR(1): x_t+1 = A x_t + C w_t+1
-    with w standard normal; pass {"A": A, "C": C}, {"A": A, "Sigma": C C'} or (A, Sigma). The rate is
+    with w standard normal; pass {"A": A, "C": C}, {"A": A, "Sigma": C C'} or (A, Sigma). A transition matrix may be
+    an array or nested lists or tuples (a square tuple whose rows sum to 1 is read as a Markov chain). The rate is
     0.5 [log det Sq - log det Sp - k + tr(Sq^-1 Sp) + tr((Ap - Aq)' Sq^-1 (Ap - Aq) Vp)], Vp the stationary covariance
     of x under P (solved from V = A V A' + Sigma). The rate is the drift of log L_t per step: with data from P, an
     SPRT of Q against P needs about log(A)/rate steps, and the error of a fixed-length test falls like exp(-T rate)."""
     from reporting import _finding, _print_findings
     warns = []
-    if isinstance(P, (dict, tuple)) or isinstance(Q, (dict, tuple)):
+    if _is_var_spec(P) or _is_var_spec(Q):
         kind = "var"
         Ap, Sp = _var_model(P, "P")
         Aq, Sq = _var_model(Q, "Q")
@@ -361,7 +427,7 @@ def _simulate_sprt(dist0, dist1, truth, n_runs, logA, logB, max_n, rng):
     t = 0
     while not done.all() and t < max_n:
         idx = np.flatnonzero(~done)
-        step = max(1, min(64, _MAX_BLOCK // max(len(idx), 1)))
+        step = max(1, min(64, _MAX_BLOCK // max(len(idx), 1), max_n - t))
         x = truth.rvs(size=(len(idx), step), random_state=rng)
         inc = _llr(x, dist0, dist1)
         path = L[idx, None] + np.cumsum(inc, axis=1)
@@ -410,6 +476,10 @@ def sprt_design(dist0, dist1, alpha: float = ALPHA, beta: float = 0.10, n_sim: i
     kl01, kl10 = dv["kl_pq"], dv["kl_qp"]
     en0 = (alpha * logA + (1 - alpha) * logB) / (-kl01) if np.isfinite(kl01) and kl01 > 0 else np.nan
     en1 = ((1 - beta) * logA + beta * logB) / kl10 if np.isfinite(kl10) and kl10 > 0 else np.nan
+    if np.isnan(kl01) or np.isnan(kl10):
+        dv_warn = [w for w in dv["warnings"] if "not computed" in w["message"]]
+    else:
+        dv_warn = []
     rng = np.random.default_rng(seed)
     h0 = n_sim // 2
     N0, R0, D0 = _simulate_sprt(dist0, dist1, dist0, h0, logA, logB, max_n, rng)
@@ -418,7 +488,10 @@ def sprt_design(dist0, dist1, alpha: float = ALPHA, beta: float = 0.10, n_sim: i
     b_hat = float(np.mean(~R1[D1])) if D1.any() else np.nan
     se_a = float(np.sqrt(a_hat * (1 - a_hat) / max(D0.sum(), 1)))
     se_b = float(np.sqrt(b_hat * (1 - b_hat) / max(D1.sum(), 1)))
-    warns = []
+    warns = list(dv_warn)
+    if dv_warn:
+        warns.append(_finding("warning", "Wald's approximate E[N] is not computed: a KL divergence could not be "
+                              "integrated", "use the simulated stopping times (sim_en0, sim_en1)"))
     und = int((~D0).sum() + (~D1).sum())
     if und:
         warns.append(_finding("warning", f"{und} of {n_sim} simulated runs reached max_n = {max_n} without a decision",
@@ -505,6 +578,29 @@ def sprt(x, dist0, dist1, alpha: float = ALPHA, beta: float = 0.10, show: bool =
 # =============================================================================
 # Peeking at a fixed-sample test
 # =============================================================================
+def _amr_size(z, K, two_sided, npt=None):
+    """P(some look rejects | H0) for K equally spaced looks at critical value z: Armitage, McPherson and Rowe (1969).
+
+    S_k = sum of k standard normal increments, Z_k = S_k / sqrt(k); the test continues while |S_k| < z sqrt(k)
+    (two-sided) or S_k < z sqrt(k). The sub-density of S_k on the continuation interval is carried by convolution
+    with the N(0, 1) increment, by Simpson's rule on an odd grid of npt points per look (default 401 two-sided,
+    1201 one-sided, whose interval [-9 sqrt(k), z sqrt(k)] is longer)."""
+    if K == 1:                                       # the test itself
+        return float(2 * stats.norm.sf(z) if two_sided else stats.norm.sf(z))
+    if npt is None:
+        npt = 401 if two_sided else 1201
+    lo_c = (lambda k: -z * np.sqrt(k)) if two_sided else (lambda k: -9.0 * np.sqrt(k))
+    x = np.linspace(lo_c(1), z, npt)
+    f = stats.norm.pdf(x)
+    w = np.ones(npt)
+    w[1:-1:2], w[2:-1:2] = 4.0, 2.0
+    for k in range(2, K + 1):
+        x_new = np.linspace(lo_c(k), z * np.sqrt(k), npt)
+        f = stats.norm.pdf(x_new[:, None] - x[None, :]) @ (w * (x[1] - x[0]) / 3.0 * f)
+        x = x_new
+    return float(1.0 - np.sum(w * (x[1] - x[0]) / 3.0 * f))
+
+
 def peeking_size(looks: int = 10, alpha: float = ALPHA, two_sided: bool = True, show: bool = True) -> dict:
     """Type I error of a fixed-sample z test computed at `looks` equally spaced interim points and stopped at the
     first p < alpha, and the per-look level that would keep the overall error at alpha (Pocock 1977).
@@ -519,8 +615,8 @@ def peeking_size(looks: int = 10, alpha: float = ALPHA, two_sided: bool = True, 
 
     Under H0 the z statistics at information fractions k/K are a scaled Brownian motion (corr(Z_i, Z_j) =
     sqrt(i/j), i < j). The size is computed exactly by the recursion of Armitage, McPherson and Rowe (1969): the
-    density of the running sum is carried from look to look by numerical integration (error below 1e-8), not by a
-    simulation of data. Classical values (Armitage,
+    density of the running sum is carried from look to look by numerical integration (against a grid ten times finer,
+    up to 50 looks: within 6e-9 two-sided and 3e-9 one-sided; v2.8.0 measurement), not by a simulation of data. Classical values (Armitage,
     McPherson and Rowe 1969): about 8% with 2 looks, 14% with 5, 19% with 10 for alpha = 5% two-sided."""
     from reporting import _finding, _print_findings
     if int(looks) != looks or looks < 1 or looks > 50:
@@ -530,27 +626,7 @@ def peeking_size(looks: int = 10, alpha: float = ALPHA, two_sided: bool = True, 
     K = int(looks)
 
     def size_at(z):
-        if K == 1:                                   # the test itself
-            return float(2 * stats.norm.sf(z) if two_sided else stats.norm.sf(z))
-        # Armitage, McPherson and Rowe (1969): S_k = sum of k standard normal increments, Z_k = S_k / sqrt(k);
-        # the test continues while |S_k| < z sqrt(k). Propagate the sub-density of S_k on the continuation interval
-        # by convolution with the N(0, 1) increment (Simpson's rule on an odd grid of 401 points per look; against 4001
-        # points the size differs by at most 6e-9 up to 50 looks, v2.8.0 measurement).
-        npt = 401
-        lo_c = (lambda k: -z * np.sqrt(k)) if two_sided else (lambda k: -(z + 10.0) * np.sqrt(k))
-        x = np.linspace(lo_c(1), z, npt)
-        f = stats.norm.pdf(x)
-        for k in range(2, K + 1):
-            w = np.ones(npt)
-            w[1:-1:2], w[2:-1:2] = 4.0, 2.0
-            w *= (x[1] - x[0]) / 3.0
-            x_new = np.linspace(lo_c(k), z * np.sqrt(k), npt)
-            f = stats.norm.pdf(x_new[:, None] - x[None, :]) @ (w * f)
-            x = x_new
-        w = np.ones(npt)
-        w[1:-1:2], w[2:-1:2] = 4.0, 2.0
-        w *= (x[1] - x[0]) / 3.0
-        return float(1.0 - np.sum(w * f))
+        return _amr_size(z, K, two_sided)
 
     z0 = stats.norm.isf(alpha / 2) if two_sided else stats.norm.isf(alpha)
     size = size_at(z0)
@@ -593,8 +669,10 @@ def _llr_moments(dist0, dist1, under):
             return 0.0
         return float(np.exp(lp) * _llr(np.array([x]), dist0, dist1)[0] ** k)
 
-    m1 = _expect_cont(lambda x: f(x, 1), a, b)[0]
-    m2 = _expect_cont(lambda x: f(x, 2), a, b)[0]
+    m1, ok1 = _expect_cont(lambda x: f(x, 1), a, b, (dist0, dist1))
+    m2, ok2 = _expect_cont(lambda x: f(x, 2), a, b, (dist0, dist1))
+    if not (ok1 and ok2):
+        return float("nan"), float("nan")
     return float(m1), float(m2 - m1 ** 2)
 
 
@@ -623,10 +701,16 @@ def n_for_error(dist0, dist1, alpha: float = ALPHA, beta: float = 0.10, simulate
     dv = divergence(dist0, dist1, show=False)
     kl01, kl10 = dv["kl_pq"], dv["kl_qp"]
     warns = []
+    if np.isnan(kl01) or np.isnan(kl10):
+        raise ValueError("a KL divergence could not be integrated numerically (see sequential.divergence): "
+                         "no sample size is computed")
     if not (np.isfinite(kl01) and np.isfinite(kl10)):
         raise ValueError("a KL divergence is infinite: one observation can settle the test; no sample-size formula applies")
     _, v0 = _llr_moments(dist0, dist1, dist0)
     _, v1 = _llr_moments(dist0, dist1, dist1)
+    if not (np.isfinite(v0) and np.isfinite(v1)):
+        raise ValueError("the variance of the log-likelihood ratio could not be integrated numerically: "
+                         "no sample size is computed")
     za, zb = stats.norm.isf(alpha), stats.norm.isf(beta)
     n_norm = int(np.ceil(((za * np.sqrt(v0) + zb * np.sqrt(v1)) / (kl01 + kl10)) ** 2))
     n_sim_res = None
@@ -634,23 +718,36 @@ def n_for_error(dist0, dist1, alpha: float = ALPHA, beta: float = 0.10, simulate
         rng = np.random.default_rng(seed)
         hi = max(4 * n_norm, 8)
 
-        def type2(n):
-            s0 = np.sum(_llr(dist0.rvs(size=(n_sim, n), random_state=rng), dist0, dist1), axis=1)
-            s1 = np.sum(_llr(dist1.rvs(size=(n_sim, n), random_state=rng), dist0, dist1), axis=1)
-            c = np.quantile(s0, 1 - alpha)
-            return float(np.mean(s1 <= c))
+        def sums(dist, n):
+            # in blocks of at most _MAX_BLOCK draws (v2.8.0 review r1: one n_sim x n array ran out of memory)
+            rows = max(1, _MAX_BLOCK // n)
+            out_ = np.empty(n_sim)
+            for i0 in range(0, n_sim, rows):
+                i1 = min(n_sim, i0 + rows)
+                out_[i0:i1] = np.sum(_llr(dist.rvs(size=(i1 - i0, n), random_state=rng), dist0, dist1), axis=1)
+            return out_
 
-        lo_n = 1
-        while type2(hi) > beta and hi < 1_000_000:
-            hi *= 2
-        while lo_n < hi:
-            mid = (lo_n + hi) // 2
-            if type2(mid) <= beta:
-                hi = mid
-            else:
-                lo_n = mid + 1
-        n_sim_res = int(lo_n)
-        if abs(n_sim_res - n_norm) > max(2, 0.2 * n_norm):
+        def type2(n):
+            c = np.quantile(sums(dist0, n), 1 - alpha)
+            return float(np.mean(sums(dist1, n) <= c))
+
+        if n_sim * hi > _SIM_BUDGET:
+            simulate = False
+            warns.append(_finding("notice", f"simulation skipped: about {n_sim * hi:.3g} draws per step of the search "
+                                  f"(n_sim {n_sim} x n up to {hi}) exceed the budget of {_SIM_BUDGET:.0e}",
+                                  "rely on n_normal (at this n the sum of log ratios is close to normal) or lower n_sim"))
+        else:
+            lo_n = 1
+            while type2(hi) > beta and hi < 1_000_000 and n_sim * 2 * hi <= _SIM_BUDGET:
+                hi *= 2
+            while lo_n < hi:
+                mid = (lo_n + hi) // 2
+                if type2(mid) <= beta:
+                    hi = mid
+                else:
+                    lo_n = mid + 1
+            n_sim_res = int(lo_n)
+        if n_sim_res is not None and abs(n_sim_res - n_norm) > max(2, 0.2 * n_norm):
             warns.append(_finding("notice", f"the normal approximation ({n_norm}) and the simulation ({n_sim_res}) "
                                   "differ by more than 20%: the log-likelihood ratio is far from normal at this n",
                                   "use the simulated n"))

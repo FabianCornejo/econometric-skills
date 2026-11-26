@@ -315,6 +315,72 @@ txt = out_of(sq.importance_tail_prob, stats.norm(0, 1), stats.norm(mu, 1), n=n_,
 check("importance_tail_prob show: estimate with SE, the plain estimate with its hits, variance ratio",
       "by importance sampling" in txt and "plain simulation" in txt and "hits" in txt and "variance ratio" in txt, txt)
 
+# ------------------------------------------------------------------------------------- v2.8.0 review r1
+# S1-4: quad over (-inf, inf) missed a narrow density far from 0 (KL 0 for N(100, 1) vs N(100.5, 1), no warning)
+far = []
+for loc, sc, dlt in ((40.0, 1.0, 0.5), (100.0, 1.0, 0.5), (100.0, 0.01, 0.1), (1e4, 1.0, 1.0), (-3e5, 2.0, 1.0),
+                     (1e6, 0.001, 0.0005)):
+    dd = sq.divergence(stats.norm(loc, sc), stats.norm(loc + dlt, sc), show=False)
+    rt_ = 1e-8 + 100 * np.finfo(float).eps * abs(loc) / sc    # rounding of (x - loc)/sc in the densities
+    kl_cf, ch_cf = dlt ** 2 / (2 * sc ** 2), dlt ** 2 / (8 * sc ** 2)
+    far.append(near(dd["kl_pq"], kl_cf, rt_ * kl_cf) and near(dd["kl_qp"], kl_cf, rt_ * kl_cf)
+               and near(dd["chernoff"], ch_cf, 10 * rt_ * ch_cf) and not dd["warnings"])
+check("divergence: normals far from 0 (locations 40 to 1e6, sd 0.001 to 2): KL = delta^2/(2 sd^2) and Chernoff = "
+      "delta^2/(8 sd^2) (rel 1e-8 + 100 eps |loc|/sd), no warning", all(far), far)
+jsf = sq.divergence(stats.norm(1e4, 1), stats.norm(1e4 + 1, 1), show=False)["js"]
+js0 = sq.divergence(stats.norm(0, 1), stats.norm(1, 1), show=False)["js"]
+check("divergence: JS is the same at location 0 and 1e4 (rel 1e-8)", near(jsf, js0, 1e-8 * js0), (jsf, js0))
+cn = sq.divergence(stats.cauchy(0, 1), stats.norm(0, 1), show=False)
+check("divergence: KL(Cauchy || N(0,1)) is infinite and was -2.43 -> NaN with a warning, never a negative KL",
+      np.isnan(cn["kl_pq"]) and any(w["level"] == "warning" and "not computed" in w["message"] for w in cn["warnings"])
+      and near(cn["kl_qp"], 0.2592445325, 1e-9), (cn["kl_pq"], cn["kl_qp"]))
+# 0.2592445325: KL(N(0,1) || Cauchy(0,1)) by mpmath quad at 30 digits, E_N[log phi(x) + log(pi (1 + x^2))]
+nf100 = sq.n_for_error(stats.norm(100, 1), stats.norm(100.5, 1), show=False)
+check("n_for_error: N(100,1) vs N(100.5,1) gives the same n = 35 as at 0 (it raised 'cannot convert NaN')",
+      nf100["n_normal"] == 35 and near(nf100["sprt_en0"], nf["sprt_en0"], 1e-6), nf100)
+sd100 = sq.sprt_design(stats.norm(100, 1), stats.norm(100.2, 1), n_sim=2000, seed=2, show=False)
+check("sprt_design: at location 100 KL = 0.02 and Wald's E[N] as at 0 (it gave KL 0 and E[N] NaN)",
+      near(sd100["kl_01"], 0.02, 1e-10) and near(sd100["approx_en0"], en0_cf, 1e-6)
+      and near(sd100["approx_en1"], en1_cf, 1e-6), (sd100["kl_01"], sd100["approx_en0"]))
+try:
+    sq.n_for_error(stats.cauchy(0, 1), stats.norm(0, 1), show=False)
+    nf_c = ""
+except ValueError as err:
+    nf_c = str(err)
+check("n_for_error: a KL that cannot be integrated -> ValueError that says so", "could not be integrated" in nf_c, nf_c)
+
+# S2-4: n_for_error(simulate=True) built one n_sim x 4n array (2 GiB for N(0,1) vs N(0.05,1)); now in blocks of
+# _MAX_BLOCK draws, and skipped with a notice beyond the budget
+nf_small = sq.n_for_error(stats.norm(0, 1), stats.norm(0.05, 1), simulate=True, show=False)
+check("n_for_error: N(0,1) vs N(0.05,1) with simulate=True -> n_normal 3426, simulation skipped with a notice, "
+      "no memory error", nf_small["n_normal"] == int(np.ceil(((stats.norm.isf(0.05) + stats.norm.isf(0.1)) / 0.05) ** 2))
+      and nf_small["n_simulated"] is None and any("skipped" in w["message"] for w in nf_small["warnings"]), nf_small)
+_mb = sq._MAX_BLOCK
+sq._MAX_BLOCK = 500
+try:
+    nf_blk = sq.n_for_error(stats.norm(0, 1), stats.norm(mu, 1), simulate=True, n_sim=20000, seed=4, show=False)
+finally:
+    sq._MAX_BLOCK = _mb
+check("n_for_error: drawing in blocks of 500 gives the same simulated n as one block (same random stream)",
+      nf_blk["n_simulated"] == nf["n_simulated"], (nf_blk["n_simulated"], nf["n_simulated"]))
+
+# S3-4: runs could pass max_n by up to 63 draws and count as decided
+smx = sq.sprt_design(stats.norm(0, 1), stats.norm(0.02, 1), n_sim=400, max_n=50, seed=3, show=False)
+check("sprt_design: max_n = 50 is respected (longest run 50) and the undecided runs get the warning",
+      smx["sim_max_n"] == 50 and any("max_n = 50" in w["message"] for w in smx["warnings"]), smx["sim_max_n"])
+
+# S3-6: a transition matrix as a tuple of tuples was taken for a VAR and crashed
+rt = sq.divergence_rate(tuple(map(tuple, Pf)), tuple(map(tuple, Pg)), show=False)
+check("divergence_rate: a Markov matrix given as a tuple of tuples = the array result",
+      rt["kind"] == "markov" and near(rt["rate_pq"], rm["rate_pq"], 1e-15), rt["kind"])
+
+# S3-5: precision of the recursion against a grid three times finer (one-sided had 4.8e-7 at 50 looks)
+z1, z2 = stats.norm.isf(0.05), stats.norm.isf(0.025)
+g1 = abs(sq._amr_size(z1, 20, False) - sq._amr_size(z1, 20, False, npt=3601))
+g2 = abs(sq._amr_size(z2, 20, True) - sq._amr_size(z2, 20, True, npt=1201))
+check("peeking_size: 20 looks, default grid against a 3x finer one: within 1e-8 one-sided and two-sided",
+      g1 < 1e-8 and g2 < 1e-8, (g1, g2))
+
 # ------------------------------------------------------------------------------------------------- used keys
 check("all functions: 'used' carries the skill version and 'warnings' are dicts with level, message and action",
       all(r_["used"]["skill_version"] for r_ in (d, rm, sd, r3, pk[10], nf, it1))
