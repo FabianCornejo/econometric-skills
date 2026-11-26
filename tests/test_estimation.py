@@ -670,6 +670,16 @@ check("v2.8.0 gmm (r3 S1-5): k = 3, weak block in theta3, strong moments in thet
       "rank statistic = Wald of the weak block alone (rel 1e-6; the search over all directions gave 176)",
       all(abs(v / ref_k3 - 1) < 1e-6 for v in k3_vals) and ref_k3 < 2, (k3_vals, ref_k3))
 
+# the other side of the null tolerance (singular-value ratio 1e-8): a genuine but small direction is not null. With a
+# regressor stored as w + 1e5 the smallest singular-value ratio of a moment is 6.7e-4 (claude/desenho-r3-v2.8.0.md);
+# the statistic still equals the well-scaled one (to 1e-5: the finite differences at 1e5); a tolerance of 1e-3 called
+# that direction null and gave 0 ("not identified")
+y5, X5, Z5 = _inv_design(1e5)
+g5 = est.gmm(_lin_moments, [0.0, 0.0, 0.0], args=(y5, X5, Z5), weight=np.diag(1 / np.mean(Z5 ** 2, 0)),
+             steps="one-step", show=False)
+check("v2.8.0 gmm (r3): exogenous regressor stored as w + 1e5: rank statistic equal to the well-scaled minimum Wald "
+      "(rel 1e-5), not treated as a null direction", abs(g5["rank_stat"] / ref_i0 - 1) < 1e-5, (g5["rank_stat"], ref_i0))
+
 r_u = np.random.default_rng(0)
 zu = r_u.standard_normal((300, 3)); xu = zu.sum(1) + r_u.standard_normal(300); yu = 2 * xu + r_u.standard_normal(300)
 un_res = []
@@ -1037,7 +1047,7 @@ r_zc = np.random.default_rng(2)
 zz_ = r_zc.standard_normal((300, 3)); xz_ = zz_.sum(1) + r_zc.standard_normal(300); yz_ = 2 * xz_ + r_zc.standard_normal(300)
 mom_zc = lambda t: (yz_ - t[0] * xz_)[:, None] * zz_
 jac_zc = lambda t: np.column_stack([-(zz_ * xz_[:, None]).mean(0), np.full(3, 1e-20)])
-g_zc = est.gmm(mom_zc, [1.0, 0.5], jacobian=jac_zc, show=False)
+g_zc = _gmm_or_failed(mom_zc, [1.0, 0.5], jacobian=jac_zc, show=False)
 check("v2.8.0 gmm (r3 S3): a parameter outside the moments, with noise of 1e-20 in its analytic column: no jacobian "
       "warning (the column moves the moments by less than rounding), and the 'may not be identified' warning",
       not any("jacobian" in w["message"] for w in g_zc["warnings"])
