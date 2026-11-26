@@ -938,9 +938,9 @@ def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=No
 
 def _gmm_moment_ignores(gbar, th, j, lo, hi):
     """True when the mean moment is bit-for-bit the same with parameter j moved far on both sides of th (by 1, 10
-    and 100 times 1 + |th_j|, inside the bounds; points where the moments are not finite or raise are skipped) and at
-    least two such points exist: the moments then appear not to depend on parameter j at all (review r6, S1-2: a
-    made-up Jacobian column for a parameter outside the moments was used with SE 0.196 and no "do not report").
+    and 100 times 1 + |th_j|, inside the bounds; points where the moments are not finite or raise are skipped, and
+    points clipped to the same bound count once) and at least one such point exists on each side (review r7, S3-2): the moments then appear not to depend on parameter j at all (review r6, S1-2: a
+    made-up Jacobian column for a parameter outside the moments was used with a finite SE and no "do not report").
     A step function changes somewhere over that range unless the data all sit on one side of every probe."""
     th = np.asarray(th, float)
     with np.errstate(all="ignore"):
@@ -951,12 +951,13 @@ def _gmm_moment_ignores(gbar, th, j, lo, hi):
     if not np.all(np.isfinite(g0)):
         return False
     span = 1.0 + abs(th[j])
-    seen = 0
+    sides, tried = set(), set()
     for s_ in (-100.0, -10.0, -1.0, 1.0, 10.0, 100.0):
         t = th.copy()
         t[j] = min(max(th[j] + s_ * span, np.nextafter(lo[j], np.inf)), np.nextafter(hi[j], -np.inf))
-        if t[j] == th[j]:
+        if t[j] == th[j] or t[j] in tried:
             continue
+        tried.add(t[j])
         with np.errstate(all="ignore"):
             try:
                 g1 = np.asarray(gbar(t), float)
@@ -966,8 +967,8 @@ def _gmm_moment_ignores(gbar, th, j, lo, hi):
             continue
         if not np.array_equal(g1, g0):
             return False
-        seen += 1
-    return seen >= 2
+        sides.add(t[j] > th[j])
+    return len(sides) == 2
 
 
 def _gmm_jacobian_findings(chks, ignored):
@@ -976,8 +977,8 @@ def _gmm_jacobian_findings(chks, ignored):
     def union(key):
         return sorted({j for _, c in chks for j in c[key]})
     wrong = sorted(set(union("wrong")) | set(ignored))
-    shaky = [j for j in union("shaky") if j not in wrong]
     flat = [j for j in union("flat") if j not in wrong]
+    shaky = [j for j in union("shaky") if j not in wrong and j not in flat]       # one warning per column (r7, S3-5)
     unchecked = [j for j in union("unchecked") if j not in wrong and j not in flat]
     out = []
     num = sorted({j for _, c in chks for j in c["wrong"]})
@@ -1000,8 +1001,8 @@ def _gmm_jacobian_findings(chks, ignored):
     if shaky:
         out.append((f"jacobian disagrees with finite differences in column(s) {shaky}, but the finite differences "
                     "are unstable there (steps h and h/4 differ), so the check is not conclusive",
-                    "the jacobian you passed was used; do not report until it is checked at theta0 and at the "
-                    "estimate, or run without it and compare"))
+                    "the jacobian you passed was used; check it at theta0 and at the estimate, or run without it and "
+                    "compare"))
     if flat:
         out.append((f"jacobian not checked in column(s) {flat}: the finite differences of the mean moment are 0 (up "
                     "to rounding) at theta0 or at the estimate where your jacobian is not; the moments may be step "
@@ -1011,11 +1012,12 @@ def _gmm_jacobian_findings(chks, ignored):
     if unchecked:
         out.append((f"jacobian not checked in column(s) {unchecked}: the moments are not finite next to theta0 or the "
                     "estimate (within the bounds)",
-                    "the jacobian you passed was used; do not report until it is checked"))
+                    "the jacobian you passed was used; check it where the moments are defined, or run without it and "
+                    "compare"))
     return out, flat
 
 
-def _gmm_inv(S):
+def _gmm_inv(S, strict=False):
     """Inverse of a covariance that should be positive definite; (inverse, smallest eigenvalue, ok).
 
     S is first put on the scale of its correlation matrix (each moment divided by its own standard deviation), so
@@ -1026,14 +1028,16 @@ def _gmm_inv(S):
     the correlation matrix are floored at 1e-10 times the largest absolute one, so the weight stays positive
     definite."""
     d = np.sqrt(np.abs(np.diag(S)))
-    if not np.all(d > 0):
-        # every observation contributes the same value to these moments (step-function moments with a start outside
-        # the data, or a moment that does not vary): the weight S^-1 does not exist; the inverse overflowed and
-        # least squares stopped with scipy's "Residuals are not finite in the initial point" (review r6, S3-4)
-        raise ValueError(f"moment(s) {np.flatnonzero(~(d > 0)).tolist()} have zero variance across observations at "
-                         "the current estimate, so the efficient weight S^-1 does not exist: with step-function "
-                         "moments (indicators, quantiles) start inside the data (e.g. at a sample quantile); otherwise "
-                         "drop the moments that do not vary")
+    if strict and not np.any(d > 0):
+        # every moment has zero variance (step-function moments with a start outside the data, or an exact fit): the
+        # weight S^-1 does not exist; the inverse overflowed and least squares stopped with scipy's "Residuals are not
+        # finite in the initial point" (review r6, S3-4). Only when every moment is constant and only for the weight
+        # updates: a calibration moment constant by construction next to others, or a one-step fit, keep the floor
+        # and get a warning (review r7, S2-2)
+        raise ValueError("every moment has zero variance across observations at the current estimate, so the "
+                         "efficient weight S^-1 does not exist: with step-function moments (indicators, quantiles) "
+                         "start inside the data (e.g. at a sample quantile); with an exact fit use steps='one-step'")
+    d = np.where(d > 0, d, 1.0)
     C = S / np.outer(d, d)
     ev, vec = np.linalg.eigh((C + C.T) / 2)
     top = max(float(np.abs(ev).max()), np.finfo(float).tiny)
@@ -1226,7 +1230,7 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
         cap = 1 if steps == "two-step" else maxiter
         for it in range(1, cap + 1):
             S_w = _gmm_S(G_of(th), hac_lags, kernel, center)
-            W, s_w, ok = _gmm_inv(S_w)
+            W, s_w, ok = _gmm_inv(S_w, strict=True)
             S_pd_ok &= ok
             s_min_all = min(s_min_all, s_w)
             th_new, conv = fit(W, th)
@@ -1247,20 +1251,26 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
             gs1 = np.sqrt(np.mean(np.asarray(G_raw(th), float) ** 2, axis=0))
             chks.append(("the estimate", _gmm_check_jacobian(gbar, D, th, lo, hi, steps0=_gmm_steps(G_raw, th, theta0),
                                                              g_scale=gs1)))
+        # a "flat" column already moves the moments above rounding over one difference step, so when the moments
+        # ignore that parameter the column is wrong (review r7, S3-1: a filter for columns below rounding over the
+        # probes was never reached and is gone)
         cand = sorted({j for _, c in chks for j in c["flat"]})
         ign = [j for j in cand if _gmm_moment_ignores(gbar, th, j, lo, hi)]
-        # a column too small to move the moments by more than rounding over the smallest probe (1 + |theta_j|) agrees
-        # with moments that ignore the parameter (noise of 1e-20 in an analytic zero, review r3 S3): no warning
-        gs_th = np.sqrt(np.mean(np.asarray(G_raw(th), float) ** 2, axis=0))
-        gs_th = np.where(np.isfinite(gs_th) & (gs_th > 0), gs_th, 1.0)
-        big = [j for j in ign if np.max(np.abs(D[:, j]) / gs_th) * (1.0 + abs(th[j])) > 4 * np.finfo(float).eps]
         for _, c in chks:
             c["flat"] = [j for j in c["flat"] if j not in ign]
-        jw, flat_cols = _gmm_jacobian_findings(chks, big)
+        jw, flat_cols = _gmm_jacobian_findings(chks, ign)
         for msg_, act_ in jw:
             warns.append(_finding("warning", msg_, act_))
     S = _gmm_S(Gh, hac_lags, kernel, center)
     Sinv_fin, s_min, ok = _gmm_inv(S)
+    zero_var = np.flatnonzero(~(np.abs(np.diag(S)) > 0)).tolist()
+    if zero_var:
+        warns.append(_finding(
+            "warning", f"moment(s) {zero_var} have zero variance across observations at the estimate (constant by "
+            "construction, such as a calibration moment, an exact fit, or step functions): S is singular there, and "
+            "SEs and J that involve them are not meaningful",
+            "fix calibrated parameters instead of adding constant moments, and check the fit; do not report SEs or J "
+            "that depend on those moments"))
     S_pd_ok &= ok
     s_min_all = min(s_min_all, s_min)
     if not ok:                                   # the floored S, the one whose inverse was used

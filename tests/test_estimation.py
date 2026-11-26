@@ -1366,9 +1366,9 @@ check("v2.8.0 gmm (r6 S1-1): a Jacobian wrong only away from theta0 (g^+gamma, s
       and r_e6_ok[0] == "fit" and not any(m.startswith("jacobian") for m in r_e6_ok[1]),
       (r_e6_ok, r_e6_sign, r_e6_beta))
 
-# S1-2: a made-up Jacobian column for a parameter that enters no moment was used (theta2 = 1.08, SE 0.196) with only
-# "not checked" and no rank test; it is now "probably wrong" (do not report) and the rank test is computed (it says
-# "not identified")
+# S1-2: a made-up Jacobian column for a parameter that enters no moment was used (in a reviewer's design theta2 =
+# 1.08, SE 0.196) with only "not checked" and no rank test; it is now "probably wrong" (do not report) and the rank
+# test is computed (it says "not identified")
 r_e7 = np.random.default_rng(7)
 z_e7 = r_e7.standard_normal((500, 2)); x_e7 = z_e7 @ [1.0, 0.5] + r_e7.standard_normal(500)
 y_e7 = 2.0 * x_e7 + r_e7.standard_normal(500)
@@ -1402,8 +1402,37 @@ check("v2.8.0 gmm (r6 S1-3): IV (intercept and slope) with n = 12 000 peaks unde
 y_e9 = 10 + np.random.default_rng(9).standard_normal(500)
 r_e9 = _jac_fit(lambda t: ((y_e9 <= t[0]) - 0.5)[:, None], [0.0])
 check("v2.8.0 gmm (r6 S3-4): a moment with zero variance (median started below every observation) stops with a message "
-      "that says so and to start inside the data", r_e9[0] == "error" and "zero variance" in r_e9[1]
+      "that says so and to start inside the data", r_e9[0] == "error" and "every moment has zero variance" in r_e9[1]
       and "start inside the data" in r_e9[1], r_e9)
+
+
+# review r7, S2-2: the r6 zero-variance error also stopped a calibration moment constant by construction (t1 - 3 next
+# to two regular moments) and one-step fits, which ran before with a warning. Now only a weight update in which every
+# moment is constant raises; otherwise the fit runs, pins t1 at 3 and warns naming the constant moment
+r_c7 = np.random.default_rng(17)
+x_c7 = r_c7.standard_normal(300); y_c7 = 1.0 + x_c7 + r_c7.standard_normal(300)
+mom_c7 = lambda t: np.column_stack([y_c7 - t[0] - x_c7, (y_c7 - t[0] - x_c7) * x_c7, np.full(300, t[1] - 3.0)])
+cal_ok = []
+for st_ in ("two-step", "one-step"):
+    try:
+        f_c7 = est.gmm(mom_c7, [0.0, 0.0], steps=st_, show=False)
+        cal_ok.append((abs(f_c7["params"].iloc[1] - 3.0) < 1e-8,
+                       any("moment(s) [2] have zero variance" in w["message"] for w in f_c7["warnings"])))
+    except ValueError as e_:
+        cal_ok.append(repr(e_)[:100])
+check("v2.8.0 gmm (r7 S2-2): a calibration moment constant by construction runs in two-step and one-step, pins the "
+      "parameter at 3 and warns naming moment [2]", cal_ok == [(True, True), (True, True)], cal_ok)
+
+# review r7, S3-2: the probe "the moments ignore the parameter" counted points on one side only (the other side NaN)
+# as enough; it now needs one valid point on each side. Moments that are NaN below 0.4 and constant above it, probed
+# from 0.5: not taken as ignoring the parameter; a constant on both sides is
+inf_ = np.array([np.inf])
+with np.errstate(all="ignore"):
+    one_side = est._gmm_moment_ignores(lambda t: np.array([np.log(t[0] - 0.4) * 0.0 + 1.0]), np.array([0.5]), 0,
+                                       -inf_, inf_)
+both_sides = est._gmm_moment_ignores(lambda t: np.array([1.0]), np.array([0.5]), 0, -inf_, inf_)
+check("v2.8.0 gmm (r7 S3-2): the 'moments ignore the parameter' probe needs a valid point on each side (NaN on one "
+      "side: False; constant on both: True)", (one_side, both_sides) == (False, True), (one_side, both_sides))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
