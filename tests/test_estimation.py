@@ -450,6 +450,9 @@ def _fs_F(y, X, Z):
 strong = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(1.0, 1), show=False)
 check("v2.8.0 gmm: strong instruments (first-stage F in the hundreds): rank test rejects, no identification warning",
       not any("identif" in w["message"] for w in strong["warnings"]) and strong["rank_p"] < 1e-10)
+check("v2.8.0 gmm: rank test df = m - k + 1 = 3 with 4 moments and 2 parameters, p = chi2.sf(stat, 3)",
+      strong["rank_df"] == 3 and abs(strong["rank_p"] - stats.chi2.sf(strong["rank_stat"], 3)) < 1e-15,
+      strong["rank_df"])
 
 # v2.8.0 review r1 (S1-1): the rank statistic grows with n under any alternative, so it is not a first-stage F and
 # carries no cut of 10. Before the fix, an instrument with a first-stage F of 1e8 (n = 100, 8 instruments) got
@@ -638,7 +641,7 @@ for lab, jf in (("transposed (k x m)", lambda th, y, X, Z: (-(Z.T @ X) / len(y))
     except ValueError as err:
         msg = str(err)
     check(f"v2.8.0 gmm: a {lab} Jacobian is refused with a message about shape or disagreement",
-          ("shape" in msg) if "transposed" in lab else ("disagrees" in msg), msg)
+          ("must return an array of shape (m, k) = (4, 2)" in msg) if "transposed" in lab else ("disagrees" in msg), msg)
 Zsq = Z80[:, :2]                                                  # m = k = 2: a transposed square Jacobian
 try:
     est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Zsq), jacobian=lambda th, y, X, Z: (-(Z.T @ X) / len(y)).T,
