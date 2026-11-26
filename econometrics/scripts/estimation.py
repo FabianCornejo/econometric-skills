@@ -1131,7 +1131,10 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
             "do not report the estimates or their SEs; add informative moments or fix a parameter from theory"))
     # persistence of the derivatives (review r2, S2-4): with persistent dg_i/dtheta' the iid or short-HAC variance of
     # the rank test is too small and its size is well above 5%. Warn when the largest lag-1 autocorrelation passes the
-    # cut AND the statistic, divided by the AR(1) factor of the long-run variance the kernel misses, no longer rejects
+    # cut AND the statistic, divided by the AR(1) factor of the long-run variance the kernel misses, no longer rejects.
+    # The row order is read as time order: a cross-section sorted by a variable gives a lag-1 autocorrelation of 0.97
+    # with iid data, so the text says the warning holds only for rows in time order (review r3, S2-3; decision of the
+    # user, 2026-11-26: always warn, with that condition in the text)
     ac_cut = 0.4 if not hac_lags else 0.6
     if np.isfinite(rank_p) and rank_p < alpha and np.isfinite(rank_ac1) and rank_ac1 >= ac_cut:
         r_ = min(rank_ac1, 0.99)
@@ -1145,9 +1148,11 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                 f"are persistent (largest lag-1 autocorrelation {rank_ac1:.2f}) and it was computed {lag_txt_r}: its "
                 f"size can be well above 5% (with n = 240, about 0.20 at 0.5 without lags and 0.40 at 0.9 with 4 "
                 f"lags), and divided by the long-run variance factor it misses ({f_res:.3g}) the statistic gives "
-                f"p = {p_defl:.3g}; the rejection is not reliable evidence of identification",
-                "pass hac_lags (or more lags), and judge identification also by the precision of the estimates and by "
-                "the criterion over a grid of the parameters"))
+                f"p = {p_defl:.3g}; if the rows are in time order, the rejection is not reliable evidence of "
+                f"identification (in a cross-section the row order means nothing and this warning does not apply)",
+                "for a time series: pass hac_lags (or more lags), and judge identification also by the precision of "
+                "the estimates and by the criterion over a grid of the parameters; the check sees only lag-1 "
+                "persistence, so its absence does not validate a rejection with seasonal persistence"))
     if n < 10 * m:
         warns.append(_finding("notice", f"{n} observations for {m} moments (< 10 per moment): S is estimated with "
                               "noise and J tends to over-reject",

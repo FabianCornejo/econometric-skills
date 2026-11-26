@@ -713,12 +713,14 @@ def _ar_p(r, n, rho, k):
     return x[200:]
 
 
-def _persist_fit(rho, pi, lags, seed, n=240):
+def _persist_fit(rho, pi, lags, seed, n=240, data=False):
     r = np.random.default_rng(seed)
     z = _ar_p(r, n, rho, 3)
     x = pi * z.sum(1) + _ar_p(r, n, rho, 1)[:, 0] + 1.0
     X, Z = np.column_stack([np.ones(n), x]), np.column_stack([np.ones(n), z])
     y = x + r.standard_normal(n)
+    if data:
+        return y, X, Z
     return est.gmm(_lin_moments, [0.0, 1.0], args=(y, X, Z), hac_lags=lags, steps="one-step", show=False), X, Z
 
 
@@ -730,6 +732,20 @@ check("v2.8.0 gmm (r2 S2-4): AR(0.9) instruments and regressor, irrelevant instr
       "rejects but gets the persistence warning; used['rank_test_ac1'] equals the lag-1 autocorrelation computed "
       "by np.corrcoef (abs 0.01)", per_h0["rank_p"] < 0.05 and pw(per_h0)
       and abs(per_h0["used"]["rank_test_ac1"] - ac_ref) < 0.01, (per_h0["rank_p"], per_h0["used"]["rank_test_ac1"], ac_ref))
+# review r3, S2-3/S2-4 (decision of 2026-11-26: always warn, with the condition in the text): the check reads the
+# row order as time order (a cross-section sorted by x has a lag-1 autocorrelation of 0.97 with iid data) and sees
+# only lag-1 persistence (seasonal persistence escapes it). The message and the action say both; and printed by show.
+pw_msg = [w for w in per_h0["warnings"] if "persistent" in w["message"]]
+check("v2.8.0 gmm (r3 S2-3/S2-4): the persistence warning says it holds only if the rows are in time order and not "
+      "in a cross-section, and its action that the check sees only lag-1 persistence (seasonal escapes it)",
+      len(pw_msg) == 1 and "if the rows are in time order" in pw_msg[0]["message"]
+      and "cross-section" in pw_msg[0]["message"] and "lag-1" in pw_msg[0]["action"]
+      and "seasonal" in pw_msg[0]["action"], [w["message"][-160:] for w in pw_msg])
+_buf_pw = io.StringIO()
+with contextlib.redirect_stdout(_buf_pw):
+    est.gmm(_lin_moments, [0.0, 1.0], args=_persist_fit(0.9, 0.0, None, 1, data=True), steps="one-step", show=True)
+check("v2.8.0 gmm (r3 S2-3): show prints the persistence warning with its time-order condition",
+      "if the rows are in time order" in _buf_pw.getvalue(), _buf_pw.getvalue()[-300:])
 per_iid, _, _ = _persist_fit(0.0, 0.3, None, 1)
 per_mod, _, _ = _persist_fit(0.5, 0.3, 4, 1)
 check("v2.8.0 gmm (r2 S2-4): strong instruments with iid data, and with AR(0.5) data and 4 lags: rejects, no "
