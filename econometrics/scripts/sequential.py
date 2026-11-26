@@ -136,6 +136,35 @@ def _expect_cont(f, a, b, dists=()):
     return float(val), ok
 
 
+_U_EDGES = (0.0, 1e-12, 1e-9, 1e-6, 1e-3, 0.5)
+
+
+def _expect_under(h, d):
+    """E_d[h(X)] = integral over u in (0, 1) of h(F_d^-1(u)), in the quantile scale of d (v2.8.0 review r2).
+
+    In the scale of x, a density whose mass is spread over many decades (Gamma(0.1): 6% of it below 1e-12) or that is
+    infinite at an edge of a bounded support (Beta(0.5, 0.5)) gave an error of 1e-5 without warning, or NaN; in the
+    quantile scale those are mild singularities at u = 0 or 1. The lower half uses ppf(u), the upper half isf(v),
+    v = 1 - u, so the right tail keeps its precision; pieces between 1e-12, 1e-9, 1e-6, 1e-3 and 1/2 on each side.
+    Returns (value, reliable): not reliable when quad warns on an outermost piece (a divergent tail, e.g. KL of a
+    Cauchy against a normal) or its error estimate exceeds 1e-8 of max(1, |value|)."""
+    import warnings as _w
+    val = err = 0.0
+    ok = True
+    for inv in (d.ppf, d.isf):
+        g = (lambda u, inv=inv: h(float(inv(u))))
+        for i, (lo_, hi_) in enumerate(zip(_U_EDGES[:-1], _U_EDGES[1:])):
+            with _w.catch_warnings(record=True) as rec:
+                _w.simplefilter("always", integrate.IntegrationWarning)
+                v, e = integrate.quad(g, lo_, hi_, limit=500, epsabs=1e-14, epsrel=1e-12)
+            if i == 0 and any(issubclass(r.category, integrate.IntegrationWarning) for r in rec):
+                ok = False
+            val += v
+            err += e
+    ok = bool(ok and np.isfinite(val) and np.isfinite(err) and err <= 1e-8 * max(1.0, abs(val)))
+    return float(val), ok
+
+
 def _kl_pair(p, q):
     """KL(p || q) for two frozen distributions of the same kind, or two probability vectors."""
     if isinstance(p, np.ndarray):
@@ -152,19 +181,19 @@ def _kl_pair(p, q):
         return float(np.sum(np.exp(lp[m]) * (lp[m] - lq[m])))
     a, b = p.support()
 
-    def f(x):
+    def h(x):
         lp = p.logpdf(x)
         if not np.isfinite(lp):
             return 0.0
         lq = q.logpdf(x)
         if not np.isfinite(lq):
             return np.inf
-        return np.exp(lp) * (lp - lq)
+        return lp - lq
 
     qa, qb = q.support()
     if a < qa or b > qb:
         return np.inf
-    val, ok = _expect_cont(f, a, b, (p, q))
+    val, ok = _expect_under(h, p)
     if not ok or val < -1e-9 * max(1.0, abs(val)):      # KL >= 0 (Gibbs): a negative value is an integration failure
         return float("nan")
     return max(val, 0.0)
@@ -210,11 +239,15 @@ def divergence(p, q, show: bool = True) -> dict:
       "warnings"         list of dicts with keys ["level", "message", "action"]
 
     p, q : two scipy frozen distributions of the same kind (both continuous or both discrete), or two probability
-           vectors over the same categories. Continuous cases are integrated numerically (scipy quad), in pieces
-           between quantiles of both distributions (so a narrow density far from 0 is not missed); discrete ones are
+           vectors over the same categories. Continuous KL and JS are expectations computed in the quantile scale
+           of the distribution they are taken under (scipy quad); the Chernoff coefficient is integrated in pieces
+           between quantiles of both, so a narrow density far from 0 or one spread over many decades is not
+           missed, and C is never below the Bhattacharyya distance; discrete ones are
            summed over the support (out to tails below 1e-17 when it is infinite). A value whose integral does not
            converge (e.g. the infinite KL of a Cauchy against a normal) is NaN with a warning, never a guess.
-           Precision is limited by rounding in the densities: about eps * |location| / scale relative.
+           Precision is limited by rounding in the densities: about eps * |location| / scale relative, and, when a
+           density is infinite at an edge of a bounded support, by the mass within one ulp of that edge
+           (KL(Beta(0.5, 0.5) || Beta(2, 2)): 3e-7).
     Uses in this skill: KL(f0 || f1) and KL(f1 || f0) are the expected log-likelihood-ratio steps of an SPRT under
     each hypothesis (sprt_design) and Stein's exponents of the error of a fixed-sample test; C is the exponent of the
     smallest attainable average error with equal priors, P_e(n) ~ exp(-n C) (Chernoff 1952); JS is symmetric and
@@ -247,27 +280,40 @@ def divergence(p, q, show: bool = True) -> dict:
         a = min(p.support()[0], q.support()[0])
         b = max(p.support()[1], q.support()[1])
 
-        def jsf(x):
-            fp, fq = float(np.exp(p.logpdf(x))), float(np.exp(q.logpdf(x)))
-            fm = (fp + fq) / 2
-            if fm <= 0:
-                return 0.0
-            out = 0.0
-            if fp > 0:
-                out += 0.5 * fp * np.log(fp / fm)
-            if fq > 0:
-                out += 0.5 * fq * np.log(fq / fm)
-            return out
+        def half(d, o):
+            # log(d / m) with m = (d + o)/2, in logs: log 2 - log(1 + o/d); bounded above by log 2
+            def h(x):
+                ld, lo_ = d.logpdf(x), o.logpdf(x)
+                if not np.isfinite(lo_):
+                    return np.log(2.0)
+                return float(np.log(2.0) - np.logaddexp(0.0, lo_ - ld))
+            return _expect_under(h, d)
 
-        js, js_ok = _expect_cont(jsf, a, b, (p, q))
-        js = float(js) if js_ok else float("nan")
+        (j1, ok1), (j2, ok2) = half(p, q), half(q, p)
+        js = 0.5 * (j1 + j2) if ok1 and ok2 else float("nan")
     bhat = -_log_rho(p, q, 0.5)
     if np.isnan(bhat):
         chern = phi = float("nan")
     else:
-        res = optimize.minimize_scalar(lambda ph: _log_rho(p, q, ph), bounds=(1e-9, 1 - 1e-9), method="bounded",
-                                       options={"xatol": 1e-10})
-        chern, phi = -float(res.fun), float(res.x)
+        # C = max over phi of -log rho(phi) >= the value at 1/2 (Bhattacharyya). A NaN anywhere in the search makes C
+        # NaN (it gave C < B: the bounded search read NaN as a value; v2.8.0 review r2)
+        seen_nan = []
+
+        def lr(ph):
+            v = _log_rho(p, q, ph)
+            if np.isnan(v):
+                seen_nan.append(ph)
+                return np.inf
+            return v
+        grid = np.linspace(0.05, 0.95, 19)
+        vals = [lr(g) for g in grid]
+        i = int(np.argmin(vals))
+        res = optimize.minimize_scalar(lr, bounds=(grid[max(i - 1, 0)] if i > 0 else 1e-9,
+                                                   grid[min(i + 1, 18)] if i < 18 else 1 - 1e-9),
+                                       method="bounded", options={"xatol": 1e-10})
+        cands = [(float(res.fun), float(res.x)), (vals[i], float(grid[i])), (-bhat, 0.5)]
+        best = min(cands)
+        chern, phi = (float("nan"), float("nan")) if seen_nan else (-best[0], best[1])
     warns = []
     bad = [nm for nm, v in (("KL(p||q)", kl_pq), ("KL(q||p)", kl_qp), ("JS", js), ("Chernoff", chern),
                             ("Bhattacharyya", bhat)) if np.isnan(v)]
@@ -661,16 +707,14 @@ def _llr_moments(dist0, dist1, under):
         m = w > 0
         mu = float(np.sum(w[m] * r[m]))
         return mu, float(np.sum(w[m] * (r[m] - mu) ** 2))
-    a, b = under.support()
-
     def f(x, k):
-        lp = under.logpdf(x)
-        if not np.isfinite(lp):
+        if not np.isfinite(under.logpdf(x)):
             return 0.0
-        return float(np.exp(lp) * _llr(np.array([x]), dist0, dist1)[0] ** k)
+        return float(_llr(np.array([x]), dist0, dist1)[0] ** k)
 
-    m1, ok1 = _expect_cont(lambda x: f(x, 1), a, b, (dist0, dist1))
-    m2, ok2 = _expect_cont(lambda x: f(x, 2), a, b, (dist0, dist1))
+    # in the quantile scale of `under`, like the KL (v2.8.0 review r2)
+    m1, ok1 = _expect_under(lambda x: f(x, 1), under)
+    m2, ok2 = _expect_under(lambda x: f(x, 2), under)
     if not (ok1 and ok2):
         return float("nan"), float("nan")
     return float(m1), float(m2 - m1 ** 2)

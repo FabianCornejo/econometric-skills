@@ -381,6 +381,55 @@ g2 = abs(sq._amr_size(z2, 20, True) - sq._amr_size(z2, 20, True, npt=1201))
 check("peeking_size: 20 looks, default grid against a 3x finer one: within 1e-8 one-sided and two-sided",
       g1 < 1e-8 and g2 < 1e-8, (g1, g2))
 
+# ------------------------------------------------------------------------------------- v2.8.0 review r2
+# S2-5: in the scale of x, densities spread over many decades or infinite at an edge gave silent errors of ~1e-5
+# (Gamma(0.1), Beta(0.1, 5)) or NaN (Beta(0.5, 0.5)); KL, JS and the LLR moments are now expectations in the quantile
+# scale. References: closed forms (digamma) and, for JS of two Cauchys and the Beta(0.5, 0.5) KL, mpmath quad at 30
+# digits (claude/scripts/v280/r2_js_cauchy_ref.py in the development repository).
+from scipy import special as _sp
+
+
+def _kl_gamma(a1, a2):              # unit rate
+    return (a1 - a2) * _sp.digamma(a1) - _sp.gammaln(a1) + _sp.gammaln(a2)
+
+
+def _kl_beta(a1, b1, a2, b2):
+    return (_sp.betaln(a2, b2) - _sp.betaln(a1, b1) + (a1 - a2) * _sp.digamma(a1) + (b1 - b2) * _sp.digamma(b1)
+            + (a2 - a1 + b2 - b1) * _sp.digamma(a1 + b1))
+
+
+edge = []
+for p_, q_, ref_, rt_ in ((stats.gamma(0.1), stats.gamma(1.0), _kl_gamma(0.1, 1.0), 1e-10),
+                          (stats.beta(0.1, 5), stats.beta(1, 1), _kl_beta(0.1, 5, 1, 1), 1e-10),
+                          (stats.beta(2, 2), stats.beta(0.5, 0.5), _kl_beta(2, 2, 0.5, 0.5), 1e-10),
+                          (stats.beta(0.5, 0.5), stats.beta(2, 2), 1.2223937282822159, 1e-6)):
+    r_ = sq.divergence(p_, q_, show=False)
+    edge.append((near(r_["kl_pq"], ref_, rt_ * ref_) and not r_["warnings"], r_["kl_pq"], ref_))
+check("divergence (r2 S2-5): KL of Gamma(0.1) || Exp(1) and Beta(0.1, 5) || U(0, 1) equal the closed forms (rel 1e-10; "
+      "they were off by 1.8e-5), Beta(0.5, 0.5) || Beta(2, 2) within 1e-6 (it was NaN; the limit is the mass within one "
+      "ulp of the edge), no warning", all(e[0] for e in edge), edge)
+jc = sq.divergence(stats.cauchy(0, 1), stats.cauchy(1, 1), show=False)
+check("divergence (r2 S2-5): JS of Cauchy(0, 1) and Cauchy(1, 1) = 0.054230661598 (mpmath; it was NaN), KL = "
+      "log(5/4) both ways (rel 1e-10)", near(jc["js"], 0.054230661598185154, 1e-10)
+      and near(jc["kl_pq"], np.log(1.25), 1e-10 * np.log(1.25)) and not jc["warnings"], (jc["js"], jc["kl_pq"]))
+bh = []
+for p_, q_, ref_ in ((stats.gamma(0.1), stats.gamma(1.0), -(_sp.gammaln(0.55) - 0.5 * (_sp.gammaln(0.1) + _sp.gammaln(1)))),
+                     (stats.beta(0.5, 0.5), stats.beta(2, 2),
+                      -(_sp.betaln(1.25, 1.25) - 0.5 * (_sp.betaln(0.5, 0.5) + _sp.betaln(2, 2))))):
+    r_ = sq.divergence(p_, q_, show=False)
+    bh.append((near(r_["bhattacharyya"], ref_, 1e-10 * ref_) and r_["chernoff"] >= r_["bhattacharyya"], r_["bhattacharyya"], ref_))
+check("divergence: Bhattacharyya of Gamma(0.1) vs Exp(1) and Beta(0.5, 0.5) vs Beta(2, 2) = -log of the closed-form "
+      "Bhattacharyya coefficient (rel 1e-10), Chernoff >= Bhattacharyya", all(b[0] for b in bh), bh)
+# Chernoff C = max over phi of -log rho(phi) >= the value at 1/2; the search read a NaN rho as a value and gave C < B
+cc = sq.divergence(stats.cauchy(0, 1), stats.cauchy(1e6, 1e3), show=False)
+check("divergence (r2 S2-5): Cauchy vs Cauchy(1e6, 1e3): Chernoff is NaN with a warning or >= Bhattacharyya (it was "
+      "7.493 < 7.717)", (np.isnan(cc["chernoff"]) and any("Chernoff" in w["message"] for w in cc["warnings"]))
+      or cc["chernoff"] >= cc["bhattacharyya"], (cc["chernoff"], cc["bhattacharyya"]))
+# the LLR moments of n_for_error / sprt_design (the same integral as the KL, fixed with it)
+sg = sq.sprt_design(stats.gamma(0.1), stats.gamma(1.0), n_sim=200, seed=1, show=False)
+check("sprt_design: Gamma(0.1) vs Exp(1): kl_10 = KL(f1 || f0) closed form (rel 1e-10)",
+      near(sg["kl_10"], _kl_gamma(1.0, 0.1), 1e-10 * _kl_gamma(1.0, 0.1)), sg["kl_10"])
+
 # ------------------------------------------------------------------------------------------------- used keys
 check("all functions: 'used' carries the skill version and 'warnings' are dicts with level, message and action",
       all(r_["used"]["skill_version"] for r_ in (d, rm, sd, r3, pk[10], nf, it1))
