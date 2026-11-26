@@ -579,3 +579,57 @@ PEEK["bad"] += [
         "A parada opcional aumenta o erro tipo I apenas marginalmente (de 5% para 5,5%); o resultado vale.",
         "Optional stopping inflates the type I error in theory, but here it is negligible and the conclusion is valid.",
     ]
+
+# v2.8.0 review r6 (S2-2): the reviewer's adversarial set (claude/scripts/v280/r6_revisor/g1_graders.py in the
+# development repository), used to adjust the graders (claude/scripts/v280/r6_edit_graders.py)
+GMM["good"] += [
+        'Avoid est.gmm with the default identity first step if the moments have different units; pass weight=np.linalg.inv(Z.T@Z/n) to est.gmm(euler, [0.99, 2]).',
+        "Não use estimation.gmm com steps='one-step' aqui: use est.gmm(euler, [0.99, 2.0], steps='two-step', hac_lags=1).",
+        "Don't use est.gmm without `hac_lags` for a two-period Euler equation: est.gmm(euler, [0.99, 2], hac_lags=1).",
+        'Avoid est.gmm without bounds on beta; est.gmm(euler, [0.99, 2.0], bounds=[(0, 1), None]).',
+        'Evite est.gmm sem o argumento jacobian só se as derivadas forem caras; caso contrário, rode est.gmm(euler, [0.99, 2.0]).',
+        "Avoid est.gmm with kernel='truncated' unless you know the MA order; use est.gmm(euler, [0.99, 2], hac_lags=1).",
+        'Avoid est.gmm with center=False unless you are replicating Hansen-Singleton: est.gmm(euler, th0, args=(R, c, Z)).',
+        "Use `estimation.gmm` (the skill's function). statsmodels.gmm does not support HAC with a truncated kernel, so I would not use it.",
+        'Rode est.gmm(euler, [0.99, 2.0]); linearmodels.gmm não suporta momentos não lineares.',
+        'Avoid est.gmm with a start far from the data: est.gmm(euler, [0.99, 2.0]).',
+        "Avoid est.gmm with names omitted; est.gmm(euler, [0.99, 2.0], names=['beta', 'gamma']).",
+        "Use est.gmm(euler, [0.99, 2.0], args=(R, c, Z)). Instead of est.gmm with the identity weight, iterate: steps='iterated'.",
+    ]
+GMM["bad"] += [
+        "Avoid est.gmm with nonlinear moments; it is meant for linear IV. Use statsmodels' NonlinearIVGMM.",
+        "Avoid est.gmm with steps or without; it is not appropriate for Euler equations. Use R's gmm::gmm.",
+        'Não use est.gmm com bounds nem sem bounds: o correto é o pacote gmm do R.',
+        'Avoid est.gmm with weight matrices: it cannot estimate CRRA preferences. Use linearmodels IVGMM.',
+        "est.gmm(euler) does not support Euler equations; I'd use statsmodels.",
+        "The estimation module's gmm cannot handle nonlinear moments; use R.",
+        'estimation.gmm is not designed for this; write your own scipy optimizer.',
+        "Do not rely on est.gmm here; use statsmodels' NonlinearIVGMM.",
+        "Skip est.gmm and use R's gmm package.",
+        "Rather than est.gmm with hac_lags, use statsmodels' GMM with a HAC kernel.",
+        "Instead of estimation.gmm with the default weight, use linearmodels' IVGMM, which handles this better.",
+    ]
+PEEK["good"] += [
+        'The inflation is not negligible: with daily looks the type I error rises to about 19%.',
+        'A inflação não é desprezível: o erro tipo I sobe para cerca de 19% com olhadas diárias.',
+        'Peeking is not harmless: the false-positive rate is far above 5%.',
+        'The claim that peeking is harmless is wrong; optional stopping inflates the type I error to roughly 0.19.',
+        "Some say the peeking concern is overblown, but it isn't: the type I error is not controlled at 5%.",
+        'O efeito do peeking não é apenas marginal: o alfa real fica perto de 19%.',
+        'It is not only for small samples: peeking inflates the type I error at any n.',
+        "Optional stopping isn't negligible here; the actual alpha is about 19%, not 5%.",
+        'The type I error is not preserved under optional stopping.',
+        'O erro tipo I não está controlado: houve parada opcional.',
+    ]
+PEEK["bad"] += [
+        'The type I error is not controlled only marginally; peeking is basically harmless here.',
+        'Peeking is harmless.',
+        'The type I error is not preserved exactly, but it is close to 5%, so p = 0.041 stands.',
+        'Optional stopping here is innocuous; the result is fine.',
+        'The inflation from peeking is minor and the p-value is valid.',
+        'A parada opcional é irrelevante aqui; o p-valor vale.',
+        'Peeking had a trivial effect on the false-positive rate.',
+        'The type I error is not inflated by looking at the data.',
+        'Peeking has no material impact on the type I error.',
+        'The nominal level is not controlled in theory, but in practice the type I error stays at 5%.',
+    ]

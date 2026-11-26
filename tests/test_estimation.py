@@ -1148,9 +1148,15 @@ zz_ = r_zc.standard_normal((300, 3)); xz_ = zz_.sum(1) + r_zc.standard_normal(30
 mom_zc = lambda t: (yz_ - t[0] * xz_)[:, None] * zz_
 jac_zc = lambda t: np.column_stack([-(zz_ * xz_[:, None]).mean(0), np.full(3, 1e-20)])
 g_zc = _gmm_or_failed(mom_zc, [1.0, 0.5], jacobian=jac_zc, show=False)
-check("v2.8.0 gmm (r3 S3): a parameter outside the moments, with noise of 1e-20 in its analytic column: no jacobian "
-      "warning (the column moves the moments by less than rounding), and the 'may not be identified' warning",
-      not any("jacobian" in w["message"] for w in g_zc["warnings"])
+# since r6 the column is also checked at the estimate: the 1e-20 column lets theta2 run to about -8e19, where it
+# claims a change of the moments of about 0.8 of their scale over the estimate's own size, which the moments (that
+# ignore theta2) do not show: "probably wrong" (do not report), with the rank test's "may not be identified"
+check("v2.8.0 gmm (r3 S3, r6): a parameter outside the moments, with noise of 1e-20 in its analytic column: no "
+      "'disagrees' or 'not checked' warning, the 'do not change at all' warning (theta2 ran to ~-8e19) and the 'may "
+      "not be identified' warning",
+      not any(("disagrees" in w["message"] or "not checked" in w["message"]) for w in g_zc["warnings"])
+      and any("do not change at all" in w["message"] for w in g_zc["warnings"])
+      and abs(g_zc["params"].iloc[1]) > 1e15
       and any("may not be identified" in w["message"] for w in g_zc["warnings"]),
       [w["message"][:70] for w in g_zc["warnings"]])
 
@@ -1330,6 +1336,74 @@ with contextlib.redirect_stdout(buf):
     est.lr_test(fu, fr)
 check("v2.8.0 lr_test show: prints LR, df, 'p (right tail)' and the CDF labelled as not the p-value",
       "LR =" in buf.getvalue() and "p (right tail)" in buf.getvalue() and "not the p-value" in buf.getvalue())
+
+
+# v2.8.0 review r6. S1-1: the Jacobian is also checked at the estimate. Euler equation beta g^-gamma R - 1 with three
+# instruments; two typical bugs agree with the right Jacobian at the natural start (beta, gamma) = (1, 0): g^+gamma
+# instead of g^-gamma (equal at gamma = 0) and a missing factor beta in the gamma column (equal at beta = 1). Both
+# passed with no warning (gamma -8.29 instead of 5.66 with the first); the right Jacobian gets none.
+r_e6 = np.random.default_rng(0)
+g_e6 = np.exp(0.005 + 0.01 * r_e6.standard_normal(900))
+R_e6 = np.exp(0.003 + 0.04 * r_e6.standard_normal(900) + 2 * np.log(g_e6) - 0.01)
+Z_e6 = np.column_stack([np.ones(899), g_e6[:-1], R_e6[:-1]])
+gg_e6, RR_e6 = g_e6[1:], R_e6[1:]
+mom_e6 = lambda t: (t[0] * gg_e6 ** (-t[1]) * RR_e6 - 1)[:, None] * Z_e6
+
+
+def _jac_e6(t, sign=-1.0, beta_factor=True):
+    e_ = gg_e6 ** (sign * t[1]) * RR_e6
+    d_gamma = -(t[0] if beta_factor else 1.0) * np.log(gg_e6) * e_
+    return np.column_stack([(e_[:, None] * Z_e6).mean(0), (d_gamma[:, None] * Z_e6).mean(0)])
+
+
+r_e6_ok = _jac_fit(mom_e6, [1.0, 0.0], jacobian=_jac_e6)
+r_e6_sign = _jac_fit(mom_e6, [1.0, 0.0], jacobian=lambda t: _jac_e6(t, sign=1.0))
+r_e6_beta = _jac_fit(mom_e6, [1.0, 0.0], jacobian=lambda t: _jac_e6(t, beta_factor=False))
+check("v2.8.0 gmm (r6 S1-1): a Jacobian wrong only away from theta0 (g^+gamma, start gamma = 0; no factor beta, start "
+      "beta = 1) is flagged 'probably wrong' at the estimate; the right one is not flagged",
+      _wrong(r_e6_sign) and _wrong(r_e6_beta, 1)
+      and all(any("at the estimate" in m and "probably wrong" in m for m in r_[1]) for r_ in (r_e6_sign, r_e6_beta))
+      and r_e6_ok[0] == "fit" and not any(m.startswith("jacobian") for m in r_e6_ok[1]),
+      (r_e6_ok, r_e6_sign, r_e6_beta))
+
+# S1-2: a made-up Jacobian column for a parameter that enters no moment was used (theta2 = 1.08, SE 0.196) with only
+# "not checked" and no rank test; it is now "probably wrong" (do not report) and the rank test is computed (it says
+# "not identified")
+r_e7 = np.random.default_rng(7)
+z_e7 = r_e7.standard_normal((500, 2)); x_e7 = z_e7 @ [1.0, 0.5] + r_e7.standard_normal(500)
+y_e7 = 2.0 * x_e7 + r_e7.standard_normal(500)
+mom_e7 = lambda t: (y_e7 - t[0] * x_e7)[:, None] * z_e7          # t[1] enters no moment
+jac_e7 = lambda t: np.column_stack([-(z_e7 * x_e7[:, None]).mean(0), [0.3, -0.2]])
+f_e7 = est.gmm(mom_e7, [0.0, 0.7], jacobian=jac_e7, show=False)
+m_e7 = [w["message"] for w in f_e7["warnings"]]
+check("v2.8.0 gmm (r6 S1-2): a non-zero Jacobian column for a parameter outside the moments is 'probably wrong' "
+      "(do not report), and the rank test is computed and does not reject",
+      any("do not change at all" in m and "column(s) [1]" in m for m in m_e7)
+      and any(w["action"].startswith("do not report") and "do not change at all" in w["message"]
+              for w in f_e7["warnings"])
+      and np.isfinite(f_e7["rank_p"]) and f_e7["rank_p"] > 0.05, (m_e7, f_e7["rank_p"]))
+
+# S1-3: the SVD of the rank test's null spaces built an n x n matrix in every fit with k >= 2 (n = 2e4 ran out of
+# memory, n = 1e5 asked for 74.5 GiB). IV with an intercept and a slope, n = 12 000: 2.3 GB traced before, 4 MB now
+import tracemalloc  # noqa: E402
+r_e8 = np.random.default_rng(8)
+z_e8 = r_e8.standard_normal((12_000, 2)); x_e8 = z_e8 @ [1.0, 0.5] + r_e8.standard_normal(12_000)
+y_e8 = 0.5 + 1.5 * x_e8 + r_e8.standard_normal(12_000)
+Z_e8 = np.column_stack([np.ones(12_000), z_e8])
+tracemalloc.start()
+f_e8 = est.gmm(lambda t: (y_e8 - t[0] - t[1] * x_e8)[:, None] * Z_e8, [0.0, 0.0], show=False)
+peak_e8 = tracemalloc.get_traced_memory()[1]
+tracemalloc.stop()
+check("v2.8.0 gmm (r6 S1-3): IV (intercept and slope) with n = 12 000 peaks under 200 MB traced (2.3 GB before) and "
+      "estimates the slope (true 1.5, |error| < 0.03)", peak_e8 < 2e8 and abs(f_e8["params"].iloc[1] - 1.5) < 0.03,
+      (peak_e8, f_e8["params"].iloc[1]))
+
+# S3-4: step-function moments started outside the data gave scipy's raw "Residuals are not finite in the initial point"
+y_e9 = 10 + np.random.default_rng(9).standard_normal(500)
+r_e9 = _jac_fit(lambda t: ((y_e9 <= t[0]) - 0.5)[:, None], [0.0])
+check("v2.8.0 gmm (r6 S3-4): a moment with zero variance (median started below every observation) stops with a message "
+      "that says so and to start inside the data", r_e9[0] == "error" and "zero variance" in r_e9[1]
+      and "start inside the data" in r_e9[1], r_e9)
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

@@ -474,6 +474,22 @@ check("divergence (r5 S1-6): Exp(loc 1e9, scale 1e-6) against scale 1.01e-6: eve
       all(np.isnan(dres[k_]) for k_ in ("kl_pq", "kl_qp", "js", "chernoff", "bhattacharyya"))
       and any("spacing of floating-point numbers" in w["message"] for w in dres["warnings"]), dres["warnings"])
 
+# review r6, S1-4: the rule looked only at finite support edges, so two normals at 1e9 with sd 1e-6 (KL 0.5) came out
+# 0.4547 (-9.1%) without a warning; it now looks at the quartiles, where the mass is
+dnf = sq.divergence(stats.norm(1e9, 1e-6), stats.norm(1e9 + 1e-6, 1e-6), show=False)
+check("divergence (r6 S1-4): N(1e9, 1e-6) against N(1e9 + 1e-6, 1e-6): every value NaN with the warning (KL 0.5 was "
+      "0.4547, silently)", all(np.isnan(dnf[k_]) for k_ in ("kl_pq", "kl_qp", "js", "chernoff", "bhattacharyya"))
+      and any("spacing of floating-point numbers" in w["message"] for w in dnf["warnings"]), dnf["warnings"])
+# S2-1: a support edge at 1e12 with no mass near it (genextreme with c = 1e-12, practically a Gumbel) gave a false NaN;
+# KL(p || q) and JS now equal the Gumbel's (the same function on scipy's gumbel_r, which has no edge)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    dgx = sq.divergence(stats.genextreme(1e-12), stats.norm(0, 1.5), show=False)
+    dgu = sq.divergence(stats.gumbel_r(), stats.norm(0, 1.5), show=False)
+check("divergence (r6 S2-1): genextreme(c = 1e-12) against N(0, 1.5): KL(p || q) and JS equal the Gumbel's (rel 1e-6), "
+      "not NaN", near(dgx["kl_pq"], dgu["kl_pq"], 1e-6 * dgu["kl_pq"]) and near(dgx["js"], dgu["js"], 1e-6 * dgu["js"]),
+      (dgx["kl_pq"], dgu["kl_pq"], dgx["js"], dgu["js"]))
+
 sg = sq.sprt_design(stats.gamma(0.1), stats.gamma(1.0), n_sim=200, seed=1, show=False)
 check("sprt_design: Gamma(0.1) vs Exp(1): kl_10 = KL(f1 || f0) closed form (rel 1e-10)",
       near(sg["kl_10"], _kl_gamma(1.0, 0.1), 1e-10 * _kl_gamma(1.0, 0.1)), sg["kl_10"])
