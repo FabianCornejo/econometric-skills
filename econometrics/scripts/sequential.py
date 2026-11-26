@@ -270,8 +270,9 @@ def divergence(p, q, show: bool = True) -> dict:
            (Gamma(0.01) has 5.9e-4 of it below the smallest double) the value is NaN with a warning, and so are
            Bhattacharyya and C if log rho > 0 (rho <= 1 by Hoelder). Time: seconds per continuous pair (2.6 s
            for two normals, 5.6 to 7 s for a noncentral chi-square or a gamma, 12.8 s for t(1.5) against t(3), up to
-           ~30 s for genhyperbolic or families shifted far from 0; 2 CPUs), the price of the quantile scale; avoid it
-           inside loops over many pairs.
+           ~50 s for genhyperbolic or families shifted far from 0; 2 CPUs), the price of the quantile scale; avoid
+           it inside loops over many pairs. An edge so far from 0 that the spacing of floats there exceeds 1e-6 of
+           the interquartile range gives NaN with a warning (the error would be 3 to 5 times that spacing).
     Uses in this skill: KL(f0 || f1) and KL(f1 || f0) are the expected log-likelihood-ratio steps of an SPRT under
     each hypothesis (sprt_design) and Stein's exponents of the error of a fixed-sample test; C is the exponent of the
     smallest attainable average error with equal priors, P_e(n) ~ exp(-n C) (Chernoff 1952); JS is symmetric and
@@ -290,6 +291,31 @@ def divergence(p, q, show: bool = True) -> dict:
         if _is_discrete(p) != _is_discrete(q):
             raise ValueError("p and q must both be continuous or both discrete")
         kind = "discrete" if _is_discrete(p) else "continuous"
+    if kind == "continuous":
+        # a finite edge far from 0 compared with the scale (an exponential at 1e9 with scale 1e-6): the doubles near
+        # the edge are spaced by a sizeable share of the distribution, and the integrals were wrong by up to 120%
+        # without a warning (v2.8.0 review r5, S1-6). Measured (claude/scripts/v280/r5_div_resolution.py in the
+        # development repository): relative error about 3 to 5 times np.spacing(edge) / interquartile range; above
+        # 1e-6 every value is NaN with a warning.
+        worst = 0.0
+        for d_ in (p, q):
+            iqr = float(d_.ppf(0.75) - d_.ppf(0.25))
+            for e_ in d_.support():
+                if np.isfinite(e_) and iqr > 0:
+                    worst = max(worst, float(np.spacing(abs(e_))) / iqr)
+        if worst > 1e-6:
+            nan = float("nan")
+            warns0 = [_finding("warning", "divergences not computed: an edge of the support is so far from 0 that "
+                               f"the spacing of floating-point numbers there is {worst:.2g} of the interquartile "
+                               "range, and "
+                               "the integrals lose that precision", "shift both distributions so the edge is near 0 "
+                               "(the divergences do not change under a common shift) and compute again")]
+            out = {"kl_pq": nan, "kl_qp": nan, "js": nan, "chernoff": nan, "chernoff_phi": nan, "bhattacharyya": nan,
+                   "used": {"kind": kind, "skill_version": _sv()}, "warnings": warns0}
+            if show:
+                print(f"\nDivergences ({kind}): not computed")
+                _print_findings(warns0)
+            return out
     kl_pq, kl_qp = _kl_pair(p, q), _kl_pair(q, p)
     # Jensen-Shannon with the mixture m = (p + q)/2
     if kind == "vectors":
@@ -348,7 +374,8 @@ def divergence(p, q, show: bool = True) -> dict:
     if bad:
         warns.append(_finding("warning", f"{', '.join(bad)} not computed: the numerical integral did not converge, "
                               "lost mass at an edge where the quantile underflows, or broke KL >= 0 or rho <= 1 (a "
-                              "KL is infinite when p has much heavier tails than q, e.g. Cauchy against normal)", "compute the divergence in closed form, or check the tails of p and q; "
+                              "KL is infinite when p has much heavier tails than q, e.g. Cauchy against normal)",
+                              "compute the divergence in closed form, or check the tails of p and q; "
                               "do not use the NaN values"))
     if np.isfinite(kl_pq) and np.isfinite(kl_qp) and np.isfinite(chern) and np.isfinite(bhat):
         upper = kl_pq * kl_qp / (kl_pq + kl_qp) if kl_pq + kl_qp > 0 else 0.0

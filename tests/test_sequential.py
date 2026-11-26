@@ -465,6 +465,15 @@ except Exception as e_:
 check("divergence (r4 S2-c): KL(Exp(loc 1e9) || Exp(loc 1e9, scale 1.01)) = log 1.01 + 1/1.01 - 1 (rel 1e-6) and JS "
       "finite (they were NaN)", sh_ok, dsh if not sh_ok else None)
 
+# review r5, S1-6: with the edge-mass rule limited to infinite densities, an exponential at 1e9 with scale 1e-6 came
+# out wrong by 16% (kl_qp) and 120% (kl_pq at scale 3e-7) without a warning: the doubles there are 1.2e-7 apart. Now
+# NaN with a warning when np.spacing(edge) / interquartile range > 1e-6; at 1e9 with scale 1 (1.2e-7) the value holds.
+dres = sq.divergence(stats.expon(loc=1e9, scale=1e-6), stats.expon(loc=1e9, scale=1.01e-6), show=False)
+check("divergence (r5 S1-6): Exp(loc 1e9, scale 1e-6) against scale 1.01e-6: every value NaN with a warning about the "
+      "spacing of floating-point numbers at the edge (they were wrong by 16%, silently)",
+      all(np.isnan(dres[k_]) for k_ in ("kl_pq", "kl_qp", "js", "chernoff", "bhattacharyya"))
+      and any("spacing of floating-point numbers" in w["message"] for w in dres["warnings"]), dres["warnings"])
+
 sg = sq.sprt_design(stats.gamma(0.1), stats.gamma(1.0), n_sim=200, seed=1, show=False)
 check("sprt_design: Gamma(0.1) vs Exp(1): kl_10 = KL(f1 || f0) closed form (rel 1e-10)",
       near(sg["kl_10"], _kl_gamma(1.0, 0.1), 1e-10 * _kl_gamma(1.0, 0.1)), sg["kl_10"])

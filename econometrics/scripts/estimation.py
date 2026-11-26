@@ -602,7 +602,8 @@ def _gmm_rank_test(G_of, th, lags, h=None):
     Precision: with a regressor stored with an offset up to 1e4, with or without HAC lags, the statistic matches the
     well-scaled one to 1e-6 and does not depend on the random starts of the search; with 3e4 and a small statistic
     (~1) the finite differences leave ~1e-5 (with exact derivatives 1e-7), and 1e5 matches to 1e-5. A regressor in
-    units of 1e9 (a scale within one moment) gives the same statistic as in units of 1. Centre a regressor with a
+    units of 1e9 (a scale within one moment, along a parameter) gives the same statistic as in units of 1; a
+    disparity not along a parameter (two collinear regressors in large units) is not covered. Centre a regressor with a
     large offset.
     Returns (stat, df, ac1, capped); (nan, df, nan, False) when the moments are not finite next to the estimate;
     capped is True when the candidate subspaces passed their cap (the statistic is then an upper bound). ac1 is the
@@ -646,7 +647,8 @@ def _gmm_rank_test(G_of, th, lags, h=None):
 # S1-a) took a regressor in units of 1e9 for a null direction and gave "not identified" (5.97 instead of 153.9).
 _RANK_NULL_TOL = 1e-8
 _RANK_MAX_SUBSPACES = 200
-_RANK_BUDGET_S = 30.0
+_RANK_BUDGET_EVALS = 150_000     # evaluations of the Wald for the null-space candidates (machine-independent)
+_RANK_HYPER_EVALS = 3_000        # and for the hyperplanes, which never set "capped"
 
 
 def _gmm_rank_search(Di, Dbar, Om, M2):
@@ -662,10 +664,10 @@ def _gmm_rank_search(Di, Dbar, Om, M2):
     dropped explicitly (none left: the statistic is 0). Inside each candidate the directions are searched in
     coordinates preconditioned by A = sum_j M2_jj / tr M2_jj restricted to it: a regressor stored with a large offset
     made a valley of width ~1/offset, and the result depended on the random starts (review r3, S2-1). The candidates
-    beyond the whole space are searched from the largest down within a budget of _RANK_BUDGET_S seconds and
-    _RANK_MAX_SUBSPACES subspaces (fixed-effects designs with group dummies have many; review r4, S2-b); past either,
-    capped is True and the statistic is an upper bound."""
-    import time as _time
+    beyond the whole space are searched from the largest down within a budget of _RANK_BUDGET_EVALS evaluations of
+    the Wald and _RANK_MAX_SUBSPACES subspaces (fixed-effects designs with group dummies have many; review r4, S2-b;
+    a count, not seconds, so the result does not depend on the machine: review r5); past either, capped is True and
+    the statistic is an upper bound. The hyperplanes come last, with their own budget, and never set capped."""
     n, m, k = Di.shape
     M2j = [M2[j, :, j, :] for j in range(m)]
     tr = np.array([np.trace(B) for B in M2j])
@@ -743,7 +745,10 @@ def _gmm_rank_search(Di, Dbar, Om, M2):
             cands.append((Sn, dropped_on(Sn)))
             queue.append(len(cands) - 1)
 
+    n_eval = [0]
+
     def wald(c, drop):
+        n_eval[0] += 1
         # Each moment is standardized by its own scale along c (root of the uncentred second moment of its derivative)
         # before any cut, so the cuts are scale-free per moment (review r2, S1-1); the Wald is invariant to that
         # diagonal rescaling.
@@ -796,26 +801,34 @@ def _gmm_rank_search(Di, Dbar, Om, M2):
 
     rng = np.random.default_rng(0)
     best = np.inf
-    t_start = _time.time()
-    cands = cands[:1] + [(H, frozenset(j for j in range(m) if dead[j])) for H in hyper] + cands[1:]
-    n_hyper = len(hyper)
-    order = [0] + list(range(1, 1 + n_hyper)) + sorted(range(1 + n_hyper, len(cands)),
-                                                        key=lambda i: -cands[i][0].shape[1])
+    n_null = len(cands)
+    cands = cands + [(H, frozenset(j for j in range(m) if dead[j])) for H in hyper]
+    # the whole space, then the null-space candidates from the largest down (their budget sets "capped": one left out
+    # may hold the minimum), then the hyperplanes (a refinement: cheap, own budget, never "capped"; review r5, S1-2:
+    # searched first and with multistart they made a plain IV design take 5x as long and say "capped" falsely)
+    order = [0] + sorted(range(1, n_null), key=lambda i: -cands[i][0].shape[1]) + list(range(n_null, len(cands)))
+    hyper_start = None
     # the Wald is inf along directions in which a moment moves deterministically: BFGS then differences inf and warns
     # (RuntimeWarning, noise in the user's console; review r2); the values it returns are still compared
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         for idx in order:
-            if idx > 0 and _time.time() - t_start > _RANK_BUDGET_S:
+            is_hyper = idx >= n_null
+            if not is_hyper and idx > 0 and n_eval[0] > _RANK_BUDGET_EVALS:
                 capped = True
-                break
+                continue
+            if is_hyper:
+                if hyper_start is None:
+                    hyper_start = n_eval[0]
+                if n_eval[0] - hyper_start > _RANK_HYPER_EVALS:
+                    break
             S, drop = cands[idx]
             Pm = precond(S)
             d = S.shape[1]
             f = (lambda a, Pm=Pm, drop=drop: wald(Pm @ np.atleast_1d(np.asarray(a, float)), drop))
             if d == 1:
                 val = f([1.0])
-                if k == 2:
+                if k == 2 and is_hyper:
                     # polish around the direction: the valley may sit slightly off the plane (the moment's variance and
                     # its correlation with the others); bracket +-1e-3 rad, rescaled to (0, 1)
                     c0 = Pm[:, 0] / np.linalg.norm(Pm[:, 0])
@@ -839,14 +852,20 @@ def _gmm_rank_search(Di, Dbar, Om, M2):
                 val = min(float(res.fun), float(vals[i]))
             else:
                 # the statistic does not depend on |u|: unconstrained minimisation, from the axes and random starts
+                # (hyperplanes: from the axes only)
                 val = np.inf
-                for a0 in [np.eye(d)[j] for j in range(d)] + [rng.standard_normal(d) for _ in range(3 * d)]:
+                starts_ = [np.eye(d)[j] for j in range(d)]
+                if not is_hyper:
+                    starts_ += [rng.standard_normal(d) for _ in range(3 * d)]
+                for a0 in starts_:
                     f0 = f(a0)
                     if not np.isfinite(f0):
                         continue
                     res = optimize.minimize(f, a0, method="BFGS",
                                             options={"gtol": 1e-10 * max(1.0, f0), "maxiter": 400})
                     val = min(val, float(res.fun), f0)
+                    if is_hyper:
+                        continue
                     res = optimize.minimize(f, res.x, method="Nelder-Mead",
                                             options={"xatol": 1e-9, "fatol": 1e-10, "maxiter": 200 * d})
                     val = min(val, float(res.fun))
@@ -868,93 +887,68 @@ def _fd_column(fun, th, j, h, lo, hi):
     return np.full(np.shape(fun(th)), np.nan)
 
 
-def _gmm_probe_moves(gbar, th0, j, h, lo, hi, gs):
-    """Which mean moments move when theta_j is pushed outward from theta0, geometrically (1e4 h, 1e6 h, 1e8 h and the
-    scale of the parameter, max(|theta0_j|, 1)), inside the bounds; each moment on its own scale gs (by more than
-    4 eps). A structural zero stays flat everywhere; a step function or a kink moves somewhere (v2.8.0 review r4)."""
-    res = 4 * np.finfo(float).eps
-    th0 = np.asarray(th0, float)
-    with np.errstate(all="ignore"):
-        g0_ = np.asarray(gbar(th0), float) / gs
-        moves = np.zeros(len(g0_), bool)
-        for H in (1e4 * h, 1e6 * h, 1e8 * h, max(abs(th0[j]), 1.0)):
-            for sgn in (1.0, -1.0):
-                e_ = np.zeros_like(th0)
-                e_[j] = sgn * H
-                if lo[j] <= th0[j] + sgn * H <= hi[j]:
-                    gH = np.asarray(gbar(th0 + e_), float) / gs
-                    moves |= ~np.isfinite(gH) | (np.abs(gH - g0_) > res)
-    return moves
-
-
 def _gmm_check_jacobian(gbar, Du, th0, lo, hi, tol=1e-3, ref_tol=1e-5, steps0=None, g_scale=1.0):
-    """Compares a user Jacobian with finite differences at theta0, column by column (review r2, S1-2: on the whole
-    matrix, a wrong column in small units hid behind a large one). The step is gmm's step at theta0 (chosen by
-    stability, steps0; review r3, S2-2) and stays inside the bounds (S2-2, S2-3). Refuses only when the
-    disagreement is clear: gap above tol of the column's largest entry AND the finite differences reliable there
-    (steps h and h/4 agree to ref_tol of that scale); otherwise a disagreement is a warning (the reference itself
-    is unstable: a kink, an undefined neighbourhood). Differences that are 0 at both steps, up to rounding (|d| h
-    <= 4 eps g_scale, g_scale the root mean square of the contributions at theta0), are no reference (v2.8.0
-    review r3, S2-5): moments that are step functions (an indicator, as in GMM for a quantile) or a kink at
-    theta0 give 0 there while the right Jacobian (a density estimate, a subgradient) is not. When the moment
-    moves over a step H = 1e4 h on either side (it is not a structural zero, which stays flat on both sides and
-    is still compared), those entries are left out of the comparison and give a warning, never a refusal; the
-    other entries of the column are still checked. An entry of the user's that also moves the moments by less
-    than rounding (a true zero with noise) passes silently.
-    Returns {"refuse", "warn", "col", "gap", "ref_err", "flat"} (flat: the columns whose differences are 0)."""
+    """Compares a user Jacobian with finite differences at theta0, column by column, each moment (row) on the scale of
+    its own contributions at theta0 (g_scale), with gmm's steps (steps0) inside the bounds. It never refuses (v2.8.0,
+    decision of 2026-11-26 after review r5: four rounds of rules for "refuse only when clear" each let a wrong
+    Jacobian pass silently or refused a right one somewhere); it returns warnings:
+      - a disagreement above tol of the column's largest entry: "probably wrong" when the finite differences agree
+        with themselves (steps h and h/4 to ref_tol), "not conclusive" otherwise;
+      - finite differences that are 0 up to rounding (|d| h <= 4 eps on the moment's scale) where the Jacobian is
+        not: "not checked" (a step function, a kink, a structural zero, a start outside the data); those columns
+        are returned in "flat" (the rank test, which differentiates the moments numerically, is then not computed).
+    Returns {"warnings": [(message, action)], "flat": [columns], "wrong": [columns]}."""
     th0 = np.asarray(th0, float)
     steps0 = _gmm_pilot_steps(th0, th0) if steps0 is None else np.asarray(steps0, float)
     tiny = np.finfo(float).tiny
-    out = {"refuse": False, "warn": None, "col": None, "gap": 0.0, "ref_err": 0.0, "flat": []}
-    unchecked, flat = [], []
+    res = 4 * np.finfo(float).eps
+    bad, shaky, flat, unchecked = [], [], [], []
+    gap_max = err_at = 0.0
     for j in range(len(th0)):
         h = steps0[j]
         d1 = _fd_column(gbar, th0, j, h, lo, hi)
         d2 = _fd_column(gbar, th0, j, h / 4, lo, hi)
-        du = Du[:, j]
         if not (np.all(np.isfinite(d1)) and np.all(np.isfinite(d2))):
             unchecked.append(j)
             continue
-        # each moment (row) on the scale of its own contributions at theta0, so the units of one moment do not hide
-        # another (review r4, S1-b: with rms(G0) over all moments a Poisson block of 1e12 swallowed a wrong sign in a
-        # unit-scale block; moments in units of 1e10 did the same)
         gs = np.asarray(g_scale, float) * np.ones(len(d1))
         gs = np.where(np.isfinite(gs) & (gs > 0), gs, 1.0)
-        d1, d2, du = d1 / gs, d2 / gs, du / gs
-        res = 4 * np.finfo(float).eps                               # rounding of a moment over the step, its scale
+        d1, d2, du = d1 / gs, d2 / gs, Du[:, j] / gs
         dead = (np.abs(d1) * h <= res) & (np.abs(d2) * h / 4 <= res)
-        if np.any(dead):
-            # a structural zero (the moment does not depend on theta_j) stays flat on both sides however far one looks;
-            # a step function or a kink moves somewhere. Probe outward geometrically up to the scale of the parameter
-            # (a fixed 1e4 h found no data point with few observations and refused a right kernel-density Jacobian;
-            # review r4, S2-a)
-            dead = dead & _gmm_probe_moves(gbar, th0, j, h, lo, hi, gs)
         if np.any(dead & (np.abs(du) * h > res)):
             flat.append(j)
         keep = ~dead
         if not keep.any():
             continue
         d1, d2, du = d1[keep], d2[keep], du[keep]
-        # floor: the smallest derivative that moves a moment by more than rounding over the step (a true zero column
-        # with noise in the analytic one is not a disagreement; review r3, S3)
         scale = max(float(np.max(np.abs(d1))), float(np.max(np.abs(du))), res / h, tiny)
         gap = float(np.max(np.abs(du - d1))) / scale
         ref_err = float(np.max(np.abs(d1 - d2))) / scale
-        if gap > tol and (out["col"] is None or gap > out["gap"]):
-            out.update(col=j, gap=gap, ref_err=ref_err, refuse=ref_err <= ref_tol)
-    if out["col"] is not None and not out["refuse"]:
-        out["warn"] = (f"jacobian disagrees with finite differences at theta0 in column {out['col']} (gap "
-                       f"{out['gap']:.3g} of its largest entry), but the finite differences are unstable there "
-                       f"(steps h and h/4 differ by {out['ref_err']:.1g}), so the check is not conclusive")
-    elif unchecked and out["col"] is None:
-        out["warn"] = (f"jacobian not checked in column(s) {unchecked}: the moments are not finite next to theta0 "
-                       "(within the bounds)")
-    out["flat"] = flat
-    if flat and out["col"] is None and out["warn"] is None:
-        out["warn"] = (f"jacobian not checked in column(s) {flat}: the finite differences of the mean moment are "
-                       "0 at theta0 (up to rounding) where your jacobian is not; the moments may be step functions "
-                       "(indicators, quantiles) or have a kink at theta0, where finite differences are no reference")
-    return out
+        if gap > tol:
+            (bad if ref_err <= ref_tol else shaky).append(j)
+            if gap > gap_max:
+                gap_max, err_at = gap, ref_err
+    out = []
+    if bad:
+        out.append((f"jacobian disagrees with finite differences at theta0 in column(s) {bad} (largest gap "
+                    f"{gap_max:.3g} of the column's largest entry), and the finite differences agree with themselves "
+                    "there: the jacobian you passed is probably wrong (transposed, a wrong column or sign), and the "
+                    "estimates, SEs and tests computed with it are not reliable",
+                    "do not report these results; check the jacobian at theta0 (rows = moments, columns = "
+                    "parameters), or run without it and compare"))
+    if shaky:
+        out.append((f"jacobian disagrees with finite differences at theta0 in column(s) {shaky}, but the finite "
+                    "differences are unstable there (steps h and h/4 differ), so the check is not conclusive",
+                    "the jacobian you passed was used; check it at theta0, or run without it and compare"))
+    if flat:
+        out.append((f"jacobian not checked in column(s) {flat}: the finite differences of the mean moment are 0 at "
+                    "theta0 (up to rounding) where your jacobian is not; the moments may be step functions "
+                    "(indicators, quantiles), have a kink there, or not depend on that parameter (then your jacobian "
+                    "is wrong there)", "the jacobian you passed was used; check it at theta0"))
+    if unchecked:
+        out.append((f"jacobian not checked in column(s) {unchecked}: the moments are not finite next to theta0 "
+                    "(within the bounds)", "the jacobian you passed was used; check it at theta0"))
+    return {"warnings": out, "flat": flat, "wrong": bad}
 
 
 def _gmm_inv(S):
@@ -1009,9 +1003,9 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
     observation (not their mean), e.g. for an Euler equation with instruments z_t:
     (beta * c_growth**(-gamma) * R - 1)[:, None] * Z. jacobian(theta, *args), optional, returns the
     m x k Jacobian of the MEAN moment (rows = moments, columns = parameters). It is checked once at theta0,
-    column by column, against finite differences inside the bounds: refused when a column clearly disagrees
-    (e.g. transposed, or one column wrong), a warning when the finite differences are unstable or zero there (a
-    kink, a step function; the rank test is then not computed). Without it, central differences whose step is
+    column by column, against finite differences inside the bounds; it never refuses: a column that disagrees is a
+    "probably wrong" warning (do not report), or "not conclusive", and zero finite differences are "not checked"
+    (a kink, a step function; the rank test is then not computed). Without it, central differences whose step is
     chosen per parameter by stability (among scales |theta|, |theta0|, 1 and that of the response, the one where
     steps h and h/2 agree best): it depends neither on the units of theta nor on how far theta0 is from the
     estimate. A trial step of the search where the moments are NaN is skipped (the trust region shrinks); theta0
@@ -1116,31 +1110,12 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
     flat_cols = []
     gs0 = np.sqrt(np.mean(G0 ** 2, axis=0))
     gs0 = np.where(np.isfinite(gs0) & (gs0 > 0), gs0, 1.0)
-    if jacobian is None:
-        # step-function moments (indicators, quantiles) have numerical derivatives of exactly 0: the fit stayed at
-        # theta0 with SE 0 and converged=True (v2.8.0 review r4, S2-e). A column that is 0 at theta0 but whose moments
-        # move further out is such a function; one that never moves is a parameter outside the moments (rank test).
-        h0 = _gmm_steps(G_raw, theta0, theta0)
-        D0 = _jacobian(gbar, theta0, h0)
-        for j in range(k):
-            if not np.any(D0[:, j]) and np.any(_gmm_probe_moves(gbar, theta0, j, h0[j], lo, hi, gs0)):
-                raise ValueError(f"the moments do not change when {names[j]} moves a little from its start, but do "
-                                 "further out: they "
-                                 "are step functions (indicators, quantiles), whose numerical derivatives are 0; pass "
-                                 "jacobian= (e.g. a kernel density estimate times the instruments) and a start "
-                                 "inside the data")
     if jacobian is not None:
         chk = _gmm_check_jacobian(gbar, D_user(theta0), theta0, lo, hi, steps0=_gmm_steps(G_raw, theta0, theta0),
                                   g_scale=gs0)
-        if chk["refuse"]:
-            raise ValueError(f"jacobian disagrees with finite differences at theta0 in column {chk['col']} "
-                             f"({names[chk['col']]}): largest gap {chk['gap']:.3g} of that column's largest entry, "
-                             f"while the finite differences agree with themselves to {chk['ref_err']:.1g}; check it, "
-                             "and its orientation (rows = moments, columns = parameters)")
         flat_cols = chk["flat"]
-        if chk["warn"]:
-            warns.append(_finding("warning", chk["warn"],
-                                  "the jacobian you passed was used; check it at theta0, or run without it and compare"))
+        for msg_, act_ in chk["warnings"]:
+            warns.append(_finding("warning", msg_, act_))
 
     def fit(W, start):
         # n * gbar' W gbar = || sqrt(n) L' gbar ||^2 with W = L L': least squares on r(theta) = sqrt(n) L' gbar
@@ -1238,7 +1213,20 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                     "warning", f"{names[j]} = {th[j]:.6g} is within one SE ({se[j]:.3g}) of its {side} bound {b:g}",
                     "near a bound the t-ratio, the CI and the chi2 references of J, Wald and LR are not valid "
                     "(Andrews 1999); report the bound as binding and use a boundary-aware test or a bootstrap"))
-    if flat_cols and np.array_equal(th, np.clip(theta0, np.nextafter(lo, np.inf), np.nextafter(hi, -np.inf))):
+    th_start = np.clip(theta0, np.nextafter(lo, np.inf), np.nextafter(hi, -np.inf))
+    at_start = np.array_equal(th, th_start)
+    zero_cols = [j for j in range(k) if jacobian is None and not np.any(D[:, j]) and th[j] == th_start[j]]
+    if zero_cols:
+        # step-function moments without a jacobian returned theta0 with SE 0 and converged=True (review r4, S2-e); a
+        # stationary point at the start looks the same locally (review r5, S2-2), so this is a warning, not an error
+        warns.append(_finding(
+            "warning", f"the numerical derivatives are 0 at the estimate in column(s) {zero_cols} and those "
+            "parameters are exactly at theta0: the moments may be step functions (indicators, quantiles), have a "
+            "stationary point at the start, or not depend on that parameter; the search did not move and the SEs "
+            "are not meaningful",
+            "pass a jacobian (for step functions, e.g. a kernel density estimate) or try another start; do not "
+            "report these estimates"))
+    if flat_cols and at_start:
         warns.append(_finding(
             "warning", "the estimate is exactly theta0: with step-function moments the search could not move from the "
             "start (the mean moment is flat between data points)",
@@ -1248,14 +1236,16 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
         # are 0 and the statistic would say "not identified" for any data (v2.8.0 review r3, S2-5)
         rank_stat, rank_df, rank_ac1, rank_capped = float("nan"), m - k + 1, float("nan"), False
     else:
-        rank_stat, rank_df, rank_ac1, rank_capped = _gmm_rank_test(G_of, th, hac_lags, _gmm_steps(G_raw, th, theta0))
+        rank_stat, rank_df, rank_ac1, rank_capped = _gmm_rank_test(G_of, th, hac_lags,
+                                                                   step_cache["h"] if jacobian is None
+                                                                   else _gmm_steps(G_raw, th, theta0))
     if rank_df is None:
         rank_df = m - k + 1
     if rank_capped:
         warns.append(_finding(
             "notice", f"the rank test did not search every subspace in which some moments do not depend on the "
-            f"parameters (past {_RANK_MAX_SUBSPACES} subspaces or {_RANK_BUDGET_S:g} s; designs with many group "
-            "dummies have many): the statistic is an upper bound and may overstate identification",
+            f"parameters (past {_RANK_MAX_SUBSPACES} subspaces or {_RANK_BUDGET_EVALS} evaluations; designs with "
+            "many group dummies have many): the statistic is an upper bound and may overstate identification",
             "check identification also by the criterion over a grid of the parameters"))
     rank_p = float(stats.chi2.sf(rank_stat, rank_df))              # nan when the test was not computed
     if not np.isfinite(rank_p) and flat_cols:

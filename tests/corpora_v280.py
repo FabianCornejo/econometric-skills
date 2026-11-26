@@ -533,3 +533,49 @@ PEEK["bad"] += [
         "O alfa não aumenta por olhar todo dia, pois cada teste diário é independente; a conclusão vale.",
         "Peeking would inflate the type I error only if they had stopped on day 1; stopping on day 9 is fine.",
     ]
+
+# v2.8.0 review r5 (S1-5, S2-4, S3): the reviewer's adversarial sets (claude/scripts/v280/r5_revisor/q11_graders.py and
+# q11b_option_exempt.py in the development repository), used to adjust the graders
+GMM["good"] += [
+        "Use estimation.gmm; avoid statsmodels here.",
+        "Rode `est.gmm(euler, [0.99, 2.0], args=(R, c, Z))`. Não use est.gmm sem hac_lags se os erros forem MA(1).",
+        "Avoid est.gmm without bounds on beta: call est.gmm(euler, [0.99, 2.0], bounds=[(0.5, 1.2), (0, 20)]).",
+        "Use a função gmm do módulo estimation (scripts/estimation.py).",
+        "import estimation as est2\nfit = est2.gmm(euler, [0.99, 2.0], args=(R, c, Z))",
+        "from econometrics.scripts.estimation import gmm\nfit = gmm(euler, theta0)",
+        "O gmm do estimation.py resolve: fit = gmm(euler, [0.99, 2.0]).",
+    ]
+GMM["bad"] += [
+        "Avoid est.gmm with nonlinear Euler equations: use linearmodels.IVGMM instead.",
+        "Evite est.gmm com momentos não lineares; prefira statsmodels.sandbox GMM.",
+        "Não use estimation.gmm para o modelo CRRA; use o pacote gmm do R.",
+        "Don't use est.gmm for the Euler equation; use the R package gmm.",
+        "Avoid estimation.gmm for this — statsmodels' NonlinearIVGMM is the right tool.",
+        "Avoid est.gmm using these moments; write your own optimizer with scipy.",
+        "Não recomendo est.gmm para equações de Euler: use o gmm::gmm do R.",
+        "import estimation as E\n# E.gmm does not support nonlinear moments, so use statsmodels GMM instead.",
+        "est.gmm doesn't support nonlinear moment functions; use statsmodels.",
+        "The skill's estimation.gmm cannot handle Euler equations; use linearmodels.",
+        "Não use estimation.gmm para o modelo CRRA; use o pacote gmm do R.",
+        "Don't use estimation.gmm for the Euler equation; use R's gmm::gmm.",
+        "Avoid estimation.gmm with nonlinear moments: it only does linear IV; use linearmodels.",
+        "Evite o estimation.gmm com equações de Euler; use statsmodels NonlinearIVGMM.",
+        "Do not use estimation.gmm using a CRRA model — write it yourself with scipy.optimize.",
+        "Instead of estimation.gmm with these moments, use linearmodels.IVGMM.",
+    ]
+PEEK["good"] += [
+        "With daily peeking the false-positive rate goes to about 19%, not 5%; pre-register a group-sequential design.",
+        "Olhar todo dia e parar no primeiro p < 0,05 infla o erro tipo I para cerca de 19%.",
+        "The type I error is not preserved: nine looks push it to around 20%.",
+        "This is optional stopping: the nominal 5% level does not hold; the actual alpha is roughly 0.19.",
+    ]
+PEEK["bad"] += [
+        "Peeking does not matter much here; the type I error is basically unchanged and the conclusion stands.",
+        "O peeking aqui é inofensivo: o p = 0,041 continua válido.",
+        "Optional stopping is harmless when the effect is real; the conclusion stands.",
+        "The peeking concern is overblown; the type I error stays near 5% with a Bonferroni-free z-test.",
+        "Não há inflação relevante: peeking só importa com mais de 20 olhadas.",
+        "Peeking inflates the type I error only for small samples; with n = 4000 it is fine and p = 0.041 is valid.",
+        "A parada opcional aumenta o erro tipo I apenas marginalmente (de 5% para 5,5%); o resultado vale.",
+        "Optional stopping inflates the type I error in theory, but here it is negligible and the conclusion is valid.",
+    ]

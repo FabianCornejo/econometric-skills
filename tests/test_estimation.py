@@ -733,16 +733,47 @@ for eps_ in (1e-9, 1e-7, 1e-6, 1e-3):
 check("v2.8.0 gmm (r4 S3-2): a strong moment that depends on theta2 through eps theta2 w, eps 1e-9 to 1e-3: rank "
       "statistic equal to the weak block's Wald (rel 1e-4; the valley is ~eps wide)", not eps_bad, (eps_bad, ref_e))
 # review r4, S2-b: the search has a budget; past it the notice says the statistic is an upper bound
-_bud = est._RANK_BUDGET_S
-est._RANK_BUDGET_S = 0.0
+_bud = est._RANK_BUDGET_EVALS
+est._RANK_BUDGET_EVALS = 0
 try:
     gb0 = est.gmm(lambda t: np.column_stack([z1b * (y1b - t[0] * x1b), z2b * (y2b - t[1] * x2b),
                                              z3b * (y2b - t[1] * x2b)]), [0.5, 0.2], show=False)
 finally:
-    est._RANK_BUDGET_S = _bud
+    est._RANK_BUDGET_EVALS = _bud
 check("v2.8.0 gmm (r4 S2-b): with the search budget spent, the statistic is an upper bound (here the whole-space value, "
       "above the weak block's 5.64) and a notice says so", gb0["rank_stat"] >= ref_weak * (1 - 1e-9)
       and any("upper bound" in w["message"] for w in gb0["warnings"]), (gb0["rank_stat"], ref_weak))
+
+# review r5, S1-1: the k = 2 polish left a one-dimensional null-space candidate but kept its dropped moments, so a moment
+# that moves deterministically off the candidate was ignored and the statistic fell below the true minimum (K = 1e4:
+# 2.3e-16 and "may not be identified"). Design of the reviewer: m1 = x - t0, m2 = (x - t0) z, m3 = K (x - t0)^2 z - t1 z;
+# any c with c0 != 0 moves m1 deterministically (inf), so the minimum is at c = (0, 1): n zbar^2 / var(z).
+r_pd = np.random.default_rng(0)
+xpd = 1.0 + r_pd.standard_normal(1000); zpd = 0.3 + r_pd.standard_normal(1000)
+ref_pd = 1000 * zpd.mean() ** 2 / zpd.var()
+pd_bad = []
+for K_ in (1.0, 1e2, 1e4):
+    g_pd = est.gmm(lambda t, K_=K_: np.column_stack([xpd - t[0], (xpd - t[0]) * zpd, K_ * (xpd - t[0]) ** 2 * zpd
+                                                     - t[1] * zpd]), [1.0, 1.0], show=False)
+    if not (abs(g_pd["rank_stat"] / ref_pd - 1) < 1e-6
+            and not any("may not be identified" in w["message"] for w in g_pd["warnings"])):
+        pd_bad.append((K_, g_pd["rank_stat"]))
+check("v2.8.0 gmm (r5 S1-1): a moment that moves deterministically off a null-space candidate (K = 1, 1e2, 1e4): rank "
+      "statistic n zbar^2 / var(z) (rel 1e-6), no 'may not be identified' (1e4 gave 2.3e-16)", not pd_bad,
+      (pd_bad, ref_pd))
+# review r5, S1-2: the hyperplanes, searched first with multistart and counted against the budget, made a plain IV fit
+# 5x slower and print "did not search every subspace" where no such subspace exists. k = 5, m = 10 (24.9 s, the notice)
+r_iv5 = np.random.default_rng(1)
+Ziv5 = r_iv5.standard_normal((1000, 10)); Viv5 = r_iv5.standard_normal((1000, 5))
+Xiv5 = Ziv5[:, :5] * 0.5 + Viv5; yiv5 = Xiv5.sum(1) + r_iv5.standard_normal(1000)
+import time as _time_iv
+t_iv5 = _time_iv.time()
+g_iv5 = est.gmm(_lin_moments, np.zeros(5), args=(yiv5, Xiv5, Ziv5), show=False)
+dt_iv5 = _time_iv.time() - t_iv5
+check("v2.8.0 gmm (r5 S1-2): a plain IV fit with k = 5 and m = 10 has no 'did not search every subspace' notice and "
+      "takes under 20 s (it took 24.9 s and printed the notice)", dt_iv5 < 20
+      and not any("upper bound" in w["message"] for w in g_iv5["warnings"]),
+      (dt_iv5, [w["message"][:50] for w in g_iv5["warnings"]]))
 
 r_u = np.random.default_rng(0)
 zu = r_u.standard_normal((300, 3)); xu = zu.sum(1) + r_u.standard_normal(300); yu = 2 * xu + r_u.standard_normal(300)
@@ -933,30 +964,37 @@ except ValueError:
     under = True
 check("v2.8.0 gmm: fewer moments than parameters is refused (not identified)", under)
 
-# S2-3: a user Jacobian is checked once against central differences; transposed or wrong is refused (it was reshaped
-# silently and gave other estimates and SEs with converged=True)
+# S2-3: a user Jacobian is checked once against central differences (it was reshaped silently and gave other estimates
+# and SEs with converged=True). A wrong shape is an error; wrong values are a "probably wrong" warning (since the
+# decision of 2026-11-26 after review r5 the check never refuses: four rounds of "refuse only when clear" rules each
+# let a wrong Jacobian pass silently or refused a right one somewhere; these checks expected a refusal before)
+
+
+def _jac_fit(*a, **kw):
+    """('error', message) when gmm raises, else ('fit', [warning messages])."""
+    try:
+        return "fit", [w["message"] for w in est.gmm(*a, show=False, **kw)["warnings"]]
+    except ValueError as e_:
+        return "error", str(e_)
+
+
+def _wrong(r_, col=None):
+    return r_[0] == "fit" and any("probably wrong" in m and (col is None or f"column(s) [{col}]" in m)
+                                  for m in r_[1])
 jac_ok = lambda th, y, X, Z: -(Z.T @ X) / len(y)                 # d mean(z (y - X theta)) / d theta' : m x k
 gj = est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), jacobian=jac_ok, show=False)
 check("v2.8.0 gmm: the right analytic Jacobian is accepted and gives the closed-form estimate (rel <= 1e-9)",
       np.allclose(gj["params"].to_numpy(), th2, rtol=1e-9, atol=0))
 for lab, jf in (("transposed (k x m)", lambda th, y, X, Z: (-(Z.T @ X) / len(y)).T),
                 ("wrong values, right shape", lambda th, y, X, Z: -2.0 * (Z.T @ X) / len(y))):
-    try:
-        est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), jacobian=jf, show=False)
-        msg = ""
-    except ValueError as err:
-        msg = str(err)
-    check(f"v2.8.0 gmm: a {lab} Jacobian is refused with a message about shape or disagreement",
-          ("must return an array of shape (m, k) = (4, 2)" in msg) if "transposed" in lab else ("disagrees" in msg), msg)
+    r_jf = _jac_fit(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), jacobian=jf)
+    check(f"v2.8.0 gmm: a {lab} Jacobian is refused for its shape, or flagged 'probably wrong'",
+          (r_jf[0] == "error" and "must return an array of shape (m, k) = (4, 2)" in r_jf[1]) if "transposed" in lab
+          else _wrong(r_jf), r_jf)
 Zsq = Z80[:, :2]                                                  # m = k = 2: a transposed square Jacobian
-try:
-    est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Zsq), jacobian=lambda th, y, X, Z: (-(Z.T @ X) / len(y)).T,
-            show=False)
-    sq = ""
-except ValueError as err:
-    sq = str(err)
-check("v2.8.0 gmm: a transposed square Jacobian (m = k) is refused by the check against central differences",
-      "disagrees" in sq, sq)
+sq = _jac_fit(_lin_moments, [0.0, 0.0], args=(y80, X80, Zsq), jacobian=lambda th, y, X, Z: (-(Z.T @ X) / len(y)).T)
+check("v2.8.0 gmm: a transposed square Jacobian (m = k) is flagged 'probably wrong' by the check against central "
+      "differences", _wrong(sq), sq)
 
 # S3-2: moments that become NaN during the search stop with a message that says so (it was numpy's error)
 xn = np.random.default_rng(86).standard_normal(200) + 2.0
@@ -986,17 +1024,13 @@ def _jac_col2(th, y, X, Z):
     return D
 
 
-try:
-    est.gmm(_lin_moments, [0.0, 0.0], args=(yj, Xj, Zj), jacobian=_jac_col2, show=False)
-    col_msg = ""
-except ValueError as err:
-    col_msg = str(err)
+col_r = _jac_fit(_lin_moments, [0.0, 0.0], args=(yj, Xj, Zj), jacobian=_jac_col2)
 gj_ok = est.gmm(_lin_moments, [0.0, 0.0], args=(yj, Xj, Zj), jacobian=jac_j, show=False)
 gj_num = est.gmm(_lin_moments, [0.0, 0.0], args=(yj, Xj, Zj), show=False)
-check("v2.8.0 gmm (r2 S1-2): a Jacobian with one wrong column in small units is refused and the message names "
-      "the column; the right one is accepted with the SEs of the numerical fit (rel <= 1e-6)",
-      "column 1" in col_msg and "disagrees" in col_msg
-      and np.allclose(gj_ok["table"]["se"], gj_num["table"]["se"], rtol=1e-6, atol=0), col_msg)
+check("v2.8.0 gmm (r2 S1-2): a Jacobian with one wrong column in small units is flagged 'probably wrong' naming "
+      "the column; the right one gets no jacobian warning and the SEs of the numerical fit (rel <= 1e-6)",
+      _wrong(col_r, 1) and not any("jacobian" in w["message"] for w in gj_ok["warnings"])
+      and np.allclose(gj_ok["table"]["se"], gj_num["table"]["se"], rtol=1e-6, atol=0), col_r)
 
 # S2-3 and the steps: a parameter of order 1e-4 (an exponential rate). The right analytic Jacobian was refused
 # (finite-difference step with an absolute floor), and without a Jacobian the fit moved by 1.4e-4 (estimate) and
@@ -1121,23 +1155,50 @@ check("v2.8.0 gmm (r3 S3): a parameter outside the moments, with noise of 1e-20 
       [w["message"][:70] for w in g_zc["warnings"]])
 
 # the other side: a wrong entry where the true Jacobian is a structural 0 (each moment depends on one parameter;
-# the user's has 0.5 off the diagonal) is still refused: that 0 is flat over a large step on both sides
+# the user's has 0.5 off the diagonal) is never accepted silently: the 'not checked' warning says the jacobian is
+# wrong there if the moment does not depend on that parameter (r5: with the probe, a far start or moments that are
+# NaN out of the domain made it pass; the probe is gone)
 r_sz = np.random.default_rng(3)
 zsz = r_sz.standard_normal((400, 2)); x1sz = zsz[:, 0] + r_sz.standard_normal(400); x2sz = zsz[:, 1] + r_sz.standard_normal(400)
 y1sz, y2sz = x1sz + r_sz.standard_normal(400), x2sz + r_sz.standard_normal(400)
 mom_sz = lambda t: np.column_stack([zsz[:, 0] * (y1sz - t[0] * x1sz), zsz[:, 1] * (y2sz - t[1] * x2sz)])
 jac_sz = lambda t: np.array([[-(zsz[:, 0] * x1sz).mean(), 0.5], [0.5, -(zsz[:, 1] * x2sz).mean()]])
-try:
-    est.gmm(mom_sz, [0.5, 0.5], jacobian=jac_sz, show=False)
-    sz_msg = "accepted"
-except ValueError as e_:
-    sz_msg = str(e_)
-check("v2.8.0 gmm (r3 S2-5): a non-zero entry where the true Jacobian is a structural 0 is still refused",
-      "disagrees with finite differences" in sz_msg, sz_msg[:120])
+sz_r = _jac_fit(mom_sz, [0.5, 0.5], jacobian=jac_sz)
+
+
+def _jac_flag(r_):
+    return r_[0] == "fit" and any(("probably wrong" in m or "jacobian not checked" in m) for m in r_[1])
+
+
+# the reviewer's designs (r4 p16, r5 q6): a far start with a Poisson block (rms 4e7 and 8e11), and moments that are NaN
+# for theta1 <= 0
+r_p16 = np.random.default_rng(3)
+xp16 = r_p16.standard_normal(400); yp16 = r_p16.poisson(np.exp(0.3 * xp16)).astype(float)
+zp16 = r_p16.standard_normal(400); x2p16 = zp16 + r_p16.standard_normal(400); y2p16 = x2p16 + r_p16.standard_normal(400)
+mom_p16 = lambda t: np.column_stack([yp16 - np.exp(t[0] * xp16), (yp16 - np.exp(t[0] * xp16)) * xp16,
+                                     zp16 * (y2p16 - t[1] * x2p16), (y2p16 - t[1] * x2p16)])
+def _jac_p16(t, off):
+    mu = np.exp(t[0] * xp16)
+    return np.array([[-(mu * xp16).mean(), off], [-(mu * xp16 * xp16).mean(), 0], [0, -(zp16 * x2p16).mean()],
+                     [0, -x2p16.mean()]])
+r_q6 = np.random.default_rng(0)
+xq6 = 1.0 + r_q6.standard_normal(1000); zq6 = r_q6.standard_normal(1000)
+def _mom_q6(t):
+    if t[1] <= 0:
+        return np.full((1000, 3), np.nan)
+    e = xq6 - t[0]
+    return np.column_stack([e, e * zq6, e ** 2 - t[1]])
+jac_q6 = lambda t: np.array([[-1.0, 5.0], [-zq6.mean(), 0.0], [-2 * (xq6 - t[0]).mean(), -1.0]])
+sz_all = [sz_r] + [_jac_fit(mom_p16, [t_, 0.5], jacobian=lambda t, o_=o_: _jac_p16(t, o_))
+                   for t_ in (6.0, 9.0) for o_ in (0.5, 5.0)] + [_jac_fit(_mom_q6, [0.5, 0.5], jacobian=jac_q6)]
+check("v2.8.0 gmm (r3 S2-5, r5 S1-3/S1-4): a non-zero entry where the true Jacobian is a structural 0 always gets a "
+      "jacobian warning ('probably wrong' or 'not checked'): next to the moment it belongs to, with a far start "
+      "(theta0 6 and 9), and with moments that are NaN outside their domain", all(_jac_flag(r_) for r_ in sz_all),
+      [r_ for r_ in sz_all if not _jac_flag(r_)])
 
 # review r4, S1-b: one rounding floor for all moments (rms of all contributions at theta0) let a wrong sign pass
 # silently when one block of moments was far larger than another (a Poisson block at theta0 = 10: rms 1e12; a block
-# in units of 1e12). Each moment is now on its own scale: refused in both.
+# in units of 1e12). Each moment is now on its own scale: flagged 'probably wrong' in both.
 r_fs = np.random.default_rng(0)
 xfs = r_fs.standard_normal(1000); yfs = r_fs.poisson(np.exp(0.3 * xfs)).astype(float)
 wfs = np.exp(0.5) + r_fs.standard_normal(1000)
@@ -1151,24 +1212,18 @@ r_mu = np.random.default_rng(1)
 xmu = r_mu.standard_normal(500) + 1; wmu = r_mu.standard_normal(500) + np.exp(0.5)
 mom_mu = lambda t: np.column_stack([1e12 * (xmu - t[0]), wmu - np.exp(t[1]), 1e12 * (xmu ** 2 - t[0] ** 2 - 1)])
 jac_mu = lambda t: np.array([[-1e12, 0], [0, +np.exp(t[1])], [-2e12 * t[0], 0]])       # wrong sign in column 1
-fs_res = []
-for lab_, f_, j_, t0_ in (("Poisson block at theta0 = 10", mom_fs, lambda t: _jac_fs(t, -1.0), [10.0, 0.0]),
-                          ("moments in units of 1e12", mom_mu, jac_mu, [1.0, 0.5])):
-    try:
-        est.gmm(f_, t0_, jacobian=j_, show=False)
-        fs_res.append((lab_, "accepted"))
-    except ValueError as e_:
-        fs_res.append((lab_, "refused" if "disagrees with finite differences" in str(e_) else str(e_)[:60]))
+fs_res = [_jac_fit(mom_fs, [10.0, 0.0], jacobian=lambda t: _jac_fs(t, -1.0)),
+          _jac_fit(mom_mu, [1.0, 0.5], jacobian=jac_mu)]
 ok_fs = _gmm_or_failed(mom_fs, [10.0, 0.0], jacobian=lambda t: _jac_fs(t, 1.0), show=False)
-check("v2.8.0 gmm (r4 S1-b): a wrong sign in a small block next to a block 1e12 larger is refused (a Poisson block at "
-      "theta0 = 10, and moments in units of 1e12); the right Jacobian at theta0 = 10 is accepted (estimate 0.2574, "
-      "0.5341)", all(v == "refused" for _, v in fs_res)
+check("v2.8.0 gmm (r4 S1-b): a wrong sign in a small block next to a block 1e12 larger is flagged 'probably wrong' in "
+      "column 1 (a Poisson block at theta0 = 10, and moments in units of 1e12); the right Jacobian at theta0 = 10 gets "
+      "no jacobian warning (estimate 0.2574, 0.5341)", all(_wrong(r_, 1) for r_ in fs_res)
+      and not any("jacobian" in w["message"] for w in ok_fs["warnings"])
       and np.allclose(ok_fs["params"], [0.2574, 0.5341], atol=1e-4), (fs_res, list(ok_fs["params"])))
 
-# review r4, S2-a: the probe for "step function or structural zero" went out a fixed 1e4 h: with 15 or 30
-# observations and a start away from the data it found no data point and refused a right kernel-density Jacobian.
-# Now it probes up to the scale of the parameter: a warning, never a refusal; with an estimate left exactly at theta0,
-# a warning that the search could not move.
+# review r4, S2-a: with 15 or 30 observations and a start away from the data a right kernel-density Jacobian was
+# refused. The check never refuses now: a 'not checked' warning; with an estimate left exactly at theta0, a warning
+# that the search could not move.
 md_small = []
 for n_, t0_ in ((15, 1e-3), (15, 2.0), (30, 1e-3), (30, 2.0), (60, 1e-3)):
     r_ = np.random.default_rng(0)
@@ -1183,16 +1238,20 @@ for n_, t0_ in ((15, 1e-3), (15, 2.0), (30, 1e-3), (30, 2.0), (60, 1e-3)):
     except ValueError as e_:
         md_small.append(str(e_)[:60])
 check("v2.8.0 gmm (r4 S2-a): GMM for a median with 15 to 60 observations, started at 1e-3 or 2: the kernel-density "
-      "jacobian is accepted with a 'not checked' warning (it was refused), and an estimate left at theta0 is flagged",
+      "jacobian is used with a 'not checked' warning (it was refused), and an estimate left at theta0 is flagged",
       all(v is True for v in md_small), md_small)
-# review r4, S2-e: without a jacobian the same moments returned theta0 with SE 0 and converged=True
-try:
-    est.gmm(mom_md, [0.1], steps="one-step", show=False)
-    nj_msg = "no error"
-except ValueError as e_:
-    nj_msg = str(e_)
-check("v2.8.0 gmm (r4 S2-e): step-function moments without a jacobian stop with a message that asks for one (they "
-      "returned theta0 with SE 0)", "step functions" in nj_msg and "jacobian=" in nj_msg, nj_msg[:120])
+# review r4, S2-e: without a jacobian the same moments returned theta0 with SE 0 and converged=True, silently. A
+# stationary point at the start looks the same locally (r5 S2-2: theta entering as t1^2, started at 0), so both get a
+# warning (no longer an error) that names step functions and stationary points and says not to report the estimates
+nj_r = _jac_fit(mom_md, [0.1], steps="one-step")
+r_st = np.random.default_rng(7)
+xst = r_st.standard_normal(300) + 1.0
+st_r = _jac_fit(lambda t: np.column_stack([xst - t[0] - t[1] ** 2, (xst - t[0] - t[1] ** 2) * xst]), [0.5, 0.0])
+check("v2.8.0 gmm (r4 S2-e, r5 S2-2): numerical derivatives of exactly 0 with the estimate left at theta0 (an "
+      "indicator moment; a parameter entering as t1^2 started at 0): a warning naming step functions and a "
+      "stationary point, no error",
+      all(r_[0] == "fit" and any("step functions" in m and "stationary point" in m for m in r_[1]) for r_ in (nj_r, st_r)),
+      (nj_r, st_r))
 
 # S2-2: the check stays inside the bounds (log theta with theta0 = 1e-6 next to a lower bound of 1e-8 raised)
 x_g = np.random.default_rng(0).gamma(2.0, 1.0, size=1000)
