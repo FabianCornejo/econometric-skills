@@ -616,8 +616,8 @@ def peeking_size(looks: int = 10, alpha: float = ALPHA, two_sided: bool = True, 
     Under H0 the z statistics at information fractions k/K are a scaled Brownian motion (corr(Z_i, Z_j) =
     sqrt(i/j), i < j). The size is computed exactly by the recursion of Armitage, McPherson and Rowe (1969): the
     density of the running sum is carried from look to look by numerical integration (against a grid ten times finer,
-    up to 50 looks: within 6e-9 two-sided and 3e-9 one-sided; v2.8.0 measurement), not by a simulation of data. Classical values (Armitage,
-    McPherson and Rowe 1969): about 8% with 2 looks, 14% with 5, 19% with 10 for alpha = 5% two-sided."""
+    up to 50 looks: within 6e-9 two-sided and 3e-9 one-sided; v2.8.0 measurement), not by a simulation of data.
+    Classical values (Armitage, McPherson and Rowe 1969): about 8% with 2 looks, 14% with 5, 19% with 10 for alpha = 5% two-sided."""
     from reporting import _finding, _print_findings
     if int(looks) != looks or looks < 1 or looks > 50:
         raise ValueError("looks must be an integer from 1 to 50")

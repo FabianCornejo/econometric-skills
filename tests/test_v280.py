@@ -92,8 +92,19 @@ check("interpretation-rules.md: a v2.8.0 section with the four rules (peeking, G
       sec and all(w in sec for w in ("before its end", "8% with 2 looks", "14% with 5", "19% with 10", "Pocock",
                                      "0.0158", "sequential.peeking_size", "sequential.sprt", "continue",
                                      "right tail", "m − k", "zero by construction", "Andrews", "Cragg-Donald",
-                                     "below 10", "239 months", "same observations", "lr_test", "trinity_test",
+                                     "not evidence of strong identification", "no cut of 10", "239 months",
+                                     "same observations", "lr_test", "cannot see whether", "trinity_test",
                                      "KL(p‖q) ≠ KL(q‖p)", "nats")), sec[:200])
+# v2.8.0 review r1: the rank statistic is not a first-stage F; no document may say so again
+docs80 = {p_: read(p_) for p_ in ("econometrics/references/interpretation-rules.md", "econometrics/references/"
+                                  "estimation-theory.md", "econometrics/references/review-checklist.md", "README.md",
+                                  "VALIDATION.md", "CHANGELOG.md", "econometrics/scripts/estimation.py")}
+stale = [(p_, w) for p_, t_ in docs80.items() for w in ("ident_F", "per degree of freedom is below 10",
+                                                         "is the first-stage F of a linear IV", "within 4%",
+                                                         "weak-identification cut", "2p − 1", "refuses fits on different samples")
+         if w in (t_.split("## v2.7.5", 1)[0] if p_ == "CHANGELOG.md" else t_)]
+check("no document repeats the review-r1 false claims (ident_F, 'first-stage F' reading, the 10 cut, 2p − 1, "
+      "'refuses fits on different samples')", not stale, stale)
 rc = read("econometrics/references/review-checklist.md")
 check("review-checklist.md: the two v2.8.0 questions (peeking; GMM's J, identification and bounds)",
       rc.count("(v2.8.0)") == 2 and "looked at before its planned end" in rc and "right-tail p-value and degrees of "
@@ -101,8 +112,9 @@ check("review-checklist.md: the two v2.8.0 questions (peeking; GMM's J, identifi
 et = read("econometrics/references/estimation-theory.md")
 check("estimation-theory.md: section 7 (GMM) and 8 (LR between nested fits) with the functions and the measured numbers",
       "## 7. Generalized method of moments (`gmm`, v2.8.0)" in et and "## 8. Likelihood ratio between nested fits" in et
-      and all(w in et for w in ("est.gmm(", "j_p", "j_cdf", "ident_F", "Cragg-Donald", "0.945 for γ and 0.938 for β",
-                                "0.035", "4–8", "est.lr_test(", "2p − 1", "Self and Liang")))
+      and all(w in et for w in ("est.gmm(", "j_p", "j_cdf", "rank_p", "Cragg-Donald", "0.945 for γ and 0.938 for β",
+                                "0.035", "Rejecting does not mean strong identification", "about 40 with n = 100",
+                                "interval of γ contains 0", "est.lr_test(", "number of restrictions", "Self and Liang")))
 sf = read("econometrics/references/statistics-foundations.md")
 check("statistics-foundations.md: section 14 in the contents and in the text, with the SPRT, peeking and divergences",
       "14. Sequential tests" in sf.split("## 1.")[0] and "## 14. Sequential tests" in sf

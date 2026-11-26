@@ -21,14 +21,14 @@ GMM = {  # gmm-euler: the answer must point to the skill's estimation.gmm (the c
         "Function: `estimation.gmm` — two-step by default, Newey-West with hac_lags if needed.",
         "Rode `res = est.gmm(mom, [1, .99], args=(R, C, Z), bounds=[None, (0, 1)])`.",
         "O estimador é o estimation.gmm (GMM não linear com momentos do usuário).",
-        "Passo 1: estimation.gmm em duas etapas. Passo 2: leia o J (j_p) e o teste de posto (ident_F).",
+        "Passo 1: estimation.gmm em duas etapas. Passo 2: leia o J (j_p) e o teste de posto (rank_p).",
         "Para o teste de sobreidentificação, o J vem de estimation.gmm (j, j_df, j_p).",
         "Use `estimation.gmm` e, como segunda rota, o NonlinearIVGMM do statsmodels.",
         "O módulo estimation tem gmm(); o J de Hansen sai com o p da cauda direita.",
         "est.gmm(euler, theta0=[1.0, 0.99], args=(ret, cons, Z), center=False)",
         "A skill estima isso com estimation.gmm; não use o IVGMM linear, porque o modelo é não linear.",
         "gmm do estimation.py, com os momentos (β (C_{t+1}/C_t)^{-γ} R_{t+1} − 1) z_t.",
-        "Estime com `estimation.gmm(...)` e confira a identificação (ident_F abaixo de 10 é fraca).",
+        "Estime com `estimation.gmm(...)` e confira a identificação (rank_p e a precisão de γ).",
         "Use es.gmm(moments, [1., .99], args=(R, cg, Z)).",
         "Função recomendada: estimation.gmm (steps='two-step').",
         "A estimação: estimation.gmm; o teste: o J de Hansen que ela reporta.",
@@ -37,12 +37,29 @@ GMM = {  # gmm-euler: the answer must point to the skill's estimation.gmm (the c
         "Recomendo: `import estimation as est; res = est.gmm(...)`.",  # held-out corpus (written after the grader)
         "Use `estimation.gmm(moments, [1.0, 0.99], args=(R, cg, Z), hac_lags=None)`; J com 3 gl.",  # held-out corpus (written after the grader)
         "A função certa é a gmm do módulo `estimation`.",  # held-out corpus (written after the grader)
-        "Rode o GMM genérico (estimation.gmm) e veja se ident_F fica abaixo de 10.",  # held-out corpus (written after the grader)
+        "Rode o GMM genérico (estimation.gmm) e veja se o teste de posto rejeita.",  # held-out corpus (written after the grader)
         "No estimation.py há gmm(), que faz duas etapas e o J.",  # held-out corpus (written after the grader)
         "es.gmm(f, x0, args=a) dá os coeficientes e o J.",  # held-out corpus (written after the grader)
         "Estimate with estimation.gmm and read j_p, the right-tail p-value.",  # held-out corpus (written after the grader)
         "The skill's estimation module has a gmm function for user moments.",  # held-out corpus (written after the grader)
         "Use the gmm function in estimation.py.",  # held-out corpus (written after the grader)
+        'Eu usaria o GMM da skill — `gmm` em `scripts/estimation.py` — e leria o J pela cauda direita.',  # review r1 (adversarial right answer)
+        "Use estimation's gmm: est = estimation.gmm(...)",  # review r1 (adversarial right answer)
+        "The GMM estimator lives in the skill's estimation module (`estimation.gmm`).",  # review r1 (adversarial right answer)
+        'Utilize a rotina gmm (módulo estimation) com os momentos de Euler.',  # review r1 (adversarial right answer)
+        'Chame `gmm()` do módulo `estimation`.',  # review r1 (adversarial right answer)
+        'A skill oferece GMM genérico: veja a função gmm, no arquivo estimation.py.',  # review r1 (adversarial right answer)
+        'In Python: import estimation; estimation.gmm(moments, x0)',  # review r1 (adversarial right answer)
+        'Para isso a skill tem estimation.gmm; escreva os momentos como (β g^-γ R − 1)·z.',  # held-out r1 (written after the r1 grader)
+        'Use `gmm` do módulo `estimation` com hac_lags se houver autocorrelação.',  # held-out r1 (written after the r1 grader)
+        'res = est.gmm(euler_moms, [2.0, 0.99], args=(R, g, Z))',  # held-out r1 (written after the r1 grader)
+        'O módulo estimation tem a função gmm, que reporta J, j_df e j_p.',  # held-out r1 (written after the r1 grader)
+        'A rotina gmm do estimation.py faz o GMM em duas etapas.',  # held-out r1 (written after the r1 grader)
+        "I'd call estimation.gmm(...) and look at j_p.",  # held-out r1 (written after the r1 grader)
+        'The function gmm in the estimation module handles nonlinear moments.',  # held-out r1 (written after the r1 grader)
+        'Na skill: `import estimation as es` e `es.gmm(momentos, x0, args=...)`.',  # held-out r1 (written after the r1 grader)
+        "Use a função `gmm()` em `estimation.py` com steps='iterated'.",  # held-out r1 (written after the r1 grader)
+        'estimation.gmm é a função; o J sai com p de cauda direita.',  # held-out r1 (written after the r1 grader)
     ],
     "bad": [
         "Use o NonlinearIVGMM do statsmodels: NonlinearIVGMM(endog, exog, instr, func).fit().",
@@ -94,6 +111,18 @@ GMM = {  # gmm-euler: the answer must point to the skill's estimation.gmm (the c
         "A GMM estimation in Stata is the way: gmm with twostep.",  # held-out corpus (written after the grader)
         "Estimation by GMM requires instruments; use IVGMM.",  # held-out corpus (written after the grader)
         "Use systems.dynamic_panel com method='system'.",  # held-out corpus (written after the grader)
+        "Use the gmm function in statsmodels' estimation module (statsmodels.sandbox.regression.gmm).",  # review r1 (adversarial wrong answer)
+        "The gmm function of the estimation module in R's gmm package does this.",  # review r1 (adversarial wrong answer)
+        'Use statsmodels.sandbox.regression.gmm.GMM com pesos HAC.',  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
+        'A estimation by GMM is best done in Stata with gmm.',  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
+        "Use the gmm function from R's gmm package (estimation module there).",  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
+        'O IVGMM do linearmodels é a função adequada.',  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
+        'GMM estimation of the Euler equation: use NonlinearIVGMM.',  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
+        'Minimize o critério de GMM; a skill só tem mle e nls no estimation.py.',  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
+        'Use estimation.nls na forma log-linear.',  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
+        'O gmm do Stata (estimation command) resolve isso.',  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
+        "Use EViews' GMM estimation.",  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
+        'Escreva o seu próprio GMM com numpy.',  # held-out r1 (written after the r1 grader); one passed and the grader was fixed
     ],
 }
 
@@ -139,6 +168,21 @@ PEEK = {  # review-optional-stopping: daily looks and stopping at p < 0.05 infla
         "With nine looks, the false positive rate is about 17%, not 5%.",  # held-out corpus (written after the grader)
         "They should have used alpha spending or Pocock boundaries.",  # held-out corpus (written after the grader)
         "Stopping at the first significant look inflates alpha.",  # held-out corpus (written after the grader)
+        'Problema: múltiplas comparações ao longo do tempo — cada olhada diária é um teste, e o nível global deixa de ser 5%.',  # review r1 (adversarial right answer)
+        'O p = 0,041 foi obtido com regra de parada dependente dos dados; o nível de significância real fica perto de 18%.',  # review r1 (adversarial right answer)
+        'Testing every day until significance is a form of p-hacking; the nominal 5% level does not hold.',  # review r1 (adversarial right answer)
+        "Isso é 'optional stopping'.",  # review r1 (adversarial right answer)
+        "O desenho correto seria fixar n antes ou usar um desenho sequencial com fronteira de O'Brien-Fleming.",  # review r1 (adversarial right answer)
+        'Isso é peeking: parar quando p < 0,05 após olhadas diárias infla o erro tipo I.',  # held-out r1 (written after the r1 grader)
+        'O alfa efetivo, com 9 olhadas, fica em torno de 18%.',  # held-out r1 (written after the r1 grader)
+        'Parar no primeiro resultado significativo eleva a taxa de falsos positivos.',  # held-out r1 (written after the r1 grader)
+        'Repeated significance testing makes the false positive rate much larger than 5%.',  # held-out r1 (written after the r1 grader)
+        'O nível de significância nominal de 5% não se mantém com parada opcional.',  # held-out r1 (written after the r1 grader)
+        "Deveriam ter usado um SPRT ou fronteiras de O'Brien-Fleming.",  # held-out r1 (written after the r1 grader)
+        'Monitorar diariamente e parar quando significativo torna o p-valor inválido.',  # held-out r1 (written after the r1 grader)
+        'The type I error is about 18% with nine looks, not 5%.',  # held-out r1 (written after the r1 grader)
+        'Com olhadas diárias, a probabilidade de um falso positivo aumenta muito.',  # held-out r1 (written after the r1 grader)
+        'Optional stopping: the 95% confidence claim is wrong.',  # held-out r1 (written after the r1 grader)
     ],
     "bad": [
         "O p = 0,041 é menor que 0,05, então a conclusão está correta.",
@@ -190,11 +234,34 @@ PEEK = {  # review-optional-stopping: daily looks and stopping at p < 0.05 infla
         "The conversion increased 15%, a large effect.",  # held-out corpus (written after the grader)
         "The type I error rate is 5% by design.",  # held-out corpus (written after the grader)
         "Check whether the randomization was balanced.",  # held-out corpus (written after the grader)
+        'O alfa = 0,05 e p = 0,041, então o efeito não é nulo e a conclusão vale.',  # review r1 (adversarial wrong answer)
+        'The type I error is 5%, which is not a problem here; the conclusion holds.',  # review r1 (adversarial wrong answer)
+        'O acompanhamento diário é boa prática e o efeito não é pequeno: o botão funciona.',  # review r1 (adversarial wrong answer)
+        'O novo botão aumenta a taxa de conversão sem falsos positivos, pois p < 0,05.',  # review r1 (adversarial wrong answer)
+        'Alfa respeitado e conversão subiu 18%: resultado sólido.',  # review r1 (adversarial wrong answer)
+        'O alfa real é maior que o p, então rejeitamos H0 com segurança.',  # review r1 (adversarial wrong answer)
+        'Monitoramos diariamente; o resultado não é pequeno nem espúrio.',  # review r1 (adversarial wrong answer)
+        'False positives are unlikely: the lift of 20% is large.',  # review r1 (adversarial wrong answer)
+        'O p-valor de 0,041 está abaixo de 0,05; conclusão válida.',  # held-out r1 (written after the r1 grader)
+        'O aumento de conversão foi de 19%, efeito grande.',  # held-out r1 (written after the r1 grader)
+        'O alfa é 0,05 e não há outro problema.',  # held-out r1 (written after the r1 grader)
+        'The type I error is controlled at 5% by the test.',  # held-out r1 (written after the r1 grader)
+        'Faltou calcular o poder; o alfa está ok.',  # held-out r1 (written after the r1 grader)
+        'A taxa de conversão aumentou e o erro padrão é pequeno.',  # held-out r1 (written after the r1 grader)
+        'O erro tipo I não é relevante aqui porque o efeito é grande.',  # held-out r1 (written after the r1 grader)
+        'Os falsos positivos ocorrem em 5% dos testes, como sempre.',  # held-out r1 (written after the r1 grader)
+        'False positives are rare when p < 0.05.',  # held-out r1 (written after the r1 grader)
+        'O teste deveria considerar a sazonalidade semanal.',  # held-out r1 (written after the r1 grader)
     ],
 }
 
 KNOWN_FALSE_PASSES = {  # negations and dismissals: the executor has no negative grader (v2.7.5)
-    "GMM": ["Não use estimation.gmm; prefira o IVGMM.", "A função gmm não existe no módulo estimation."],
+    "GMM": ["Não use estimation.gmm; prefira o IVGMM.", "A função gmm não existe no módulo estimation.",
+            "O módulo estimation não tem gmm; use o NonlinearIVGMM do statsmodels.",
+            "Use IVGMM; a função gmm em estimation.py não serve para modelos não lineares."],
     "PEEK": ["O erro tipo I não aumenta por acompanhar o teste.", "Não houve peeking, pois o teste parou no dia planejado.",
-             "Acompanhar diariamente não invalida o p-valor.", "Usar Pocock aqui seria exagero; a conclusão é válida."],
+             "Acompanhar diariamente não invalida o p-valor.", "Usar Pocock aqui seria exagero; a conclusão é válida.",
+             "A taxa de falsos positivos não é afetada pelo acompanhamento diário.",
+             "Acompanhar o p-valor diariamente não é problema; a conclusão está correta.",
+             "Não é preciso usar SPRT ou Pocock aqui; a conclusão vale."],
 }

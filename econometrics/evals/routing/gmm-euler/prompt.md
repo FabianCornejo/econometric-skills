@@ -1,5 +1,5 @@
 ---
-description: "GMM: an Euler equation estimated with the skill's generic GMM (estimation.gmm), J in the right tail"
+description: "GMM: an Euler equation estimated with the skill's generic GMM (estimation.gmm); the grader checks the function, the reading of J is graded by review-j-prob-cdf"
 tags: [routing, gmm]
 max_turns: 8
 timeout_seconds: 300

@@ -863,7 +863,8 @@ def lr_test(unrestricted: dict, restricted: dict, df: int | None = None, boundar
 
     unrestricted, restricted : results of `mle` (they carry "loglik", "n", "k", "converged"). Both
     log-likelihoods must be evaluated on the same observations: an LR between different effective samples
-    (e.g. a VAR with more lags losing initial rows) has no chi2 distribution, and the function refuses it.
+    (e.g. a VAR with more lags losing initial rows) has no chi2 distribution. The function refuses fits with a
+    different n; it cannot see whether two fits with the same n used the same rows: check that yourself.
     boundary : True when the null puts a parameter on the edge of its space (a variance of 0, an ARCH
     coefficient of 0): with one such parameter the reference is the 50:50 mixture (Self and Liang 1987);
     with more, the mixture weights depend on the model and the chi2 p-value is conservative."""

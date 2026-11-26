@@ -462,8 +462,9 @@ y_s = 1.0 + 2.0 * x_s + 0.5 * v_s + r_s.standard_normal(100)
 X_s, Z_s = np.column_stack([np.ones(100), x_s]), np.column_stack([np.ones(100), z_s])
 F_s = float(np.squeeze(sm.OLS(x_s, Z_s).fit().f_test(np.eye(9)[1:]).fvalue))
 sat = est.gmm(_lin_moments, [0.0, 0.0], args=(y_s, X_s, Z_s), show=False)
-check("v2.8.0 gmm: first-stage F of 1e8 -> no identification warning and no 'ident_F' key (the old cut called it weak)",
-      F_s > 1e7 and sat["rank_p"] < 0.05 and "ident_F" not in sat
+check("v2.8.0 gmm: first-stage F of 1e8 -> rank statistic about 40 (estimation-theory.md), no identification warning "
+      "and no 'ident_F' key (the old cut called it weak)",
+      F_s > 1e7 and 35 < sat["rank_stat"] < 45 and sat["rank_p"] < 0.05 and "ident_F" not in sat
       and not any("identif" in w["message"] for w in sat["warnings"]), (F_s, sat["rank_stat"]))
 # the old seeds on both sides of the dropped cut: both reject rank < 2, neither gets a warning now
 wk_below = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.08, 0), show=False)
