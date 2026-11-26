@@ -498,7 +498,6 @@ def wild_cluster_bootstrap(df: pd.DataFrame, formula: str, coef: str, cluster: s
 # =============================================================================
 _GMM_STEPS = ("one-step", "two-step", "iterated")
 _GMM_KERNELS = ("bartlett", "truncated")
-_GMM_WEAK_F = 10.0        # v2.8.0: rank statistic / df below which identification is called weak (Stock-Yogo rule of thumb)
 
 
 def _gmm_S(G, lags, kernel, center):
@@ -513,35 +512,56 @@ def _gmm_S(G, lags, kernel, center):
     return (S + S.T) / 2
 
 
-def _gmm_rank_test(G_of, th, lags, kernel):
+def _gmm_rank_test(G_of, th, lags):
     """Cragg-Donald (1997) minimum-Wald test of H0: rank(D) <= k - 1, D = E[dg_i/dtheta'] (m x k).
 
-    For each direction c (|c| = 1), the Wald statistic of E[dg_i/dtheta' c] = 0 uses the HAC covariance of the
-    per-observation derivatives along c; the statistic is its minimum over c, chi2(m - k + 1) under H0. It does
-    not depend on the units of theta or on invertible recombinations of the moments. Returns (stat, df)."""
+    For each direction c (|c| = 1), the Wald statistic of E[dg_i/dtheta' c] = 0 uses the long-run covariance of
+    the per-observation derivatives along c; the statistic is its minimum over c, chi2(m - k + 1) under H0. It does
+    not depend on the units of theta or on invertible recombinations of the moments. It is a test of the RANK, not
+    a measure of strength: under any fixed alternative it grows with n (its variance is centred, not taken under
+    H0), so it is not a first-stage F and has no rule-of-thumb cut (v2.8.0 review r1).
+
+    The covariance of vec(dg_i/dtheta') is computed once (Omega, mk x mk) and the variance along c is the quadratic
+    form (c x I)' Omega (c x I). With lags it always uses the Bartlett kernel, which is positive semidefinite (a
+    truncated kernel made the variance indefinite and the statistic negative; review r1). A direction in which the
+    derivatives do not vary (variance ~0) but whose mean is not 0 is identified exactly: the statistic is inf.
+    Returns (stat, df); (nan, df) when the moments are not finite next to the estimate."""
     th = np.asarray(th, float)
     h = _steps(th)
     k = len(th)
     cols = []
-    for j in range(k):
-        e = np.zeros(k)
-        e[j] = h[j]
-        cols.append((G_of(th + e) - G_of(th - e)) / (2 * h[j]))
+    try:
+        for j in range(k):
+            e = np.zeros(k)
+            e[j] = h[j]
+            cols.append((G_of(th + e) - G_of(th - e)) / (2 * h[j]))
+    except ValueError:
+        return float("nan"), None
     Di = np.stack(cols, axis=2)                                    # n x m x k
     n, m, _ = Di.shape
+    if not np.all(np.isfinite(Di)):
+        return float("nan"), m - k + 1
+    Dbar = Di.mean(0)
+    flat = Di.reshape(n, m * k)                                    # column j*k + a: moment j, parameter a
+    Om = _gmm_S(flat, lags, "bartlett", True).reshape(m, k, m, k)
+    M2 = (flat.T @ flat / n).reshape(m, k, m, k)                   # uncentred second moments: the scale of D_i
 
     def wald(c):
         c = np.asarray(c, float)
         nc = np.linalg.norm(c)
         if not np.isfinite(nc) or nc == 0:
             return np.inf
-        d = Di @ (c / nc)
-        V = _gmm_S(d, lags, kernel, True)
-        dm = d.mean(0)
-        try:
-            return float(n * dm @ np.linalg.solve(V, dm))
-        except np.linalg.LinAlgError:
-            return float(n * dm @ np.linalg.pinv(V) @ dm)
+        c = c / nc
+        V = np.einsum("iajb,a,b->ij", Om, c, c)
+        ref = float(np.trace(np.einsum("iajb,a,b->ij", M2, c, c))) / m
+        dm = Dbar @ c
+        ev, vec = np.linalg.eigh((V + V.T) / 2)
+        tol = 1e-12 * max(float(np.abs(ev).max()), ref, np.finfo(float).tiny)
+        proj = vec.T @ dm
+        keep = ev > tol
+        if np.any(np.abs(proj[~keep]) > 1e-6 * np.sqrt(max(ref, np.finfo(float).tiny))):
+            return np.inf                                          # the moments move deterministically along c
+        return float(n * np.sum(proj[keep] ** 2 / ev[keep]))
 
     if k == 1:
         return wald([1.0]), m
@@ -555,11 +575,17 @@ def _gmm_rank_test(G_of, th, lags, kernel):
                                        options={"xatol": 1e-10})
         best = min(float(res.fun), float(vals[i]))
     else:
-        starts = [np.eye(k)[j] for j in range(k)] + [rng.standard_normal(k) for _ in range(10 * k)]
+        # the statistic does not depend on |c|: unconstrained minimisation over c, from the axes and random starts
+        starts = [np.eye(k)[j] for j in range(k)] + [rng.standard_normal(k) for _ in range(3 * k)]
         best = np.inf
         for c0 in starts:
-            res = optimize.minimize(wald, c0, method="Nelder-Mead",
-                                    options={"xatol": 1e-9, "fatol": 1e-10, "maxiter": 4000 * k})
+            f0 = wald(c0)
+            if not np.isfinite(f0):
+                continue
+            res = optimize.minimize(wald, c0, method="BFGS", options={"gtol": 1e-10 * max(1.0, f0), "maxiter": 400})
+            best = min(best, float(res.fun), f0)
+            res = optimize.minimize(wald, res.x, method="Nelder-Mead",
+                                    options={"xatol": 1e-9, "fatol": 1e-10, "maxiter": 200 * k})
             best = min(best, float(res.fun))
     return best, m - k + 1
 
@@ -598,17 +624,18 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
       "jacobian"   ndarray m x k, d mean(g) / d theta' at the estimate
       "objective"  float, mean(g)' W mean(g) at the estimate
       "converged"  bool; "iterations" int (weight updates)
-      "rank_stat", "rank_df", "rank_p"  Cragg-Donald (1997) minimum-Wald test of rank(D) < k, chi2(m - k + 1)
-      "ident_F"    rank_stat / rank_df; weak identification below 10 (it matched the first-stage F of a linear IV
-                   with one endogenous regressor within 4% when F < 10; v2.8.0 measurement)
+      "rank_stat", "rank_df", "rank_p"  Cragg-Donald (1997) minimum-Wald test of rank(D) < k, chi2(m - k + 1);
+                   a test of the rank only: rejecting it does not show strong identification (it grows with n
+                   under any alternative; not a first-stage F). NaN when the moments are undefined next to the estimate
       "used"       dict, keys ["steps", "first_weight", "hac_lags", "kernel", "center", "bounds", "n", "m", "k",
-                   "iterations", "converged", "skill_version"]
+                   "iterations", "converged", "rank_test_cov", "skill_version"]
       "warnings"   list of dicts with keys ["level", "message", "action"]
 
     moments(theta, *args) returns the n x m matrix of moment contributions g_i(theta), one row per
     observation (not their mean), e.g. for an Euler equation with instruments z_t:
     (beta * c_growth**(-gamma) * R - 1)[:, None] * Z. jacobian(theta, *args), optional, returns the
-    m x k Jacobian of the MEAN moment; without it, central differences.
+    m x k Jacobian of the MEAN moment (rows = moments, columns = parameters; checked once against central
+    differences at theta0, and refused if it disagrees, e.g. transposed); without it, central differences.
     steps    "two-step" (default): first step with `weight` (identity if None; the first step depends on
              the units of the moments: scale them), then W = S^-1 at the first-step estimate; "iterated":
              repeat until the estimate stops moving (Hansen, Heaton and Yaron 1996); "one-step": `weight`
@@ -625,9 +652,11 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
     is the RIGHT tail (j_p). "Prob" columns in Hansen-Singleton (1982, 1983) are the CDF (j_cdf): a Prob of 0.967
     is p = 0.033, a rejection at 5%.
     Findings: exactly identified; a parameter at or within one SE of a bound (J, Wald and LR leave the chi2;
-    Andrews 1999); a Jacobian whose rank test does not reject rank < k (not identified) or whose statistic
-    per df is below 10 (weak identification); fewer than 10 observations per moment; S not
-    positive definite; no convergence (report no number). Try several starting values: GMM criteria of
+    Andrews 1999); a Jacobian whose rank test does not reject rank < k (may not be identified); fewer than 10
+    observations per moment; S not positive definite; no convergence (report no number). The rank test (with lags,
+    always on a Bartlett long-run covariance) only detects rank deficiency: identification can be weak even when it
+    rejects. Weakness is judged by the criterion over a grid or an identification-robust S test (Stock and Wright
+    2000), not by a cut on this statistic. Try several starting values: GMM criteria of
     nonlinear models have flat valleys (gamma and beta of an Euler equation trade off)."""
     from reporting import SKILL_VERSION, _finding, _print_findings
     if steps not in _GMM_STEPS:
@@ -646,11 +675,15 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
         G = np.asarray(moments(th, *args), float)
         if G.ndim == 1:
             G = G[:, None]
+        if not np.all(np.isfinite(G)):
+            raise ValueError(f"moments returned NaN or inf at theta = {np.array2string(np.asarray(th), precision=6)}: "
+                             "the search reached values where they are undefined; set bounds or other starting values")
         return G
 
-    G0 = G_of(theta0)
-    if not np.all(np.isfinite(G0)):
-        raise ValueError("moments are not finite at theta0 (missing values in the data, or a bad start)")
+    try:
+        G0 = G_of(theta0)
+    except ValueError:
+        raise ValueError("moments are not finite at theta0 (missing values in the data, or a bad start)") from None
     n, m = G0.shape
     if m < k:
         raise ValueError(f"{m} moments for {k} parameters: the model is not identified (need m >= k)")
@@ -660,10 +693,26 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
     def gbar(th):
         return G_of(th).mean(0)
 
+    def D_user(th):
+        Du = np.asarray(jacobian(th, *args), float)
+        if Du.ndim == 1 and k == 1 and Du.shape[0] == m:
+            Du = Du[:, None]
+        if Du.shape != (m, k):
+            raise ValueError(f"jacobian must return an array of shape (m, k) = ({m}, {k}) (rows = moments, "
+                             f"columns = parameters); it returned shape {Du.shape}")
+        return Du
+
     def D_of(th):
         if jacobian is not None:
-            return np.atleast_2d(np.asarray(jacobian(th, *args), float)).reshape(m, k)
+            return D_user(th)
         return _jacobian(gbar, th)
+
+    if jacobian is not None:
+        Du0, Dn0 = D_user(theta0), _jacobian(gbar, theta0)
+        gap = float(np.max(np.abs(Du0 - Dn0))) / max(float(np.max(np.abs(Dn0))), np.finfo(float).tiny)
+        if not gap < 1e-3:
+            raise ValueError(f"jacobian disagrees with central differences at theta0 (largest gap {gap:.3g} of the "
+                             "largest entry): check it, and its orientation (rows = moments, columns = parameters)")
 
     if bounds is not None:
         if len(bounds) != k:
@@ -750,20 +799,19 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
                     "warning", f"{names[j]} = {th[j]:.6g} is within one SE ({se[j]:.3g}) of its {side} bound {b:g}",
                     "near a bound the t-ratio, the CI and the chi2 references of J, Wald and LR are not valid "
                     "(Andrews 1999); report the bound as binding and use a boundary-aware test or a bootstrap"))
-    rank_stat, rank_df = _gmm_rank_test(G_of, th, hac_lags, kernel)
-    rank_p = float(stats.chi2.sf(rank_stat, rank_df))
-    ident_F = rank_stat / rank_df
-    if not rank_p < alpha:
+    rank_stat, rank_df = _gmm_rank_test(G_of, th, hac_lags)
+    if rank_df is None:
+        rank_df = m - k + 1
+    rank_p = float(stats.chi2.sf(rank_stat, rank_df))              # nan when the test was not computed
+    if not np.isfinite(rank_p):
+        warns.append(_finding(
+            "notice", "the rank test of the Jacobian was not computed: the moments are undefined next to the estimate",
+            "check identification by the criterion over a grid of the parameters"))
+    elif not rank_p < alpha:
         warns.append(_finding(
             "warning", f"the parameters may not be identified: the rank test of the Jacobian does not reject "
             f"rank < {k} (Cragg-Donald minimum Wald {rank_stat:.3g}, df {rank_df}, p = {rank_p:.3g})",
             "do not report the estimates or their SEs; add informative moments or fix a parameter from theory"))
-    elif ident_F < _GMM_WEAK_F:
-        warns.append(_finding(
-            "warning", f"weak identification: rank statistic / df = {ident_F:.3g} (below {_GMM_WEAK_F:g}, the "
-            "rule of thumb for a first-stage F): some combination of the parameters barely moves the moments",
-            "the SEs, CIs and J can be far off; report the criterion over a grid or an identification-robust "
-            "S test (Stock and Wright 2000), or fix one parameter from theory"))
     if n < 10 * m:
         warns.append(_finding("notice", f"{n} observations for {m} moments (< 10 per moment): S is estimated with "
                               "noise and J tends to over-reject",
@@ -777,12 +825,14 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
     used = {"steps": steps, "first_weight": "identity" if weight is None else "user", "hac_lags": hac_lags,
             "kernel": kernel if hac_lags is not None else None, "center": center,
             "bounds": None if bounds is None else [tuple(b) if b is not None else None for b in bounds],
-            "n": n, "m": m, "k": k, "iterations": it, "converged": conv, "skill_version": SKILL_VERSION}
+            "n": n, "m": m, "k": k, "iterations": it, "converged": conv,
+            "rank_test_cov": "iid" if not hac_lags else f"Bartlett HAC with {hac_lags} lags",
+            "skill_version": SKILL_VERSION}
     out = {"estimand": "theta", "method": method, "params": pd.Series(th, index=names), "table": tab,
            "cov": pd.DataFrame(V, index=names, columns=names), "j": J, "j_df": df_j, "j_p": j_p, "j_cdf": j_cdf,
            "n": n, "m": m, "k": k, "weight": W, "S": S, "jacobian": D, "objective": float(g @ W @ g),
            "converged": conv, "iterations": it, "rank_stat": rank_stat, "rank_df": rank_df,
-           "rank_p": rank_p, "ident_F": ident_F, "used": used, "warnings": warns}
+           "rank_p": rank_p, "used": used, "warnings": warns}
     if show:
         print(f"\n{method}: n = {n}, {m} moments, {k} parameters")
         print(tab.to_string(float_format=lambda v: f"{v:.6g}"))
@@ -790,7 +840,7 @@ def gmm(moments, theta0, args=(), names=None, steps: str = "two-step", weight=No
             print(f"Hansen J = {J:.4f}, df = {df_j}, p (right tail) = {j_p:.4f}"
                   f"   [chi2 CDF = {j_cdf:.4f}: what old tables print as 'Prob'; not the p-value]")
         print(f"Identification (rank of the Jacobian): Cragg-Donald minimum Wald = {rank_stat:.4g}, df = {rank_df}, "
-              f"p = {rank_p:.4g}; per df = {ident_F:.4g} (weak below {_GMM_WEAK_F:g})")
+              f"p = {rank_p:.4g} (tests rank < {k} only; a rejection does not rule out weak identification)")
         _print_findings(warns)
     return out
 

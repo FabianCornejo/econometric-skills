@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
-from scipy import stats
+from scipy import optimize, stats
 from scipy.special import gammaln
 
 import estimation as est
@@ -400,9 +400,9 @@ check("v2.8.0 gmm: Euler equation, same estimates as statsmodels NonlinearIVGMM 
 check("v2.8.0 gmm: Euler equation, same SEs and J as NonlinearIVGMM (rel <= 1e-6; numerical Jacobians differ)",
       np.allclose(ge["table"]["se"].to_numpy(), sm_res.bse, rtol=1e-6, atol=0)
       and abs(ge["j"] / sm_res.jtest()[0] - 1) < 1e-6, (ge["table"]["se"].to_numpy(), sm_res.bse))
-check("v2.8.0 gmm: Euler equation with n = 4998 is strongly identified (rank test per df far above 10; no "
-      "identification warning)", ge["ident_F"] > 50 and ge["rank_p"] < 1e-10
-      and not any("identif" in w["message"] for w in ge["warnings"]), ge["ident_F"])
+check("v2.8.0 gmm: Euler equation with n = 4998: the rank test rejects rank < 2 (p < 1e-10) and there is no "
+      "identification warning", ge["rank_p"] < 1e-10
+      and not any("identif" in w["message"] for w in ge["warnings"]), ge["rank_p"])
 
 # Monte Carlo: 400 samples of 900 months, two instrument lags (5 moments), default options.
 # Bands fixed before running: coverage of the 95% CI in [0.92, 0.98] (MC SE 1.1%); size of J at 5% in [0.02, 0.085]
@@ -448,30 +448,124 @@ def _fs_F(y, X, Z):
 
 
 strong = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(1.0, 1), show=False)
-check("v2.8.0 gmm: strong instruments (first-stage F in the hundreds): no identification warning",
-      not any("identif" in w["message"] for w in strong["warnings"]) and strong["ident_F"] > 10)
+check("v2.8.0 gmm: strong instruments (first-stage F in the hundreds): rank test rejects, no identification warning",
+      not any("identif" in w["message"] for w in strong["warnings"]) and strong["rank_p"] < 1e-10)
 
-# both sides of the weak-identification cut (10), seeds copied from claude/scripts/v280/seed_search.py
+# v2.8.0 review r1 (S1-1): the rank statistic grows with n under any alternative, so it is not a first-stage F and
+# carries no cut of 10. Before the fix, an instrument with a first-stage F of 1e8 (n = 100, 8 instruments) got
+# "rank statistic / df" of 5 and a "weak identification" warning.
+r_s = np.random.default_rng(1)
+z_s = r_s.standard_normal((100, 8))
+v_s = r_s.standard_normal(100)
+x_s = 1000.0 * z_s.sum(1) + v_s
+y_s = 1.0 + 2.0 * x_s + 0.5 * v_s + r_s.standard_normal(100)
+X_s, Z_s = np.column_stack([np.ones(100), x_s]), np.column_stack([np.ones(100), z_s])
+F_s = float(np.squeeze(sm.OLS(x_s, Z_s).fit().f_test(np.eye(9)[1:]).fvalue))
+sat = est.gmm(_lin_moments, [0.0, 0.0], args=(y_s, X_s, Z_s), show=False)
+check("v2.8.0 gmm: first-stage F of 1e8 -> no identification warning and no 'ident_F' key (the old cut called it weak)",
+      F_s > 1e7 and sat["rank_p"] < 0.05 and "ident_F" not in sat
+      and not any("identif" in w["message"] for w in sat["warnings"]), (F_s, sat["rank_stat"]))
+# the old seeds on both sides of the dropped cut: both reject rank < 2, neither gets a warning now
 wk_below = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.08, 0), show=False)
-wk_above = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.10, 10), show=False)
-check("v2.8.0 gmm: rank statistic per df 7.2 (below 10, rank test rejects) -> weak-identification warning",
-      7 < wk_below["ident_F"] < 10 and wk_below["rank_p"] < 0.05
-      and any(w["level"] == "warning" and "weak identification" in w["message"] for w in wk_below["warnings"]),
-      wk_below["ident_F"])
-check("v2.8.0 gmm: rank statistic per df 10.8 (just above 10) -> no identification warning",
-      10 < wk_above["ident_F"] < 13 and not any("identif" in w["message"] for w in wk_above["warnings"]),
-      wk_above["ident_F"])
+check("v2.8.0 gmm: a weak but rank-identified design (pi 0.08) -> rank test rejects, no 'weak identification' "
+      "verdict from the statistic", wk_below["rank_p"] < 0.05
+      and not any("weak identification" in w["message"] for w in wk_below["warnings"]), wk_below["rank_p"])
 none_ = est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.0, 0), show=False)
-check("v2.8.0 gmm: irrelevant instruments (rank test p = 0.38) -> 'may not be identified' warning, not 'weak'",
-      none_["rank_p"] >= 0.05 and any("may not be identified" in w["message"] for w in none_["warnings"])
-      and not any("weak identification" in w["message"] for w in none_["warnings"]), none_["rank_p"])
-ratios = []
-for pi_ in (0.05, 0.10):
-    for sd in range(20):
-        a_ = _iv_case(pi_, sd)
-        ratios.append(est.gmm(_lin_moments, [0.0, 0.0], args=a_, show=False)["ident_F"] / _fs_F(*a_))
-check("v2.8.0 gmm: where identification is weak (pi 0.05 and 0.1, 40 samples) the rank statistic per df is the "
-      "first-stage F (median ratio within 5% of 1)", abs(np.median(ratios) - 1) < 0.05, np.median(ratios))
+check("v2.8.0 gmm: irrelevant instruments (rank test p = 0.38) -> 'may not be identified' warning",
+      none_["rank_p"] >= 0.05 and any("may not be identified" in w["message"] for w in none_["warnings"]),
+      none_["rank_p"])
+# size of the rank test under H0 (pi = 0: rank(D) = 1 < 2), 300 samples; band fixed before running: [0.02, 0.085]
+rej0 = np.mean([est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.0, 500 + sd), show=False)["rank_p"] < 0.05
+                for sd in range(300)])
+check("v2.8.0 gmm: rank test rejects rank < 2 in [0.02, 0.085] of 300 samples when pi = 0 (size at 5%)",
+      0.02 <= rej0 <= 0.085, rej0)
+
+# the rank statistic with HAC, against a formula written here (S2-5: a mutation that dropped the lags survived).
+# k = 1, moments z_t (y_t - x_t theta): the derivative is -z_t x_t, free of theta, so the statistic is
+# n dbar' Omega^-1 dbar with Omega the Bartlett long-run covariance of z_t x_t (double sum over pairs). The rank
+# test always uses Bartlett, even with kernel="truncated" (S1-2: the truncated variance went negative).
+r_h = np.random.default_rng(83)
+nh = 150
+zh = r_h.standard_normal((nh, 3))
+for t in range(1, nh):
+    zh[t] += 0.6 * zh[t - 1]
+xh = 0.3 * zh.sum(1) + r_h.standard_normal(nh)
+yh = 1.5 * xh + r_h.standard_normal(nh)
+dh = zh * xh[:, None]
+Uh = dh - dh.mean(0)
+Om_h = np.zeros((3, 3))
+for t in range(nh):
+    for s_ in range(nh):
+        if abs(t - s_) <= 4:
+            Om_h += (1 - abs(t - s_) / 5) * np.outer(Uh[t], Uh[s_])
+Om_h /= nh
+rk_cf = nh * dh.mean(0) @ np.linalg.solve(Om_h, dh.mean(0))
+mom_h = lambda th, y, x, z: (y - x * th[0])[:, None] * z
+for kern in ("bartlett", "truncated"):
+    gh_ = est.gmm(mom_h, [0.0], args=(yh, xh, zh), hac_lags=4, kernel=kern, show=False)
+    check(f"v2.8.0 gmm: rank statistic with hac_lags=4, kernel={kern} = n dbar' Omega_Bartlett^-1 dbar (rel <= 1e-6)",
+          abs(gh_["rank_stat"] / rk_cf - 1) < 1e-6 and gh_["rank_df"] == 3
+          and gh_["used"]["rank_test_cov"] == "Bartlett HAC with 4 lags", (gh_["rank_stat"], rk_cf))
+gi_ = est.gmm(mom_h, [0.0], args=(yh, xh, zh), show=False)
+Ui = dh - dh.mean(0)
+check("v2.8.0 gmm: rank statistic without lags uses the iid covariance (differs from the HAC one here)",
+      abs(gi_["rank_stat"] / (nh * dh.mean(0) @ np.linalg.solve(Ui.T @ Ui / nh, dh.mean(0))) - 1) < 1e-6
+      and abs(gi_["rank_stat"] / rk_cf - 1) > 0.05 and gi_["used"]["rank_test_cov"] == "iid")
+
+# S1-2: the review's design (differenced instruments, n = 120, truncated kernel, 3 lags): the old rank statistic was
+# negative in 40 of 40 seeds (-6.4e3 to -4.7e16) with a false 'may not be identified'
+neg_rk, notid = 0, 0
+for sd in range(40):
+    r_t = np.random.default_rng(sd)
+    zt = r_t.standard_normal((121, 2))
+    zt = zt[1:] - zt[:-1]
+    et = r_t.standard_normal(121)
+    vt = et[1:] - et[:-1]
+    xt = 0.5 * zt.sum(1) + vt
+    yt = 1.0 + xt + vt + r_t.standard_normal(120)
+    gt_ = est.gmm(_lin_moments, [0.0, 0.0], args=(yt, np.column_stack([np.ones(120), xt]),
+                                                   np.column_stack([np.ones(120), zt])),
+                  hac_lags=3, kernel="truncated", show=False)
+    neg_rk += not gt_["rank_stat"] >= 0
+    notid += any("may not be identified" in w["message"] for w in gt_["warnings"])
+check("v2.8.0 gmm: truncated kernel, review design, 40 seeds: no negative rank statistic and no false "
+      "'may not be identified'", neg_rk == 0 and notid == 0, (neg_rk, notid))
+
+# S3-1: a direction in which the derivatives do not vary (the moment x - theta has derivative -1 on every row):
+# exactly identified along it; the statistic is inf, not 1e31 of rounding nor 0 from a pseudo-inverse
+xd = np.random.default_rng(84).standard_normal(300)
+gd_ = est.gmm(lambda th, x: np.column_stack([x - th[0], (x - th[0]) ** 2 - 1]), [0.1], args=(xd,), show=False)
+check("v2.8.0 gmm: derivatives constant across rows -> rank statistic inf, p = 0, no identification warning",
+      gd_["rank_stat"] == np.inf and gd_["rank_p"] == 0.0
+      and not any("identif" in w["message"] for w in gd_["warnings"]), gd_["rank_stat"])
+
+# S2-2: k >= 3 in seconds (k = 5, m = 10, n = 2000 took 397 s), and the minimum over directions against an
+# independent optimizer (Powell from 40 random starts on the Wald of D(c) computed here)
+r_k = np.random.default_rng(85)
+nk = 2000
+zk = r_k.standard_normal((nk, 9))
+vk = r_k.standard_normal((nk, 4))
+xk = 0.5 * zk[:, :1] + 0.5 * zk[:, :4] + vk
+yk = 1.0 + xk.sum(1) + 0.5 * vk[:, 0] + r_k.standard_normal(nk)
+Xk, Zk = np.column_stack([np.ones(nk), xk]), np.column_stack([np.ones(nk), zk])
+import time as _time
+t0_ = _time.time()
+gk_ = est.gmm(_lin_moments, np.zeros(5), args=(yk, Xk, Zk), show=False)
+dt_ = _time.time() - t0_
+Dk = -(Zk[:, :, None] * Xk[:, None, :])                     # derivative of z_i (y_i - x_i'theta): -z_i x_i'
+
+
+def _wald_k(c):
+    c = c / np.linalg.norm(c)
+    d = Dk @ c
+    u = d - d.mean(0)
+    return nk * d.mean(0) @ np.linalg.solve(u.T @ u / nk, d.mean(0))
+
+
+rk_ref = min(optimize.minimize(_wald_k, r_k.standard_normal(5), method="Powell").fun for _ in range(40))
+check("v2.8.0 gmm: k = 5, m = 10, n = 2000: the whole fit in under 60 s and the rank statistic equals the minimum "
+      "found by Powell from 40 starts (rel <= 1e-6)", dt_ < 60 and abs(gk_["rank_stat"] / rk_ref - 1) < 1e-6,
+      (dt_, gk_["rank_stat"], rk_ref))
 
 # truncated kernel with an indefinite S (an MA(1) with a unit root in the MA part, two lags; seed 1)
 r_neg = np.random.default_rng(1)
@@ -500,12 +594,15 @@ check("v2.8.0 gmm: 39 observations for 4 moments -> notice; 40 -> no notice",
 # stdout: labels the reader sees
 buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
-    est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.08, 0), names=["const", "x"])
+    est.gmm(_lin_moments, [0.0, 0.0], args=_iv_case(0.0, 0), names=["const", "x"])
 txt = buf.getvalue()
 check("v2.8.0 gmm show: prints the method, the table, J with 'p (right tail)', the CDF labelled as not the "
-      "p-value, the identification line and each finding with its action",
+      "p-value, the identification line saying a rejection does not rule out weak identification, and each finding "
+      "with its action",
       "GMM (two-step)" in txt and "estimate" in txt and "p (right tail)" in txt and "not the p-value" in txt
-      and "Cragg-Donald" in txt and "WARNING: weak identification" in txt and "action:" in txt, txt[-400:])
+      and "Cragg-Donald" in txt and "does not rule out weak identification" in txt
+      and "WARNING: the parameters may not be identified" in txt and "action:" in txt
+      and "per df" not in txt and "weak below" not in txt, txt[-500:])
 check("v2.8.0 gmm: 'used' records the choices actually applied", g80["used"]["steps"] == "two-step"
       and g80["used"]["first_weight"] == "identity" and g80["used"]["n"] == n80 and g80["used"]["m"] == 4
       and g80o["used"]["first_weight"] == "user" and g80["used"]["skill_version"])
@@ -525,6 +622,42 @@ try:
 except ValueError:
     under = True
 check("v2.8.0 gmm: fewer moments than parameters is refused (not identified)", under)
+
+# S2-3: a user Jacobian is checked once against central differences; transposed or wrong is refused (it was reshaped
+# silently and gave other estimates and SEs with converged=True)
+jac_ok = lambda th, y, X, Z: -(Z.T @ X) / len(y)                 # d mean(z (y - X theta)) / d theta' : m x k
+gj = est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), jacobian=jac_ok, show=False)
+check("v2.8.0 gmm: the right analytic Jacobian is accepted and gives the closed-form estimate (rel <= 1e-9)",
+      np.allclose(gj["params"].to_numpy(), th2, rtol=1e-9, atol=0))
+for lab, jf in (("transposed (k x m)", lambda th, y, X, Z: (-(Z.T @ X) / len(y)).T),
+                ("wrong values, right shape", lambda th, y, X, Z: -2.0 * (Z.T @ X) / len(y))):
+    try:
+        est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Z80), jacobian=jf, show=False)
+        msg = ""
+    except ValueError as err:
+        msg = str(err)
+    check(f"v2.8.0 gmm: a {lab} Jacobian is refused with a message about shape or disagreement",
+          ("shape" in msg) if "transposed" in lab else ("disagrees" in msg), msg)
+Zsq = Z80[:, :2]                                                  # m = k = 2: a transposed square Jacobian
+try:
+    est.gmm(_lin_moments, [0.0, 0.0], args=(y80, X80, Zsq), jacobian=lambda th, y, X, Z: (-(Z.T @ X) / len(y)).T,
+            show=False)
+    sq = ""
+except ValueError as err:
+    sq = str(err)
+check("v2.8.0 gmm: a transposed square Jacobian (m = k) is refused by the check against central differences",
+      "disagrees" in sq, sq)
+
+# S3-2: moments that become NaN during the search stop with a message that says so (it was numpy's error)
+xn = np.random.default_rng(86).standard_normal(200) + 2.0
+try:
+    est.gmm(lambda th, x: np.column_stack([x - th[0], (x - th[0]) * np.where(th[0] > 1.5, np.nan, 1.0)]), [0.0],
+            args=(xn,), show=False)
+    nan_msg = ""
+except ValueError as err:
+    nan_msg = str(err)
+check("v2.8.0 gmm: moments that turn NaN in the search -> ValueError naming theta and suggesting bounds",
+      "NaN or inf at theta" in nan_msg and "bounds" in nan_msg, nan_msg)
 
 
 # ---------------------------------------------------------------------------------------------

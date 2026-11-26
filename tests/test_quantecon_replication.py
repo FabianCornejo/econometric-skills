@@ -344,8 +344,14 @@ for p_ in (1, 2, 4, 6):
           abs(gd["params"].iloc[0] - gp) < sgp and abs(gd["params"].iloc[1] - bp) < sbp and gd["j_p"] > 0.05,
           (gd["params"].to_numpy(), gd["j_p"]))
     if p_ >= 2:
-        check(f"H-S 1982 NLAG {p_}: the rank test flags weak identification (the lecture: 'weakly identified')",
-              gd["ident_F"] < 10 and any("weak identification" in w["message"] for w in gd["warnings"]), gd["ident_F"])
+        # v2.8.0 r1: the rank test rejects rank < 2 here, and that is not evidence of strong identification (it grows
+        # with n under any alternative). What the lecture calls 'weakly identified' is the imprecision of gamma.
+        check(f"H-S 1982 NLAG {p_}: the rank test rejects rank < 2 (p < 0.05) and no strength verdict is drawn from "
+              "it; gamma's 95% CI contains 0 (the lecture's 'weakly identified')",
+              gd["rank_p"] < 0.05 and "ident_F" not in gd
+              and not any("weak identification" in w["message"] for w in gd["warnings"])
+              and gd["table"]["ci_low"].iloc[0] < 0 < gd["table"]["ci_high"].iloc[0],
+              (gd["rank_p"], gd["table"]["ci_low"].iloc[0], gd["table"]["ci_high"].iloc[0]))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)
