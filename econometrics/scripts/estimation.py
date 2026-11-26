@@ -534,6 +534,9 @@ def _gmm_rank_test(G_of, th, lags, h=None):
     form (c x I)' Omega (c x I). With lags it always uses the Bartlett kernel, which is positive semidefinite (a
     truncated kernel made the variance indefinite and the statistic negative; review r1). A direction in which the
     derivatives do not vary (variance ~0) but whose mean is not 0 is identified exactly: the statistic is inf.
+    Precision: with a regressor stored with an offset of 1e4 or more and HAC lags the statistic differed by a few
+    percent between machines once (CI, not reproduced); up to 3e3 it matched the well-scaled one to 3e-7. Centre
+    such a regressor.
     Returns (stat, df, ac1); (nan, df, nan) when the moments are not finite next to the estimate. ac1 is the largest
     absolute first-order autocorrelation among the columns of vec(dg_i/dtheta') that vary: the persistence that
     makes the test over-reject (v2.8.0 review r2, S2-4; sizes measured in references/estimation-theory.md
