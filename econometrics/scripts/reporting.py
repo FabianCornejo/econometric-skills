@@ -201,6 +201,7 @@ CARD_REQUIRED = ("question", "estimand", "design")
 # from the prose of SKILL.md). Keys are compared after _card_key(); the card itself is never renamed. Only names that
 # mean one field in every design (reviews r1, r2 and r3): "control" and "controls" (the control group in a
 # case-control study?), "covariates" (X in a heterogeneity study, W elsewhere), "treated" (the treated group?),
+# "benchmark" (the covariate of a sensitivity benchmark, a market index? review r4, S2-2),
 # "level" (cluster level?), "exposure" (a portfolio's exposure?), "source", "risks", "family" and "tests" are left
 # out on purpose, and no suggestion comes from a spelling that only looks close ("estimador" is not "estimand").
 CARD_SYNONYMS = {
@@ -218,7 +219,7 @@ CARD_SYNONYMS = {
     "effectmodifier": "X", "effectmodifiers": "X",
     "significance": "alpha", "significancelevel": "alpha", "siglevel": "alpha", "alphalevel": "alpha",
     "minimumdetectableeffect": "mde", "mindetectableeffect": "mde", "forecasthorizon": "horizon",
-    "lossfunction": "loss", "benchmark": "benchmarks", "threat": "threats", "threatstovalidity": "threats",
+    "lossfunction": "loss", "threat": "threats", "threatstovalidity": "threats",
     "validitythreats": "threats", "threatstoidentification": "threats", "dataset": "data", "datasource": "data",
     "datasources": "data",
 }
@@ -370,11 +371,13 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
                         f"{target} field")
         std = "The standard fields are " + ", ".join(CARD_FIELDS)
         if any(sugg.values()):   # reviews r2 S2-4, r3 S1-1, S2-1, S3-2
-            act = ("the card is already written with these names. To use a standard key, call study_card again with "
-                   "ALL the fields, each standard key in place of the name above, plus amend=True and a reason that "
-                   "says the names changed and whether results had been seen (it is recorded as an amendment); a "
-                   "field left out of that call is dropped from the card and kept only in its amendments. Until "
-                   "then a standard field left out stays empty. " + std)
+            act = ("the card is already written with these names. To use a standard key, replace the study_card "
+                   "call in the script (do not add a second one) with one that passes ALL the fields, each standard "
+                   "key in place of the name above and names that mean the same field merged into one value, plus "
+                   "amend=True and a reason that says the names changed and whether results had been seen (it is "
+                   "recorded as an amendment); after it has run once, drop amend and reason. A field left out of "
+                   "that call is dropped from the card and kept only in its amendments. Until then a standard field "
+                   "left out stays empty. " + std)   # review r4, S2-1 and S3-1
         else:
             act = ("check that these names are not standard fields spelled another way; non-standard fields are "
                    "kept as given. " + std)

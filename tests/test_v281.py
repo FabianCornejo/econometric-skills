@@ -187,12 +187,12 @@ EXPECT = {   # reviews r1, r2 and r3: only names that mean one field in every de
     "test_families": "family_of_tests", "multiple_tests": "family_of_tests",
     "significance": "alpha", "significance_level": "alpha", "sig_level": "alpha", "alpha_level": "alpha",
     "min_detectable_effect": "mde", "minimum_detectable_effect": "mde", "forecast_horizon": "horizon",
-    "loss_function": "loss", "benchmark": "benchmarks", "threat": "threats", "threats_to_validity": "threats",
+    "loss_function": "loss", "threat": "threats", "threats_to_validity": "threats",
     "validity_threats": "threats", "threats_to_identification": "threats", "dataset": "data", "data_source": "data",
     "data_sources": "data", "datasource": "data", "Robustness Plan": "robustness_plan",
     "Family-of-Tests": "family_of_tests", "x": "X",
     # no suggestion: a name with another meaning in some design, a spelling that only looks close, or a start
-    "control": None, "controls": None, "covariate": None, "covariates": None, "treated": None, "exposure": None,
+    "benchmark": None, "control": None, "controls": None, "covariate": None, "covariates": None, "treated": None, "exposure": None,
     "source": None, "risks": None, "family": None, "level": None, "cluster_level": None, "identification": None,
     "tests": None, "sensitivity": None, "estimador": None, "estimado": None, "estimated": None, "treinamento": None,
     "treats": None, "treaties": None, "heats": None, "thres": None, "horizn": None, "threts": None, "bench": None,
@@ -220,7 +220,10 @@ check("with a suggestion the action says the truth (reviews r2 S2-4, r3 S1-1, S2
       "with ALL the fields and amend=True; a field left out is dropped; the reason is the agent's, not a ready text",
       act.startswith("the card is already written with these names") and "ALL the fields" in act
       and "amend=True" in act and "recorded as an amendment" in act and "dropped from the card" in act
-      and "whether results had been seen" in act and "no results seen" not in act, act)
+      and "whether results had been seen" in act and "no results seen" not in act
+      and "replace the study_card call in the script (do not add a second one)" in act
+      and "after it has run once, drop amend and reason" in act
+      and "names that mean the same field merged into one value" in act, act)
 w, *_ = notice(assumptions="a", identifying_assumption="b", key_assumption="c")
 check("three names for one field: listed with 'and' and told to merge (review r3, S3-5)",
       w is not None and "assumptions, identifying_assumption and key_assumption all mean assumption: merge them into "
@@ -235,10 +238,24 @@ with tempfile.TemporaryDirectory() as d:   # review r3, S1-1: follow the action 
     second = reporting.study_card(path, show=False, **renamed, amend=True,
                                   reason="names changed to the standard keys; no results had been seen")
     on_file = json.loads(Path(path).read_text(encoding="utf-8"))
+    third = reporting.study_card(path, show=False, **renamed)   # the script run again, amend and reason dropped
+    on_file3 = json.loads(Path(path).read_text(encoding="utf-8"))
 check("following the action (all fields, the suggested key in place of the name, amend=True and a reason) keeps "
-      "every field and records one amendment", sugg == {"identifying_assumption": "assumption"}
+      "every field and records one amendment; the script run again with amend and reason dropped leaves the card "
+      "unchanged, with no new amendment and no warning (review r4, S2-1)", sugg == {"identifying_assumption": "assumption"}
       and on_file["fields"] == {**REQ, "assumption": "a", "W": ["x1"], "notes": "n"}
-      and len(on_file.get("amendments", [])) == 1, (sugg, on_file.get("fields"), len(on_file.get("amendments", []))))
+      and len(on_file.get("amendments", [])) == 1 and third["action"] == "unchanged"
+      and len(on_file3.get("amendments", [])) == 1 and not [w_ for w_ in third["warnings"] if w_["level"] != "notice"],
+      (sugg, on_file.get("fields"), len(on_file.get("amendments", [])), third["action"], third["warnings"]))
+with tempfile.TemporaryDirectory() as d:   # review r4, S3-1: two names for one field, merged into one value
+    path = str(Path(d) / "card.json")
+    first = reporting.study_card(path, show=False, **REQ, assumptions="a1", identifying_assumption="a2", W=["x1"])
+    msg = next(w_ for w_ in first["warnings"] if "non-standard" in w_["message"])["message"]
+    merged = {**REQ, "assumption": "a1; a2", "W": ["x1"]}
+    reporting.study_card(path, show=False, **merged, amend=True, reason="names changed; no results had been seen")
+    on_file = json.loads(Path(path).read_text(encoding="utf-8"))
+check("two names for one field: the notice says to merge them, and the merged call keeps both values",
+      "merge them into one assumption field" in msg and on_file["fields"] == merged, (msg, on_file.get("fields")))
 with tempfile.TemporaryDirectory() as d:
     a = reporting.study_card(str(Path(d) / "a.json"), show=False, **REQ, identifying_assumption="x", treat="t")
     raw = (Path(d) / "a.json").read_text(encoding="utf-8")
