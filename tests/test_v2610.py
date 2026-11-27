@@ -305,7 +305,7 @@ import yaml  # noqa: E402
 _fm = skill_md.splitlines()
 _end = _fm.index("---", 1) if _fm and _fm[0] == "---" and "---" in _fm[1:] else 0
 desc = (yaml.safe_load("\n".join(_fm[1:_end])) or {}).get("description", "") if _end else ""
-check("description: at most 990 characters (room for v2.7.0; it was 1022 of 1024)", 0 < len(desc) <= 990, len(desc))
+check("description: at most 1024 characters (the 990 kept room for v2.7.0; v2.8.1 used it for GMM and sequential tests, test_v281)", 0 < len(desc) <= 1024, len(desc))
 kept = ["hypothesis", "two groups", "Welch", "proportions", "variances", "chi-square", "normality", "correlation",
         "power and sample size", "regression", "effect of X on Y", "VaR", "WACC", "forecast", "DiD",
         "even a quick one you could do by hand", "an interval for a proportion", "a sample size", "a p-value",

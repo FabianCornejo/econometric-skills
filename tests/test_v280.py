@@ -40,9 +40,14 @@ def read(rel):
 
 # ------------------------------------------------------------------ SKILL.md unchanged (no routing round needed)
 SKILL_V275 = "35b7c6e446f8cc409bbeb979f2964972224c98b6861d75ed9e586d23ea88d86d"   # git show bc17002:econometrics/SKILL.md
-raw = (SK / "SKILL.md").read_bytes().replace(b"\r\n", b"\n")
-check("SKILL.md is the v2.7.5 file (SHA-256 with LF line ends): the routing round moves to the next release",
-      hashlib.sha256(raw).hexdigest() == SKILL_V275, hashlib.sha256(raw).hexdigest())
+raw = (SK / "SKILL.md").read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
+# v2.8.1 changed SKILL.md on purpose (GMM and sequential tests); undo exactly its documented changes and compare, so
+# this still proves that v2.8.0 left SKILL.md alone and that nothing else changed since (lesson of v2.5.1).
+import skillmd_changes  # noqa: E402
+raw, _bad = skillmd_changes.undo(raw, skillmd_changes.V281)
+check("SKILL.md, minus the documented v2.8.1 changes, is the v2.7.5 file (SHA-256 with LF line ends)",
+      not _bad and hashlib.sha256(raw.encode("utf-8")).hexdigest() == SKILL_V275,
+      (_bad, hashlib.sha256(raw.encode("utf-8")).hexdigest()))
 
 # ------------------------------------------------------------------ the graders of the two new cases
 CASES = {"gmm-euler": (C.GMM, {"routing", "gmm"}), "review-optional-stopping": (C.PEEK, {"routing", "reviewer"})}
