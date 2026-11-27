@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 import _console  # noqa: F401  (Windows-safe console output, see _console.py)
 
-SKILL_VERSION = "2.8.0"
+SKILL_VERSION = "2.8.1"
 _PACKAGES = ("numpy", "pandas", "scipy", "statsmodels", "linearmodels", "arch", "scikit-learn")
 
 
@@ -197,6 +197,40 @@ CARD_FIELDS = ("question", "estimand", "design", "assumption", "y", "treatment",
                "robustness_plan", "alpha", "family_of_tests", "horizon", "loss", "benchmarks", "window", "mde")
 CARD_REQUIRED = ("question", "estimand", "design")
 
+# v2.8.1: names an agent or a user writes for a standard field (the D6 validation of v2.8.0 wrote the first three
+# from the prose of SKILL.md). Keys are compared after _card_key(); the card itself is never renamed.
+CARD_SYNONYMS = {
+    "identifyingassumption": "assumption", "identificationassumption": "assumption", "assumptions": "assumption",
+    "identification": "assumption", "keyassumption": "assumption",
+    "robustness": "robustness_plan", "robustnesschecks": "robustness_plan", "robustnessplans": "robustness_plan",
+    "sensitivity": "robustness_plan",
+    "testsfamily": "family_of_tests", "testfamily": "family_of_tests", "familyoftest": "family_of_tests",
+    "testfamilies": "family_of_tests", "multipletests": "family_of_tests", "tests": "family_of_tests",
+    "outcome": "y", "dependent": "y", "dependentvariable": "y",
+    "controls": "W", "confounders": "W", "covariates": "W",
+    "instruments": "Z", "instrument": "Z", "effectmodifiers": "X", "modifiers": "X",
+    "significance": "alpha", "significancelevel": "alpha", "level": "alpha",
+    "minimumdetectableeffect": "mde", "risks": "threats", "threatstovalidity": "threats",
+    "dataset": "data", "datasource": "data", "source": "data",
+}
+
+
+def _card_key(name: str) -> str:
+    """Lower case, letters and digits only: 'Identifying assumption', 'identifying_assumption' -> 'identifyingassumption'."""
+    return "".join(ch for ch in unicodedata.normalize("NFC", str(name)).lower() if ch.isalnum())
+
+
+def _card_suggestion(name: str, given) -> str | None:
+    """The standard field a non-standard name probably means, or None. Never a field already in the card."""
+    import difflib
+    key = _card_key(name)
+    exact = {_card_key(f): f for f in CARD_FIELDS}
+    cand = exact.get(key) or CARD_SYNONYMS.get(key)
+    if cand is None and len(key) >= 4:
+        close = difflib.get_close_matches(key, [k for k in exact if len(k) >= 4], n=1, cutoff=0.8)
+        cand = exact[close[0]] if close else None
+    return cand if cand is not None and cand not in given else None
+
 
 def _canonical(obj) -> bytes:
     return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -287,7 +321,8 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     fields: question, estimand, design (required, not blank); assumption, y, treatment, X, W, Z, data,
     threats, robustness_plan, alpha, family_of_tests, mde; for a forecast, horizon, loss, benchmarks and
     window. Values are text, finite numbers or lists (JSON; numpy numbers are converted). Other names are
-    kept and reported as a notice. Texts are compared and written in Unicode NFC (v2.7.1), so the same words
+    kept and reported as a notice, which names the standard field each one probably means ("identifying_assumption
+    (did you mean assumption?)", v2.8.1; never a field the card already has); nothing is renamed. Texts are compared and written in Unicode NFC (v2.7.1), so the same words
     typed with combining accents count as the same plan (a card already on file keeps its text as written, and the
     result's `fields` are the ones on file).
 
@@ -318,8 +353,13 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     warns = []
     extra = sorted(set(fields) - set(CARD_FIELDS))
     if extra:
-        warns.append(_finding("notice", f"non-standard study card fields kept as given: {', '.join(extra)}",
-                              f"check the spelling; the standard fields are {', '.join(CARD_FIELDS)}"))
+        named = []
+        for f in extra:
+            s = _card_suggestion(f, fields)
+            named.append(f"{f} (did you mean {s}?)" if s else f)
+        warns.append(_finding("notice", f"non-standard study card fields kept as given: {', '.join(named)}",
+                              "use the standard key for what it holds (a standard field left out stays empty in the "
+                              "card); the standard fields are " + ", ".join(CARD_FIELDS)))
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     action = "written"
     if p.exists():
