@@ -229,7 +229,7 @@ check("_print_findings: level, message and action for dicts; WARNING for plain s
 _, out = quiet(rp.study_card, path=tmp / "show.json", question="q", estimand="e", design="d", contorls=1)
 check("study_card show: action, hash, fields and the notice with its action",
       "Study card written:" in out and "sha256" in out and "  question: q" in out and "NOTICE: non-standard" in out
-      and "action: if a field holds what a standard field means, use that key" in out, out)   # v2.8.1: new text
+      and "action: the card is already written with these names" in out, out)   # v2.8.1: new action text
 _, out = quiet(rp.run_manifest, data={"d": df}, study_card=p)
 check("run_manifest show: the study card line and the files= notice with its action",
       "study card" in out and "1 amendment(s)" in out and "NOTICE: data were hashed" in out

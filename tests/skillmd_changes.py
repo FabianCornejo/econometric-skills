@@ -4,9 +4,10 @@ else changed (lesson of v2.5.1: never re-pin a hash). Not part of the package.
 """
 
 ROW_GMM = ("| Moment conditions (an Euler equation, a structural equation with instruments): GMM, Hansen's J, a rank "
-           "test of whether the moments can identify the parameters; a likelihood ratio between nested fits with "
-           "restrictions of any form (a linear IV equation: the IV row; dynamic panels: `systems.dynamic_panel`) | "
-           "`estimation-theory.md` §7–8 | `estimation.gmm`, `lr_test` |\n")
+           "test of whether the moments can identify the parameters (a linear IV equation: `diagnostics.iv_report`, "
+           "row \"Panel data, endogeneity, instruments\"; a dynamic panel: `systems.dynamic_panel`); a likelihood "
+           "ratio between nested fits with restrictions of any form | `estimation-theory.md` §7–8 | "
+           "`estimation.gmm`, `lr_test` |\n")
 ROW_SEQ = ("| Data arriving one at a time (an A/B test, quality control, a trial): Wald's sequential test of a simple "
            "against a simple hypothesis, which stops early; the error of peeking at a fixed-sample test and the "
            "per-look level that keeps it; sample size from divergences | `statistics-foundations.md` §14 | "

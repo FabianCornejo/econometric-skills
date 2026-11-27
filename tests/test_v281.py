@@ -99,16 +99,17 @@ check("the sections each row cites, read from the row, are the GMM, LR and seque
       and "`lr_test`" in heads_et.get(8, "") and "statistics-foundations.md" in col_s and sec_s == [14]
       and heads_sf.get(14, "").startswith("Sequential tests"), (col_g, sec_g, col_s, sec_s))
 check("key words of the rows that the code backs (review r1, S3-4/5/6/7): right-tail J, the 50:50 mixture for one "
-      "restriction, the rank test, simple against simple, Pocock, the pointers to the IV row and dynamic_panel",
+      "restriction, the rank test, simple against simple, Pocock, the pointers to iv_report and dynamic_panel",
       "right-tail p-value" in SC.EST_GMM and "50:50 boundary mixture for one restriction" in SC.EST_GMM
-      and "rank test of whether the moments can identify" in SC.ROW_GMM and "the IV row" in SC.ROW_GMM
+      and "rank test of whether the moments can identify" in SC.ROW_GMM and "`diagnostics.iv_report`, row \"Panel data, endogeneity, instruments\"" in SC.ROW_GMM
       and "`systems.dynamic_panel`" in SC.ROW_GMM and callable(getattr(systems, "dynamic_panel", None))
       and "simple against a simple hypothesis" in SC.ROW_SEQ and "Pocock per-look level" in SC.ROW_SEQ_SCRIPT
       and "with boundary=True and df=1, the 50:50 mixture" in estimation.lr_test.__doc__
       and "Pocock" in sequential.peeking_size.__doc__ and "Wald's SPRT" in sequential.sprt.__doc__
       and "whether the parameters are identified" not in skill)
-iv_rows = [ln for ln in sec2.split("\n") if "iv_report" in ln]
-check("the IV row the GMM row points to exists in section 2", len(iv_rows) >= 1, iv_rows)
+iv_rows = [ln for ln in sec2.split("\n") if ln.startswith("| Panel data, endogeneity, instruments |")]
+check("the row the GMM row names exists in section 2 and routes to diagnostics.iv_report",
+      len(iv_rows) == 1 and "`diagnostics.iv_report`" in iv_rows[0], iv_rows)
 check("§14 and §7-8 use the functions the rows name (no row points to a section about something else)",
       all(f in sf for f in ("sprt_design", "peeking_size", "n_for_error", "divergence"))
       and "gmm(" in et and "lr_test(" in et)
@@ -146,7 +147,7 @@ check("D6 names: each gets the standard field it means, in the notice",
       w is not None and w["level"] == "notice"
       and "identifying_assumption (did you mean assumption?)" in w["message"]
       and "robustness (did you mean robustness_plan?)" in w["message"]
-      and "tests_family (did you mean family_of_tests?)" in w["message"], w)
+      and "tests_family (did you mean family_of_tests?)" in w["message"] and "all mean" not in w["message"], w)
 check("nothing is renamed: the card keeps the names given and the standard fields stay absent",
       {"identifying_assumption", "robustness", "tests_family"} <= set(on_file)
       and not {"assumption", "robustness_plan", "family_of_tests"} & set(on_file)
@@ -158,11 +159,10 @@ check("standard keys only: no notice at all", w is None, w)
 w, *_ = notice(assumption="a", identifying_assumption="b")
 check("a field the card already has is never suggested (assumption given, identifying_assumption kept as is)",
       w is not None and "identifying_assumption" in w["message"] and "did you mean" not in w["message"], w)
-w, *_ = notice(horizn=3, familly_of_tests="t", x="d")
-check("typos and case: horizn -> horizon, familly_of_tests -> family_of_tests, x -> X",
-      w is not None and "horizn (did you mean horizon?)" in w["message"]
-      and "familly_of_tests (did you mean family_of_tests?)" in w["message"] and "x (did you mean X?)" in w["message"],
-      w)
+w, *_ = notice(horizn=3, estimador="CS", x="d")
+check("case is matched (x -> X); no guess from spelling: horizn and estimador get none (review r2, S2-3)",
+      w is not None and "x (did you mean X?)" in w["message"] and "did you mean horizon" not in w["message"]
+      and "did you mean estimand" not in w["message"], w)
 w, *_ = notice(**{"Robustness Plan": "r", "notes": "n", "zz": 1})
 check("spacing and capitals of a standard key are matched; unrelated names get no invented suggestion",
       w is not None and "Robustness Plan (did you mean robustness_plan?)" in w["message"]
@@ -170,49 +170,53 @@ check("spacing and capitals of a standard key are matched; unrelated names get n
 check("every synonym points to a standard field, and no synonym is itself a standard key",
       set(reporting.CARD_SYNONYMS.values()) <= set(reporting.CARD_FIELDS)
       and not set(reporting.CARD_SYNONYMS) & {reporting._card_key(f) for f in reporting.CARD_FIELDS})
-EXPECT = {   # review r1: S2-1 (treat -> threats) and S3-1 (ambiguous names; missing singulars and common forms)
-    "treat": "treatment", "treats": "treatment", "treated": "treatment", "treatment_variable": "treatment",
-    "intervention": "treatment", "exposure": "treatment",
-    "control": "W", "controls": "W", "confounder": "W", "covariate": "W", "covariates": "W",
-    "outcome": "y", "outcome_variable": "y", "dependent_variable": "y", "instruments": "Z", "effect_modifiers": "X",
-    "identifying_assumption": "assumption", "assumptions": "assumption", "identification_strategy": "design",
-    "research_design": "design", "research_question": "question", "robustness": "robustness_plan",
-    "robustness_check": "robustness_plan", "tests_family": "family_of_tests", "test_family": "family_of_tests",
-    "sig_level": "alpha", "alpha_level": "alpha", "significance_level": "alpha", "forecast_horizon": "horizon",
-    "min_detectable_effect": "mde", "minimum_detectable_effect": "mde", "loss_function": "loss",
-    "data_source": "data", "dataset": "data", "risks": "threats", "threats_to_validity": "threats",
-    "identification_assumption": "assumption", "key_assumption": "assumption", "robustness_checks": "robustness_plan",
-    "robustness_plans": "robustness_plan", "sensitivity": "robustness_plan", "family_of_test": "family_of_tests",
-    "test_families": "family_of_tests", "multiple_tests": "family_of_tests", "dependent": "y", "confounders": "W",
-    "instrument": "Z", "modifiers": "X", "significance": "alpha", "source": "data", "datasource": "data",
-    "horizn": "horizon", "threts": "threats", "bench": "benchmarks", "Robustness Plan": "robustness_plan",
-    # no suggestion: ambiguous, or another thing that only shares letters or a start with a standard key
-    "level": None, "cluster_level": None, "identification": None, "tests": None, "notes": None, "comments": None,
-    "weights": None, "clusters": None, "design_notes": None, "data_notes": None, "wage": None, "zz": None,
-    "treaties": None, "heats": None,   # close to "threats" in letters; the first-two-letter guard keeps them out
+EXPECT = {   # reviews r1 (S2-1, S3-1) and r2 (S2-1..3, S3-1..2): only names that mean one field in every design
+    "treat": "treatment", "treated": "treatment", "treatment_variable": "treatment", "intervention": "treatment",
+    "controls": "W", "confounder": "W", "confounders": "W", "covariate": "W", "covariates": "W",
+    "outcome": "y", "outcomes": "y", "outcome_variable": "y", "dependent_variable": "y",
+    "instruments": "Z", "instrument": "Z", "effect_modifiers": "X",
+    "identifying_assumption": "assumption", "identification_assumption": "assumption", "assumptions": "assumption",
+    "key_assumption": "assumption", "identification_strategy": "design", "research_design": "design",
+    "research_question": "question", "robustness": "robustness_plan", "robustness_check": "robustness_plan",
+    "robustness_checks": "robustness_plan", "robustness_plans": "robustness_plan",
+    "tests_family": "family_of_tests", "test_family": "family_of_tests", "family_of_test": "family_of_tests",
+    "test_families": "family_of_tests", "multiple_tests": "family_of_tests",
+    "significance": "alpha", "significance_level": "alpha", "sig_level": "alpha", "alpha_level": "alpha",
+    "min_detectable_effect": "mde", "minimum_detectable_effect": "mde", "forecast_horizon": "horizon",
+    "loss_function": "loss", "threats_to_validity": "threats", "dataset": "data", "data_source": "data",
+    "datasource": "data", "Robustness Plan": "robustness_plan", "Family-of-Tests": "family_of_tests", "x": "X",
+    # no suggestion: a name with another meaning in some design, a spelling that only looks close, or a start
+    "control": None, "exposure": None, "source": None, "risks": None, "family": None, "level": None,
+    "cluster_level": None, "identification": None, "tests": None, "sensitivity": None, "estimador": None,
+    "estimado": None, "estimated": None, "treinamento": None, "treats": None, "treaties": None, "heats": None,
+    "thres": None, "horizn": None, "threts": None, "bench": None, "alphas": None, "losses": None, "datas": None,
+    "notes": None, "comments": None, "weights": None, "clusters": None, "design_notes": None, "data_notes": None,
+    "wage": None, "zz": None,
 }
 got = {n: reporting._card_suggestion(n, {}) for n in EXPECT}
-check("suggestions: every name gets the expected field or none (treat/treats never threats; level, identification "
-      "and tests get none; a name that only starts with a standard key gets none)", got == EXPECT,
+check("suggestions: every name gets the expected field or none (control, family, exposure, estimador, horizn and "
+      "the other ambiguous or look-alike names get none)", got == EXPECT,
       {n: (got[n], EXPECT[n]) for n in EXPECT if got[n] != EXPECT[n]})
 check("every synonym in CARD_SYNONYMS is covered by the expectations above (a new or changed one needs a case)",
       all(any(reporting._card_key(n) == k for n in EXPECT) for k in reporting.CARD_SYNONYMS),
       [k for k in reporting.CARD_SYNONYMS if not any(reporting._card_key(n) == k for n in EXPECT)])
 w, *_ = notice(assumptions="a", identifying_assumption="b", notes="n")
-check("two names that look like the same field: the notice says so (review r1, S3-3)",
-      w is not None and "assumptions and identifying_assumption both look like assumption: keep one" in w["message"]
+check("two names for the same field: the notice says so and says to merge them (reviews r1 S3-3, r2 S3-6)",
+      w is not None and "assumptions and identifying_assumption all mean assumption: merge them into one assumption field" in w["message"]
       and "notes" in w["message"], w)
 w, *_ = notice(notes="n")
-check("the action holds without a suggestion: other fields are kept as given; renaming a written card needs amend",
+check("the action says the truth (review r2, S2-4): the card is written; renaming needs amend=True and is recorded "
+      "as an amendment; other fields are kept as given",
       w is not None and "did you mean" not in w["message"] and "other fields are kept as given" in w["action"]
-      and w["action"].startswith("if a field holds what a standard field means, use that key")
+      and w["action"].startswith("the card is already written with these names")
+      and "recorded as an amendment" in w["action"] and "stays empty" in w["action"]
       and "amend=True" in w["action"], w)
 with tempfile.TemporaryDirectory() as d:
     a = reporting.study_card(str(Path(d) / "a.json"), show=False, **REQ, identifying_assumption="x", treat="t")
     raw = (Path(d) / "a.json").read_text(encoding="utf-8")
     card = json.loads(raw)
 check("the card on file holds only the fields given (no notice text, no renamed key) and its hash is the hash of "
-      "its content, as in v2.8.0", "did you mean" not in raw and set(card["fields"]) == {*REQ, "identifying_assumption",
+      "its content (the notice is not stored)", "did you mean" not in raw and set(card["fields"]) == {*REQ, "identifying_assumption",
       "treat"} and card["sha256"] == reporting._card_hash(card) and a["fields"] == card["fields"])
 doc = reporting.study_card.__doc__
 check("study_card docstring: the suggestion is documented, and the Returns block still ends in the first 2500 "
