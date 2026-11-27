@@ -72,6 +72,7 @@ from linearmodels.panel import PanelOLS, RandomEffects, PooledOLS
 | `estat overid` | Instrument orthogonality | `res.sargan`; robust: `IVGMM(...).fit().j_stat` |
 | `ivregress liml` | LIML | `IVLIML.from_formula(...)` |
 | `ivregress gmm` | GMM | `IVGMM.from_formula(...)` |
+| `gmm (eq: ...), instruments(...) twostep` / `igmm`; R `gmm::gmm`, `momentfit` | Nonlinear GMM from moment conditions (Euler equations) | `estimation.gmm(moments, theta0, args=..., steps="two-step" / "iterated", hac_lags=L)` (right-tail J, rank test of the Jacobian); Stata's `wmatrix(hac bartlett L)` ~ `hac_lags=L` (v2.8.0) |
 | `reg3` / `sureg` | System | `linearmodels.system.IV3SLS`, `SUR`; `systems.three_sls` (order condition per equation), `systems.sur_system` (Breusch-Pagan LM) |
 
 ## Panel data

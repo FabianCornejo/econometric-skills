@@ -4,7 +4,9 @@ like test_textbook_replication.py).
 Data: QuantEcon/data-lectures at a fixed commit, downloaded by the test and checked by SHA-256; the plugin does not
 redistribute the files (none has a named licence). Specifications and the published numbers: QuantEcon/
 lecture-python.myst at a fixed commit, lectures/ols.md (Acemoglu, Johnson and Robinson 2001, AER 91(5)) and
-lectures/mle.md (Treisman 2016, AER 106(5), Table 1, Poisson with HC0 errors). The numbers checked are the lectures'
+lectures/mle.md (Treisman 2016, AER 106(5), Table 1, Poisson with HC0 errors); v2.8.0: lectures/hansen_singleton_1982.md
+(Euler equation by GMM on a FRED / Ken French reconstruction of Hansen and Singleton's 1959:2-1978:12 data, with the
+paper's Table I as corrected in the 1984 Econometrica errata, quoted in the lecture). The numbers checked are the lectures'
 (statsmodels and linearmodels on the same files), not the papers' printed tables.
 
 Without network, or with a file whose SHA-256 differs: SKIP with exit code 0 on a local run; FAIL on GitHub Actions
@@ -38,6 +40,7 @@ FILES = {  # SHA-256 equal to the data-lectures manifests (lectures/<file>.yml, 
     "maketable1.dta": "7a8687cc96c505a46dd24e98ab8b2332b31495003d68d476f9b280fcf002863b",
     "maketable4.dta": "2b34cce21b58a3a424a804e97a134106ab7010ef936bb68b3a244d3e271af404",
     "fp.dta": "de99b9c0de6fb08cb732e306971ba87a308c5c4ef8ca3ae23fbbb50eabdecd8d",
+    "hansen_singleton_1982_data.csv": "3e9d4f37c31dbcab26624418f3eeb630d57cc362bd162fa5501cfd992225609b",  # v2.8.0
 }
 IN_CI = os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
 ok = []
@@ -280,6 +283,82 @@ for name, (cols, n_exp, printed) in MODELS.items():
               abs(cd["dispersion"] - glm.pearson_chi2 / glm.df_resid) < 1e-8 * cd["dispersion"]
               and near(cd["dispersion"], 6.527, 0.0005) and (cd["tests"]["p"] < 0.05).all(),
               (cd["dispersion"], glm.pearson_chi2 / glm.df_resid, cd["tests"].to_dict()))
+
+# ------------------------------------------------- v2.8.0: Hansen and Singleton (1982), Euler equation by GMM
+# Data: hansen_singleton_1982_data.csv (gross real market return, gross nondurable consumption growth), NOT the
+# paper's CRSP data: the comparison with Table I is qualitative, as in the lecture. Second route on the same data:
+# statsmodels' NonlinearIVGMM (independent code); SEs against the analytic Jacobian written here.
+from statsmodels.sandbox.regression.gmm import NonlinearIVGMM  # noqa: E402
+
+hs = pd.read_csv(fetch("hansen_singleton_1982_data.csv"), index_col=0, parse_dates=True).loc["1959-02-01":"1978-12-31"]
+check("H-S 1982: 239 months, 1959-02 to 1978-12", len(hs) == 239 and hs.index[0].year == 1959
+      and hs.index[-1].strftime("%Y-%m") == "1978-12", (len(hs), hs.index[0], hs.index[-1]))
+Rh, ch = hs["gross_real_return"].to_numpy(), hs["gross_cons_growth"].to_numpy()
+
+
+def hs_arrays(p):
+    n = len(Rh)
+    Z = [np.ones(n - p)]
+    for j in range(1, p + 1):
+        Z += [Rh[p - j:n - j], ch[p - j:n - j]]
+    return Rh[p:], ch[p:], np.column_stack(Z)
+
+
+def hs_moments(th, R, c, Z):
+    return (th[1] * c ** (-th[0]) * R - 1.0)[:, None] * Z
+
+
+def hs_jac(th, R, c, Z):  # analytic d mean(g) / d(gamma, beta)
+    a = th[1] * c ** (-th[0]) * R
+    return np.column_stack([((-a * np.log(c))[:, None] * Z).mean(0), ((c ** (-th[0]) * R)[:, None] * Z).mean(0)])
+
+
+def hs_err(params, exog):
+    return params[1] * exog[:, 1] ** (-params[0]) * exog[:, 0] - 1.0
+
+
+# Table I, ND+VWR, 1959:2-1978:12, corrected (errata 1984), as quoted in the lecture: alpha = -gamma
+paper = {1: (1.2028, 0.7789, 0.9976, 0.0027, 1.457, 1, 0.7726), 2: (0.5761, 0.7067, 0.9975, 0.0027, 5.819, 3, 0.8792),
+         4: (0.6565, 0.6896, 0.9978, 0.0027, 7.923, 7, 0.6606), 6: (0.9638, 0.6425, 0.9985, 0.0027, 10.522, 11, 0.5159)}
+check("H-S 1982 Table I: the 'Prob' column is the chi2 CDF of J, not the p-value (four decimals, all four rows)",
+      all(near(stats.chi2.cdf(v[4], v[5]), v[6], H) for v in paper.values()), {k: round(stats.chi2.cdf(v[4], v[5]), 4) for k, v in paper.items()})
+for p_ in (1, 2, 4, 6):
+    a_ = hs_arrays(p_)
+    W_ = np.linalg.inv(a_[2].T @ a_[2] / len(a_[2]))
+    g_ = es.gmm(hs_moments, [1.0, 0.99], args=a_, center=False, weight=W_, show=False)
+    ga_ = es.gmm(hs_moments, [1.0, 0.99], args=a_, center=False, weight=W_, jacobian=hs_jac, show=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sm_ = NonlinearIVGMM(np.zeros(len(a_[0])), np.column_stack(a_[:2]), a_[2], hs_err).fit(
+            start_params=np.array([1.0, 0.99]), maxiter=2, optim_method="bfgs",
+            optim_args={"disp": False, "gtol": 1e-12}, wargs={"centered": False})
+    rel_p = np.max(np.abs(g_["params"].to_numpy() / sm_.params - 1))
+    check(f"H-S 1982 NLAG {p_}: gmm = statsmodels NonlinearIVGMM two-step (estimates rel 1e-7, J rel 1e-6)",
+          rel_p < 1e-7 and abs(g_["j"] / sm_.jtest()[0] - 1) < 1e-6, (rel_p, g_["j"], sm_.jtest()[0]))
+    check(f"H-S 1982 NLAG {p_}: SEs with numerical derivatives = SEs with the analytic Jacobian (rel 1e-7)",
+          np.allclose(g_["table"]["se"].to_numpy(), ga_["table"]["se"].to_numpy(), rtol=1e-7, atol=0))
+    gp, sgp, bp, sbp, *_ = paper[p_]
+    gd = es.gmm(hs_moments, [1.0, 0.99], args=a_, center=False, show=False)  # H-S: identity first step, S uncentered
+    if p_ == 2:   # review r2, S2-4: lag-1 autocorrelation of the derivatives 0.53
+        gl_ = es.gmm(hs_moments, [1.0, 0.99], args=a_, center=False, hac_lags=4, show=False)
+        pers = lambda g: any("persistent" in w["message"] for w in g["warnings"])
+        check("H-S 1982 NLAG 2: without lags the rank test's rejection gets the persistence warning (lag-1 "
+              "autocorrelation of the derivatives about 0.53); with 4 Bartlett lags it still rejects (p < 1e-4) "
+              "and the warning goes", pers(gd) and 0.45 < gd["used"]["rank_test_ac1"] < 0.6
+              and gl_["rank_p"] < 1e-4 and not pers(gl_), (gd["used"]["rank_test_ac1"], gl_["rank_p"]))
+    check(f"H-S 1982 NLAG {p_} (qualitative, other data): gamma within one of the paper's SEs, beta within one SE, "
+          "J does not reject at 5%",
+          abs(gd["params"].iloc[0] - gp) < sgp and abs(gd["params"].iloc[1] - bp) < sbp and gd["j_p"] > 0.05,
+          (gd["params"].to_numpy(), gd["j_p"]))
+    if p_ >= 2:
+        # v2.8.0 r1: the rank test rejects rank < 2 here, and that is not evidence of strong identification (it grows
+        # with n under any alternative). What the lecture calls 'weakly identified' is the imprecision of gamma.
+        check(f"H-S 1982 NLAG {p_}: the rank test rejects rank < 2 (p < 0.05) and no strength verdict is drawn from "
+              "it; gamma's 95% CI contains 0 (the lecture's 'weakly identified')",
+              gd["rank_p"] < 0.05 and "ident_F" not in gd
+              and not any("weak identification" in w["message"] for w in gd["warnings"])
+              and gd["table"]["ci_low"].iloc[0] < 0 < gd["table"]["ci_high"].iloc[0],
+              (gd["rank_p"], gd["table"]["ci_low"].iloc[0], gd["table"]["ci_high"].iloc[0]))
 
 print(f"\n{sum(ok)}/{len(ok)} checks passed")
 sys.exit(0 if all(ok) else 1)

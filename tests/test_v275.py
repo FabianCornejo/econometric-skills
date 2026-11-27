@@ -74,14 +74,15 @@ for name, key in (("review-mixed-samples", "MIXED"), ("review-j-prob-cdf", "JPRO
     print(f"INFO {name}: {still} of {len(known[key])} known false passes (negations) still accepted by the grader")
 n_cases = len([d for d in (SK / "evals" / "routing").iterdir() if d.is_dir()])
 readme = (ROOT / "README.md").read_text(encoding="utf-8")
-check("28 routing cases on disk; the README names the three new reviews", n_cases == 28
-      and all(w in readme for w in ("twelve reviews", "Prob(J)", "by hand with OLS")), n_cases)
+check("at least 28 routing cases on disk (v2.8.0: a count that grows); the README names the three new reviews", n_cases >= 28
+      and all(w in readme for w in ("reviews (", "Prob(J)", "by hand with OLS")), n_cases)
 
 # ------------------------------------------------------------------ the rules of v2.7.5
 ir = (SK / "references" / "interpretation-rules.md").read_text(encoding="utf-8")
-sec = ir.split("## Rules added in v2.7.5", 1)[1] if "## Rules added in v2.7.5" in ir else ""
-check("interpretation-rules.md: a v2.7.5 section, the last one, with the six rules (cases a-g; h left for E7)",
-      sec and "\n## " not in sec and all(w in sec for w in (
+sec = ir.split("## Rules added in v2.7.5", 1)[1].split("\n## ", 1)[0] if "## Rules added in v2.7.5" in ir else ""
+check("interpretation-rules.md: a v2.7.5 section (found by its title; v2.8.0 added one after it) with the six rules "
+      "(cases a-g; h left for E7)",
+      sec and all(w in sec for w in (
           "same rows", "8.38", "8.09", "700", "5000",                     # (a) and (c)
           "Prob(J)", "1 − Prob", "0.77",                                    # (b)
           "by hand", "0.1255", "0.1541", "iv_report",                       # (d)

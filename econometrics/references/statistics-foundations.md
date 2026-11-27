@@ -16,6 +16,7 @@ The layer under every regression: probability, distributions, sampling, estimati
 11. Exploratory analysis before any model
 12. Traps found in course material
 13. Bridge to regression
+14. Sequential tests, sample size from divergences, and peeking (v2.8.0)
 
 ## 1. Probability
 
@@ -134,3 +135,28 @@ Errors seen in real slides and answer keys; Reviewer and Teacher modes catch the
 - A two-sample t test (pooled) is OLS of y on a group dummy; Welch has the standard error of that regression with HC2 SEs (its degrees of freedom differ). One-way ANOVA is OLS on g - 1 dummies with the overall F test.
 - The correlation r is the slope of the standardized regression, and R^2 of a simple regression is r^2.
 - Every regression t test, interval and F test inherits the logic of §5–§6; every regression assumption is a statement about a sampling distribution (§3). Next module: simple and multiple regression (`ols-regression.md`).
+
+## 14. Sequential tests, sample size from divergences, and peeking (v2.8.0)
+
+Functions: `scripts/sequential.py` (`import sequential as sq`). Distributions are scipy frozen distributions.
+
+**Why sequential.** A fixed-sample test chooses n before the data. When observations arrive one at a time (an A/B test, quality control, a trial), Wald's sequential probability ratio test (SPRT) looks after each one and stops as soon as the evidence is strong enough. For the same error probabilities it needs, on average, far fewer observations: for N(0,1) against N(0.5,1) with α = 0.05 and β = 0.10, the fixed test needs 35 and the SPRT about 16 under H0 and 19 under H1 (`sq.n_for_error`).
+
+**The rule.** With log L_n = Σ log f1(x_i)/f0(x_i), reject H0 when log L_n ≥ log((1 − β)/α), accept it when log L_n ≤ log(β/(1 − α)), otherwise take another observation. Wald's guarantees: actual errors α' ≤ α/(1 − β) and β' ≤ β/(1 − α); in practice they are often well below the targets, because log L jumps past the thresholds (overshoot).
+
+```python
+import sequential as sq
+from scipy import stats
+d = sq.sprt_design(stats.beta(2, 5), stats.beta(5, 2), alpha=0.05, beta=0.10)   # thresholds, simulated errors, E[N]
+r = sq.sprt(x, stats.beta(2, 5), stats.beta(5, 2))                             # x in arrival order
+r["decision"], r["n_stop"]                                                     # "reject H0", "accept H0" or "continue"
+```
+
+**Peeking.** Looking at a fixed-sample test several times and stopping at the first p < α is not a test of size α: about 19% with 10 looks at 5% (`sq.peeking_size(10)`), with Pocock's per-look level that would restore 5%. See `interpretation-rules.md`, v2.8.0.
+
+**Divergences.** `sq.divergence(p, q)`: KL both ways (expected log-likelihood-ratio step under each hypothesis; the exponent of one error when the other is fixed, Stein), Jensen-Shannon (symmetric, at most log 2) and the Chernoff information C (the exponent of the smallest average error with equal priors, P_e(n) ≈ exp(−nC)), with the Bhattacharyya distance as a lower bound. `sq.divergence_rate(P, Q)`: the same for Markov chains and Gaussian VAR(1) models, per step.
+
+**Small error probabilities.** Simulating a 1e-6 error with plain Monte Carlo needs millions of draws. `sq.importance_tail_prob` draws from the other hypothesis and reweights by the likelihood ratio (Wald's change of measure), with the SE and the variance gain against plain simulation.
+
+References: Wald (1947), *Sequential Analysis*; Armitage, McPherson and Rowe (1969), *JRSS A*; Pocock (1977), *Biometrika*; Chernoff (1952), *Annals of Mathematical Statistics*; Cover and Thomas, *Elements of Information Theory*; QuantEcon lectures "A Problem that Stumped Milton Friedman", "Statistical Divergence Measures", "Likelihood Ratio Processes", "Mean of a Likelihood Ratio Process".
+
