@@ -3,18 +3,20 @@ earlier SKILL.md undoes exactly these pairs (each must occur once) and compares,
 else changed (lesson of v2.5.1: never re-pin a hash). Not part of the package.
 """
 
-ROW_GMM = ("| Moment conditions (an Euler equation, a structural equation with instruments): GMM, Hansen's J, whether the "
-           "parameters are identified; a likelihood ratio between nested fits with restrictions of any form | "
+ROW_GMM = ("| Moment conditions (an Euler equation, a structural equation with instruments): GMM, Hansen's J, a rank "
+           "test of whether the moments can identify the parameters; a likelihood ratio between nested fits with "
+           "restrictions of any form (a linear IV equation: the IV row; dynamic panels: `systems.dynamic_panel`) | "
            "`estimation-theory.md` §7–8 | `estimation.gmm`, `lr_test` |\n")
-ROW_SEQ = ("| Data arriving one at a time (an A/B test, quality control, a trial): a sequential test that stops early, the "
-           "error of peeking at a fixed-sample test, sample size from divergences | `statistics-foundations.md` §14 | "
+ROW_SEQ = ("| Data arriving one at a time (an A/B test, quality control, a trial): Wald's sequential test of a simple "
+           "against a simple hypothesis, which stops early; the error of peeking at a fixed-sample test and the "
+           "per-look level that keeps it; sample size from divergences | `statistics-foundations.md` §14 | "
            "`sequential.sprt_design`, `sprt`, `peeking_size`, `n_for_error`, `divergence` |\n")
 CARD_KEYS = (" Its keys are exact: `question`, `estimand`, `design`, `assumption`, `y`, `treatment`, `X`, `W`, `Z`, "
-             "`data`, `threats`, `robustness_plan`, `alpha`, `family_of_tests`, `mde` (forecasts: `horizon`, `loss`, "
-             "`benchmarks`, `window`).")
+             "`data`, `threats`, `robustness_plan`, `alpha`, `family_of_tests` (the family of section 4), `mde` "
+             "(forecasts: `horizon`, `loss`, `benchmarks`, `window`).")
 EST_GMM = ("; generic GMM from user-written moments (one-step, two-step, iterated; robust or HAC weight; Hansen's J with "
            "its right-tail p-value; a rank test of identification), likelihood ratio between nested `mle` fits (with the "
-           "boundary mixture)")
+           "50:50 boundary mixture for one restriction)")
 ROW_SEQ_SCRIPT = ("| `sequential.py` | Wald's SPRT (design with simulated errors and sample sizes, and a run on data in "
                   "arrival order), the type I error of peeking at a fixed-sample test and the Pocock per-look level, KL, "
                   "Jensen-Shannon, Chernoff and Bhattacharyya divergences, KL rates between Markov chains or VAR(1) "

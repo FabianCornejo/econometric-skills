@@ -198,37 +198,52 @@ CARD_FIELDS = ("question", "estimand", "design", "assumption", "y", "treatment",
 CARD_REQUIRED = ("question", "estimand", "design")
 
 # v2.8.1: names an agent or a user writes for a standard field (the D6 validation of v2.8.0 wrote the first three
-# from the prose of SKILL.md). Keys are compared after _card_key(); the card itself is never renamed.
+# from the prose of SKILL.md). Keys are compared after _card_key(); the card itself is never renamed. Only names
+# that mean one field: "level" (cluster level?), "identification" (the design?) and "tests" are left out on purpose.
 CARD_SYNONYMS = {
     "identifyingassumption": "assumption", "identificationassumption": "assumption", "assumptions": "assumption",
-    "identification": "assumption", "keyassumption": "assumption",
-    "robustness": "robustness_plan", "robustnesschecks": "robustness_plan", "robustnessplans": "robustness_plan",
-    "sensitivity": "robustness_plan",
+    "keyassumption": "assumption",
+    "identificationstrategy": "design", "researchdesign": "design", "researchquestion": "question",
+    "treat": "treatment", "treats": "treatment", "treated": "treatment", "intervention": "treatment",
+    "exposure": "treatment", "treatmentvariable": "treatment",
+    "robustness": "robustness_plan", "robustnesscheck": "robustness_plan", "robustnesschecks": "robustness_plan",
+    "robustnessplans": "robustness_plan", "sensitivity": "robustness_plan",
     "testsfamily": "family_of_tests", "testfamily": "family_of_tests", "familyoftest": "family_of_tests",
-    "testfamilies": "family_of_tests", "multipletests": "family_of_tests", "tests": "family_of_tests",
-    "outcome": "y", "dependent": "y", "dependentvariable": "y",
-    "controls": "W", "confounders": "W", "covariates": "W",
+    "testfamilies": "family_of_tests", "multipletests": "family_of_tests",
+    "outcome": "y", "outcomevariable": "y", "dependent": "y", "dependentvariable": "y",
+    "control": "W", "controls": "W", "confounder": "W", "confounders": "W", "covariate": "W", "covariates": "W",
     "instruments": "Z", "instrument": "Z", "effectmodifiers": "X", "modifiers": "X",
-    "significance": "alpha", "significancelevel": "alpha", "level": "alpha",
-    "minimumdetectableeffect": "mde", "risks": "threats", "threatstovalidity": "threats",
+    "significance": "alpha", "significancelevel": "alpha", "siglevel": "alpha", "alphalevel": "alpha",
+    "minimumdetectableeffect": "mde", "lossfunction": "loss", "mindetectableeffect": "mde", "forecasthorizon": "horizon",
+    "risks": "threats", "threatstovalidity": "threats",
     "dataset": "data", "datasource": "data", "source": "data",
 }
 
 
 def _card_key(name: str) -> str:
-    """Lower case, letters and digits only: 'Identifying assumption', 'identifying_assumption' -> 'identifyingassumption'."""
+    """Lower case, letters and digits only: 'Identifying assumption' -> 'identifyingassumption'."""
     return "".join(ch for ch in unicodedata.normalize("NFC", str(name)).lower() if ch.isalnum())
 
 
 def _card_suggestion(name: str, given) -> str | None:
-    """The standard field a non-standard name probably means, or None. Never a field already in the card."""
+    """The standard field a non-standard name probably means, or None. Never a field already in the card.
+
+    In order: the same key up to case and separators; a synonym (CARD_SYNONYMS); the start of exactly one standard
+    key ("treat" -> treatment); a close spelling that keeps the first two letters ("horizn" -> horizon, but not
+    "treats" -> threats; review r1, S2-1). A name that only starts with a standard key ("design_notes") gets none.
+    """
     import difflib
     key = _card_key(name)
     exact = {_card_key(f): f for f in CARD_FIELDS}
     cand = exact.get(key) or CARD_SYNONYMS.get(key)
     if cand is None and len(key) >= 4:
-        close = difflib.get_close_matches(key, [k for k in exact if len(k) >= 4], n=1, cutoff=0.8)
-        cand = exact[close[0]] if close else None
+        starts = [f for k, f in exact.items() if k.startswith(key)]
+        if len(starts) == 1:
+            cand = starts[0]
+        else:
+            pool = [k for k in exact if len(k) >= 4 and k[:2] == key[:2]]
+            close = difflib.get_close_matches(key, pool, n=1, cutoff=0.8)
+            cand = exact[close[0]] if close else None
     return cand if cand is not None and cand not in given else None
 
 
@@ -322,7 +337,8 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     threats, robustness_plan, alpha, family_of_tests, mde; for a forecast, horizon, loss, benchmarks and
     window. Values are text, finite numbers or lists (JSON; numpy numbers are converted). Other names are
     kept and reported as a notice, which names the standard field each one probably means ("identifying_assumption
-    (did you mean assumption?)", v2.8.1; never a field the card already has); nothing is renamed. Texts are compared and written in Unicode NFC (v2.7.1), so the same words
+    (did you mean assumption?)", v2.8.1; never a field the card already has); nothing is renamed. Texts are
+    compared and written in Unicode NFC (v2.7.1), so the same words
     typed with combining accents count as the same plan (a card already on file keeps its text as written, and the
     result's `fields` are the ones on file).
 
@@ -353,13 +369,18 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
     warns = []
     extra = sorted(set(fields) - set(CARD_FIELDS))
     if extra:
-        named = []
-        for f in extra:
-            s = _card_suggestion(f, fields)
-            named.append(f"{f} (did you mean {s}?)" if s else f)
-        warns.append(_finding("notice", f"non-standard study card fields kept as given: {', '.join(named)}",
-                              "use the standard key for what it holds (a standard field left out stays empty in the "
-                              "card); the standard fields are " + ", ".join(CARD_FIELDS)))
+        sugg = {f: _card_suggestion(f, fields) for f in extra}
+        named = [f"{f} (did you mean {sugg[f]}?)" if sugg[f] else f for f in extra]
+        msg = f"non-standard study card fields kept as given: {', '.join(named)}"
+        for target in sorted({v for v in sugg.values() if v}):
+            same = [f for f in extra if sugg[f] == target]
+            if len(same) > 1:   # review r1, S3-3
+                msg += f"; {' and '.join(same)} both look like {target}: keep one"
+        warns.append(_finding("notice", msg,
+                              "if a field holds what a standard field means, use that key (a standard field left "
+                              "out stays empty in the card; on a card already written, rename with amend=True and a "
+                              "reason); other fields are kept as given. The standard fields are "
+                              + ", ".join(CARD_FIELDS)))
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     action = "written"
     if p.exists():

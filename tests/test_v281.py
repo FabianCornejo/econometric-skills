@@ -23,6 +23,7 @@ import _console  # noqa: E402,F401  (Windows-safe console output, see econometri
 import estimation  # noqa: E402
 import reporting  # noqa: E402
 import sequential  # noqa: E402
+import systems  # noqa: E402
 import skillmd_changes as SC  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,9 +79,36 @@ for row in (SC.ROW_GMM, SC.ROW_SEQ):
                                 for m, f in fns), fns)
 et = read("econometrics/references/estimation-theory.md")
 sf = read("econometrics/references/statistics-foundations.md")
-check("the sections the rows cite exist: estimation-theory §7 (gmm) and §8 (lr_test), statistics-foundations §14",
-      re.search(r"^## 7\. .*`gmm`", et, re.M) and re.search(r"^## 8\. .*`lr_test`", et, re.M)
-      and re.search(r"^## 14\. Sequential tests", sf, re.M))
+
+
+def cited(row):
+    """The section numbers in the row's reference column, read from the row (§7–8 -> [7, 8]; review r1, S3-7)."""
+    col = row.split("|")[2]
+    out = []
+    for a, b in re.findall(r"§(\d+)(?:[–-](\d+))?", col):
+        out += list(range(int(a), int(b or a) + 1))
+    return col, out
+
+
+col_g, sec_g = cited(SC.ROW_GMM)
+col_s, sec_s = cited(SC.ROW_SEQ)
+heads_et = {int(n): t for n, t in re.findall(r"^## (\d+)\. (.*)$", et, re.M)}
+heads_sf = {int(n): t for n, t in re.findall(r"^## (\d+)\. (.*)$", sf, re.M)}
+check("the sections each row cites, read from the row, are the GMM, LR and sequential sections of the cited file",
+      "estimation-theory.md" in col_g and sec_g == [7, 8] and "`gmm`" in heads_et.get(7, "")
+      and "`lr_test`" in heads_et.get(8, "") and "statistics-foundations.md" in col_s and sec_s == [14]
+      and heads_sf.get(14, "").startswith("Sequential tests"), (col_g, sec_g, col_s, sec_s))
+check("key words of the rows that the code backs (review r1, S3-4/5/6/7): right-tail J, the 50:50 mixture for one "
+      "restriction, the rank test, simple against simple, Pocock, the pointers to the IV row and dynamic_panel",
+      "right-tail p-value" in SC.EST_GMM and "50:50 boundary mixture for one restriction" in SC.EST_GMM
+      and "rank test of whether the moments can identify" in SC.ROW_GMM and "the IV row" in SC.ROW_GMM
+      and "`systems.dynamic_panel`" in SC.ROW_GMM and callable(getattr(systems, "dynamic_panel", None))
+      and "simple against a simple hypothesis" in SC.ROW_SEQ and "Pocock per-look level" in SC.ROW_SEQ_SCRIPT
+      and "with boundary=True and df=1, the 50:50 mixture" in estimation.lr_test.__doc__
+      and "Pocock" in sequential.peeking_size.__doc__ and "Wald's SPRT" in sequential.sprt.__doc__
+      and "whether the parameters are identified" not in skill)
+iv_rows = [ln for ln in sec2.split("\n") if "iv_report" in ln]
+check("the IV row the GMM row points to exists in section 2", len(iv_rows) >= 1, iv_rows)
 check("§14 and §7-8 use the functions the rows name (no row points to a section about something else)",
       all(f in sf for f in ("sprt_design", "peeking_size", "n_for_error", "divergence"))
       and "gmm(" in et and "lr_test(" in et)
@@ -142,6 +170,50 @@ check("spacing and capitals of a standard key are matched; unrelated names get n
 check("every synonym points to a standard field, and no synonym is itself a standard key",
       set(reporting.CARD_SYNONYMS.values()) <= set(reporting.CARD_FIELDS)
       and not set(reporting.CARD_SYNONYMS) & {reporting._card_key(f) for f in reporting.CARD_FIELDS})
+EXPECT = {   # review r1: S2-1 (treat -> threats) and S3-1 (ambiguous names; missing singulars and common forms)
+    "treat": "treatment", "treats": "treatment", "treated": "treatment", "treatment_variable": "treatment",
+    "intervention": "treatment", "exposure": "treatment",
+    "control": "W", "controls": "W", "confounder": "W", "covariate": "W", "covariates": "W",
+    "outcome": "y", "outcome_variable": "y", "dependent_variable": "y", "instruments": "Z", "effect_modifiers": "X",
+    "identifying_assumption": "assumption", "assumptions": "assumption", "identification_strategy": "design",
+    "research_design": "design", "research_question": "question", "robustness": "robustness_plan",
+    "robustness_check": "robustness_plan", "tests_family": "family_of_tests", "test_family": "family_of_tests",
+    "sig_level": "alpha", "alpha_level": "alpha", "significance_level": "alpha", "forecast_horizon": "horizon",
+    "min_detectable_effect": "mde", "minimum_detectable_effect": "mde", "loss_function": "loss",
+    "data_source": "data", "dataset": "data", "risks": "threats", "threats_to_validity": "threats",
+    "identification_assumption": "assumption", "key_assumption": "assumption", "robustness_checks": "robustness_plan",
+    "robustness_plans": "robustness_plan", "sensitivity": "robustness_plan", "family_of_test": "family_of_tests",
+    "test_families": "family_of_tests", "multiple_tests": "family_of_tests", "dependent": "y", "confounders": "W",
+    "instrument": "Z", "modifiers": "X", "significance": "alpha", "source": "data", "datasource": "data",
+    "horizn": "horizon", "threts": "threats", "bench": "benchmarks", "Robustness Plan": "robustness_plan",
+    # no suggestion: ambiguous, or another thing that only shares letters or a start with a standard key
+    "level": None, "cluster_level": None, "identification": None, "tests": None, "notes": None, "comments": None,
+    "weights": None, "clusters": None, "design_notes": None, "data_notes": None, "wage": None, "zz": None,
+    "treaties": None, "heats": None,   # close to "threats" in letters; the first-two-letter guard keeps them out
+}
+got = {n: reporting._card_suggestion(n, {}) for n in EXPECT}
+check("suggestions: every name gets the expected field or none (treat/treats never threats; level, identification "
+      "and tests get none; a name that only starts with a standard key gets none)", got == EXPECT,
+      {n: (got[n], EXPECT[n]) for n in EXPECT if got[n] != EXPECT[n]})
+check("every synonym in CARD_SYNONYMS is covered by the expectations above (a new or changed one needs a case)",
+      all(any(reporting._card_key(n) == k for n in EXPECT) for k in reporting.CARD_SYNONYMS),
+      [k for k in reporting.CARD_SYNONYMS if not any(reporting._card_key(n) == k for n in EXPECT)])
+w, *_ = notice(assumptions="a", identifying_assumption="b", notes="n")
+check("two names that look like the same field: the notice says so (review r1, S3-3)",
+      w is not None and "assumptions and identifying_assumption both look like assumption: keep one" in w["message"]
+      and "notes" in w["message"], w)
+w, *_ = notice(notes="n")
+check("the action holds without a suggestion: other fields are kept as given; renaming a written card needs amend",
+      w is not None and "did you mean" not in w["message"] and "other fields are kept as given" in w["action"]
+      and w["action"].startswith("if a field holds what a standard field means, use that key")
+      and "amend=True" in w["action"], w)
+with tempfile.TemporaryDirectory() as d:
+    a = reporting.study_card(str(Path(d) / "a.json"), show=False, **REQ, identifying_assumption="x", treat="t")
+    raw = (Path(d) / "a.json").read_text(encoding="utf-8")
+    card = json.loads(raw)
+check("the card on file holds only the fields given (no notice text, no renamed key) and its hash is the hash of "
+      "its content, as in v2.8.0", "did you mean" not in raw and set(card["fields"]) == {*REQ, "identifying_assumption",
+      "treat"} and card["sha256"] == reporting._card_hash(card) and a["fields"] == card["fields"])
 doc = reporting.study_card.__doc__
 check("study_card docstring: the suggestion is documented, and the Returns block still ends in the first 2500 "
       "characters (lesson of v2.7.3)", "did you mean assumption?" in doc
