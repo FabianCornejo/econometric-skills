@@ -199,24 +199,28 @@ CARD_REQUIRED = ("question", "estimand", "design")
 
 # v2.8.1: names an agent or a user writes for a standard field (the D6 validation of v2.8.0 wrote the first three
 # from the prose of SKILL.md). Keys are compared after _card_key(); the card itself is never renamed. Only names that
-# mean one field in every design (reviews r1 and r2): "control" (the control group?), "level" (cluster level?),
-# "exposure" (a portfolio's exposure?), "source", "risks", "family" and "tests" are left out on purpose, and no
-# suggestion comes from a spelling that only looks close ("estimador" is not "estimand").
+# mean one field in every design (reviews r1, r2 and r3): "control" and "controls" (the control group in a
+# case-control study?), "covariates" (X in a heterogeneity study, W elsewhere), "treated" (the treated group?),
+# "level" (cluster level?), "exposure" (a portfolio's exposure?), "source", "risks", "family" and "tests" are left
+# out on purpose, and no suggestion comes from a spelling that only looks close ("estimador" is not "estimand").
 CARD_SYNONYMS = {
     "identifyingassumption": "assumption", "identificationassumption": "assumption", "assumptions": "assumption",
     "keyassumption": "assumption",
     "identificationstrategy": "design", "researchdesign": "design", "researchquestion": "question",
-    "treat": "treatment", "treated": "treatment", "treatmentvariable": "treatment", "intervention": "treatment",
+    "treat": "treatment", "treatmentvariable": "treatment", "treatmentvar": "treatment", "intervention": "treatment",
     "robustness": "robustness_plan", "robustnesscheck": "robustness_plan", "robustnesschecks": "robustness_plan",
-    "robustnessplans": "robustness_plan",
+    "robustnessplans": "robustness_plan", "robustnesstests": "robustness_plan",
     "testsfamily": "family_of_tests", "testfamily": "family_of_tests", "familyoftest": "family_of_tests",
     "testfamilies": "family_of_tests", "multipletests": "family_of_tests",
-    "outcome": "y", "outcomes": "y", "outcomevariable": "y", "dependentvariable": "y",
-    "controls": "W", "confounder": "W", "confounders": "W", "covariate": "W", "covariates": "W",
-    "instruments": "Z", "instrument": "Z", "effectmodifiers": "X",
+    "outcome": "y", "outcomes": "y", "outcomevariable": "y", "outcomevar": "y", "dependentvariable": "y",
+    "confounder": "W", "confounders": "W", "controlvariables": "W",
+    "instruments": "Z", "instrument": "Z", "instrumentalvariable": "Z", "instrumentalvariables": "Z",
+    "effectmodifier": "X", "effectmodifiers": "X",
     "significance": "alpha", "significancelevel": "alpha", "siglevel": "alpha", "alphalevel": "alpha",
     "minimumdetectableeffect": "mde", "mindetectableeffect": "mde", "forecasthorizon": "horizon",
-    "lossfunction": "loss", "threatstovalidity": "threats", "dataset": "data", "datasource": "data",
+    "lossfunction": "loss", "benchmark": "benchmarks", "threat": "threats", "threatstovalidity": "threats",
+    "validitythreats": "threats", "threatstoidentification": "threats", "dataset": "data", "datasource": "data",
+    "datasources": "data",
 }
 
 
@@ -364,11 +368,17 @@ def study_card(path: str = "study_card.json", amend: bool = False, reason: str |
             if len(same) > 1:   # reviews r1 S3-3 and r2 S3-6
                 msg += (f"; {', '.join(same[:-1])} and {same[-1]} all mean {target}: merge them into one "
                         f"{target} field")
-        warns.append(_finding("notice", msg,
-                              "the card is already written with these names. To use a standard key, call study_card "
-                              "again with it and amend=True, reason='standard key names, no results seen' (this is "
-                              "recorded as an amendment); a standard field left out stays empty; other fields are "
-                              "kept as given. The standard fields are " + ", ".join(CARD_FIELDS)))
+        std = "The standard fields are " + ", ".join(CARD_FIELDS)
+        if any(sugg.values()):   # reviews r2 S2-4, r3 S1-1, S2-1, S3-2
+            act = ("the card is already written with these names. To use a standard key, call study_card again with "
+                   "ALL the fields, each standard key in place of the name above, plus amend=True and a reason that "
+                   "says the names changed and whether results had been seen (it is recorded as an amendment); a "
+                   "field left out of that call is dropped from the card and kept only in its amendments. Until "
+                   "then a standard field left out stays empty. " + std)
+        else:
+            act = ("check that these names are not standard fields spelled another way; non-standard fields are "
+                   "kept as given. " + std)
+        warns.append(_finding("notice", msg, act))
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     action = "written"
     if p.exists():

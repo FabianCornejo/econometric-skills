@@ -1,12 +1,14 @@
 """v2.8.1: SKILL.md names GMM, the likelihood ratio and the sequential tests (found only by grep in the D6 validation
 of v2.8.0), the study card keys are written as they are, and reporting.study_card says which standard field a
-non-standard name probably means (D6: identifying_assumption, robustness, tests_family).
+non-standard name means, from the same key or an unambiguous synonym only (D6: identifying_assumption,
+robustness, tests_family; reviews r1-r3).
 
 - description: GMM and A/B peeking / SPRT, within 1024 characters, the v2.6.10 phrases kept;
 - section 2 and section 6: the rows, every function they name exists, every section they cite exists;
 - section 3: the card keys listed are exactly reporting.CARD_FIELDS;
-- study_card: the suggestion on both sides (synonym, typo, case; a standard key gets no notice; a field already
-  given or an unrelated name gets no suggestion; nothing is renamed);
+- study_card: the suggestion on both sides (synonym and case; no guess from spelling; ambiguous names get none; a
+  field already given gets none; nothing is renamed), collisions, and an action that can be followed without
+  losing fields;
 - version, CHANGELOG.
 """
 import json
@@ -153,7 +155,8 @@ check("nothing is renamed: the card keeps the names given and the standard field
       and not {"assumption", "robustness_plan", "family_of_tests"} & set(on_file)
       and out["fields"] == on_file)
 check("the action says a standard field left out stays empty and lists the standard fields",
-      w is not None and "stays empty" in w["action"] and all(f in w["action"] for f in reporting.CARD_FIELDS), w)
+      w is not None and "a standard field left out stays empty" in w["action"]
+      and all(f in w["action"] for f in reporting.CARD_FIELDS), w)
 w, *_ = notice(assumption="a", y="y", robustness_plan="r", family_of_tests=["t1"], horizon=12)
 check("standard keys only: no notice at all", w is None, w)
 w, *_ = notice(assumption="a", identifying_assumption="b")
@@ -170,32 +173,35 @@ check("spacing and capitals of a standard key are matched; unrelated names get n
 check("every synonym points to a standard field, and no synonym is itself a standard key",
       set(reporting.CARD_SYNONYMS.values()) <= set(reporting.CARD_FIELDS)
       and not set(reporting.CARD_SYNONYMS) & {reporting._card_key(f) for f in reporting.CARD_FIELDS})
-EXPECT = {   # reviews r1 (S2-1, S3-1) and r2 (S2-1..3, S3-1..2): only names that mean one field in every design
-    "treat": "treatment", "treated": "treatment", "treatment_variable": "treatment", "intervention": "treatment",
-    "controls": "W", "confounder": "W", "confounders": "W", "covariate": "W", "covariates": "W",
-    "outcome": "y", "outcomes": "y", "outcome_variable": "y", "dependent_variable": "y",
-    "instruments": "Z", "instrument": "Z", "effect_modifiers": "X",
+EXPECT = {   # reviews r1, r2 and r3: only names that mean one field in every design
+    "treat": "treatment", "treatment_variable": "treatment", "treatment_var": "treatment", "intervention": "treatment",
+    "confounder": "W", "confounders": "W", "control_variables": "W",
+    "outcome": "y", "outcomes": "y", "outcome_variable": "y", "outcome_var": "y", "dependent_variable": "y",
+    "instruments": "Z", "instrument": "Z", "instrumental_variable": "Z", "instrumental_variables": "Z",
+    "effect_modifier": "X", "effect_modifiers": "X",
     "identifying_assumption": "assumption", "identification_assumption": "assumption", "assumptions": "assumption",
     "key_assumption": "assumption", "identification_strategy": "design", "research_design": "design",
     "research_question": "question", "robustness": "robustness_plan", "robustness_check": "robustness_plan",
-    "robustness_checks": "robustness_plan", "robustness_plans": "robustness_plan",
+    "robustness_checks": "robustness_plan", "robustness_plans": "robustness_plan", "robustness_tests": "robustness_plan",
     "tests_family": "family_of_tests", "test_family": "family_of_tests", "family_of_test": "family_of_tests",
     "test_families": "family_of_tests", "multiple_tests": "family_of_tests",
     "significance": "alpha", "significance_level": "alpha", "sig_level": "alpha", "alpha_level": "alpha",
     "min_detectable_effect": "mde", "minimum_detectable_effect": "mde", "forecast_horizon": "horizon",
-    "loss_function": "loss", "threats_to_validity": "threats", "dataset": "data", "data_source": "data",
-    "datasource": "data", "Robustness Plan": "robustness_plan", "Family-of-Tests": "family_of_tests", "x": "X",
+    "loss_function": "loss", "benchmark": "benchmarks", "threat": "threats", "threats_to_validity": "threats",
+    "validity_threats": "threats", "threats_to_identification": "threats", "dataset": "data", "data_source": "data",
+    "data_sources": "data", "datasource": "data", "Robustness Plan": "robustness_plan",
+    "Family-of-Tests": "family_of_tests", "x": "X",
     # no suggestion: a name with another meaning in some design, a spelling that only looks close, or a start
-    "control": None, "exposure": None, "source": None, "risks": None, "family": None, "level": None,
-    "cluster_level": None, "identification": None, "tests": None, "sensitivity": None, "estimador": None,
-    "estimado": None, "estimated": None, "treinamento": None, "treats": None, "treaties": None, "heats": None,
-    "thres": None, "horizn": None, "threts": None, "bench": None, "alphas": None, "losses": None, "datas": None,
-    "notes": None, "comments": None, "weights": None, "clusters": None, "design_notes": None, "data_notes": None,
-    "wage": None, "zz": None,
+    "control": None, "controls": None, "covariate": None, "covariates": None, "treated": None, "exposure": None,
+    "source": None, "risks": None, "family": None, "level": None, "cluster_level": None, "identification": None,
+    "tests": None, "sensitivity": None, "estimador": None, "estimado": None, "estimated": None, "treinamento": None,
+    "treats": None, "treaties": None, "heats": None, "thres": None, "horizn": None, "threts": None, "bench": None,
+    "alphas": None, "losses": None, "datas": None, "notes": None, "comments": None, "weights": None, "clusters": None,
+    "design_notes": None, "data_notes": None, "wage": None, "zz": None,
 }
 got = {n: reporting._card_suggestion(n, {}) for n in EXPECT}
-check("suggestions: every name gets the expected field or none (control, family, exposure, estimador, horizn and "
-      "the other ambiguous or look-alike names get none)", got == EXPECT,
+check("suggestions: every name gets the expected field or none (control(s), covariates, treated, family, exposure, "
+      "estimador, horizn and the other ambiguous or look-alike names get none)", got == EXPECT,
       {n: (got[n], EXPECT[n]) for n in EXPECT if got[n] != EXPECT[n]})
 check("every synonym in CARD_SYNONYMS is covered by the expectations above (a new or changed one needs a case)",
       all(any(reporting._card_key(n) == k for n in EXPECT) for k in reporting.CARD_SYNONYMS),
@@ -205,12 +211,34 @@ check("two names for the same field: the notice says so and says to merge them (
       w is not None and "assumptions and identifying_assumption all mean assumption: merge them into one assumption field" in w["message"]
       and "notes" in w["message"], w)
 w, *_ = notice(notes="n")
-check("the action says the truth (review r2, S2-4): the card is written; renaming needs amend=True and is recorded "
-      "as an amendment; other fields are kept as given",
-      w is not None and "did you mean" not in w["message"] and "other fields are kept as given" in w["action"]
-      and w["action"].startswith("the card is already written with these names")
-      and "recorded as an amendment" in w["action"] and "stays empty" in w["action"]
-      and "amend=True" in w["action"], w)
+check("no suggestion: the action asks for no amendment and says the fields are kept as given (review r3, S3-2)",
+      w is not None and "did you mean" not in w["message"] and "non-standard fields are kept as given" in w["action"]
+      and "amend" not in w["action"], w)
+w, *_ = notice(identifying_assumption="a", notes="n")
+act = w["action"] if w else ""
+check("with a suggestion the action says the truth (reviews r2 S2-4, r3 S1-1, S2-1): the card is written; call again "
+      "with ALL the fields and amend=True; a field left out is dropped; the reason is the agent's, not a ready text",
+      act.startswith("the card is already written with these names") and "ALL the fields" in act
+      and "amend=True" in act and "recorded as an amendment" in act and "dropped from the card" in act
+      and "whether results had been seen" in act and "no results seen" not in act, act)
+w, *_ = notice(assumptions="a", identifying_assumption="b", key_assumption="c")
+check("three names for one field: listed with 'and' and told to merge (review r3, S3-5)",
+      w is not None and "assumptions, identifying_assumption and key_assumption all mean assumption: merge them into "
+      "one assumption field" in w["message"], w)
+with tempfile.TemporaryDirectory() as d:   # review r3, S1-1: follow the action and lose nothing
+    path = str(Path(d) / "card.json")
+    first = reporting.study_card(path, show=False, **REQ, identifying_assumption="a", W=["x1"], notes="n")
+    n0 = next(w_ for w_ in first["warnings"] if "non-standard" in w_["message"])
+    sugg = dict(re.findall(r"(\w+) \(did you mean (\w+)\?\)", n0["message"]))
+    given = {**REQ, "identifying_assumption": "a", "W": ["x1"], "notes": "n"}
+    renamed = {sugg.get(k, k): v for k, v in given.items()}
+    second = reporting.study_card(path, show=False, **renamed, amend=True,
+                                  reason="names changed to the standard keys; no results had been seen")
+    on_file = json.loads(Path(path).read_text(encoding="utf-8"))
+check("following the action (all fields, the suggested key in place of the name, amend=True and a reason) keeps "
+      "every field and records one amendment", sugg == {"identifying_assumption": "assumption"}
+      and on_file["fields"] == {**REQ, "assumption": "a", "W": ["x1"], "notes": "n"}
+      and len(on_file.get("amendments", [])) == 1, (sugg, on_file.get("fields"), len(on_file.get("amendments", []))))
 with tempfile.TemporaryDirectory() as d:
     a = reporting.study_card(str(Path(d) / "a.json"), show=False, **REQ, identifying_assumption="x", treat="t")
     raw = (Path(d) / "a.json").read_text(encoding="utf-8")
